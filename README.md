@@ -10,6 +10,24 @@
 - Каждое сообщение на отдельной строке
 - Пропускает служебные сообщения (service messages)
 
+## Качество кода
+
+- **Checkstyle** - проверка стиля кода
+- **JaCoCo** - покрытие тестами
+
+### Запуск проверок
+
+```bash
+# Проверка стиля кода
+mvn checkstyle:checkstyle
+
+# Покрытие тестами
+mvn test jacoco:report
+
+# Отчёт о покрытии
+open target/site/jacoco/index.html
+```
+
 ## Установка
 
 ```bash
