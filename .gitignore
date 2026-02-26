@@ -37,3 +37,10 @@ build/
 
 ### Mac OS ###
 .DS_Store
+
+### Checkstyle ###
+checkstyle-results.xml
+
+### JaCoCo ###
+jacoco/
+*.exec
