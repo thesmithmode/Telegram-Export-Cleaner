@@ -8,6 +8,8 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -17,10 +19,14 @@ import java.util.List;
  *   java -jar tcleaner.jar [OPTIONS] [INPUT_DIR]
  * 
  * Options:
- *   -i, --input <path>     Input directory (default: current directory)
- *   -o, --output <path>   Output file (default: tcleaner_output.txt)
- *   -v, --verbose         Verbose output
- *   --help                Show help
+ *   -i, --input <path>        Input directory (default: current directory)
+ *   -o, --output <path>      Output file (default: tcleaner_output.txt)
+ *   -s, --start-date <date>  Start date filter (YYYY-MM-DD)
+ *   -e, --end-date <date>    End date filter (YYYY-MM-DD)
+ *   -k, --keyword <word>     Include only messages with keyword
+ *   -x, --exclude <word>     Exclude messages with keyword
+ *   -v, --verbose            Verbose output
+ *   --help                   Show help
  */
 public class Main {
 
@@ -29,6 +35,18 @@ public class Main {
 
     @Parameter(names = {"-o", "--output"}, description = "Output file path")
     private String outputPath = "tcleaner_output.txt";
+
+    @Parameter(names = {"-s", "--start-date"}, description = "Start date filter (YYYY-MM-DD)")
+    private String startDate;
+
+    @Parameter(names = {"-e", "--end-date"}, description = "End date filter (YYYY-MM-DD)")
+    private String endDate;
+
+    @Parameter(names = {"-k", "--keyword"}, description = "Include only messages with keyword", listConverter = StringListConverter.class)
+    private List<String> keywords = new ArrayList<>();
+
+    @Parameter(names = {"-x", "--exclude"}, description = "Exclude messages with keyword", listConverter = StringListConverter.class)
+    private List<String> excludeKeywords = new ArrayList<>();
 
     @Parameter(names = {"-v", "--verbose"}, description = "Verbose output")
     private boolean verbose = false;
@@ -77,6 +95,13 @@ public class Main {
             TelegramExporter exporter = new TelegramExporter();
             List<String> processed = exporter.processFile(resultFile);
 
+            if (hasFilters()) {
+                if (verbose) {
+                    System.out.println("Applying filters...");
+                }
+                processed = applyFilters(processed);
+            }
+
             Path outputFile = Paths.get(outputPath);
             StringBuilder sb = new StringBuilder();
             for (String line : processed) {
@@ -99,5 +124,66 @@ public class Main {
             }
             System.exit(1);
         }
+    }
+
+    private boolean hasFilters() {
+        return startDate != null || endDate != null || 
+               !keywords.isEmpty() || !excludeKeywords.isEmpty();
+    }
+
+    private List<String> applyFilters(List<String> messages) {
+        return messages.stream()
+                .filter(line -> filterLine(line))
+                .toList();
+    }
+
+    private boolean filterLine(String line) {
+        if (line == null || line.isBlank()) {
+            return false;
+        }
+
+        if (!keywords.isEmpty()) {
+            boolean hasKeyword = keywords.stream()
+                    .anyMatch(kw -> line.toLowerCase().contains(kw.toLowerCase()));
+            if (!hasKeyword) {
+                return false;
+            }
+        }
+
+        if (!excludeKeywords.isEmpty()) {
+            boolean hasExclude = excludeKeywords.stream()
+                    .anyMatch(kw -> line.toLowerCase().contains(kw.toLowerCase()));
+            if (hasExclude) {
+                return false;
+            }
+        }
+
+        if (startDate != null || endDate != null) {
+            String datePart = line.length() >= 8 ? line.substring(0, 8) : "";
+            try {
+                int year = Integer.parseInt(datePart.substring(0, 4));
+                int month = Integer.parseInt(datePart.substring(4, 6));
+                int day = Integer.parseInt(datePart.substring(6, 8));
+                LocalDate msgDate = LocalDate.of(year, month, day);
+
+                if (startDate != null) {
+                    LocalDate start = LocalDate.parse(startDate);
+                    if (msgDate.isBefore(start)) {
+                        return false;
+                    }
+                }
+
+                if (endDate != null) {
+                    LocalDate end = LocalDate.parse(endDate);
+                    if (msgDate.isAfter(end)) {
+                        return false;
+                    }
+                }
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

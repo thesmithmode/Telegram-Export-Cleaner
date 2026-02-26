@@ -57,8 +57,28 @@ java -jar target/telegram-cleaner-1.0.0.jar -i ./ChatExport -v
 |-------|---------|--------------|
 | `-i, --input` | Папка с result.json | Текущая папка |
 | `-o, --output` | Выходной файл | tcleaner_output.txt |
+| `-s, --start-date` | Начальная дата (YYYY-MM-DD) | - |
+| `-e, --end-date` | Конечная дата (YYYY-MM-DD) | - |
+| `-k, --keyword` | Ключевые слова для включения (через запятую) | - |
+| `-x, --exclude` | Ключевые слова для исключения (через запятую) | - |
 | `-v, --verbose` | Подробный вывод | false |
 | `--help` | Показать справку | - |
+
+### Примеры фильтрации
+
+```bash
+# Фильтр по дате
+java -jar target/telegram-cleaner-1.0.0.jar -i ./ChatExport -s 2025-01-01 -e 2025-06-30
+
+# Фильтр по ключевым словам
+java -jar target/telegram-cleaner-1.0.0.jar -i ./ChatExport -k "привет,пока"
+
+# Исключить ключевые слова
+java -jar target/telegram-cleaner-1.0.0.jar -i ./ChatExport -x "спам,реклама"
+
+# Комбинированный фильтр
+java -jar target/telegram-cleaner-1.0.0.jar -i ./ChatExport -s 2025-01-01 -k "важно"
+```
 
 ## Формат вывода
 
@@ -205,6 +225,21 @@ curl -X POST -F "file=@result.json" http://localhost:8080/api/convert -o output.
 curl -X POST -H "Content-Type: application/json" \
   -d '{"messages":[{"id":1,"type":"message","date":"2025-06-24T10:00:00","text":"Hello"}]}' \
   http://localhost:8080/api/convert/json
+
+# С фильтрацией по дате
+curl -X POST -F "file=@result.json" \
+  -F "startDate=2025-01-01" -F "endDate=2025-06-30" \
+  http://localhost:8080/api/convert -o filtered.txt
+
+# С фильтрацией по ключевым словам
+curl -X POST -F "file=@result.json" \
+  -F "keywords=привет,пока" \
+  http://localhost:8080/api/convert -o filtered.txt
+
+# С исключением ключевых слов
+curl -X POST -F "file=@result.json" \
+  -F "excludeKeywords=спам,реклама" \
+  http://localhost:8080/api/convert -o filtered.txt
 ```
 
 ## Тесты

@@ -1,5 +1,6 @@
 package com.tcleaner;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
@@ -17,6 +18,25 @@ public class DateFormatter {
     private static final DateTimeFormatter OUTPUT_DATETIME_FORMAT = DateTimeFormatter.ofPattern("yyyyMMddHHmm");
 
     private DateFormatter() {
+    }
+
+    /**
+     * Парсит ISO дату и возвращает LocalDate.
+     * 
+     * @param isoDateTime строка в формате ISO 8601 (например, "2025-06-24T15:29:46")
+     * @return LocalDate или null если парсинг не удался
+     */
+    public static LocalDate parseDateToLocalDate(String isoDateTime) {
+        if (isoDateTime == null || isoDateTime.isBlank()) {
+            return null;
+        }
+
+        try {
+            LocalDateTime dateTime = LocalDateTime.parse(isoDateTime, INPUT_FORMAT);
+            return dateTime.toLocalDate();
+        } catch (DateTimeParseException e) {
+            return null;
+        }
     }
 
     /**
