@@ -74,7 +74,7 @@ YYYYMMDD Текст сообщения
 
 ## Требования
 
-- Java 17+
+- Java 17+ (рекомендуется 25)
 - Maven 3.6+
 
 ## Сборка
@@ -82,6 +82,46 @@ YYYYMMDD Текст сообщения
 ```bash
 mvn clean package
 ```
+
+## Docker
+
+### Быстрый старт
+
+```bash
+# Собрать и запустить
+docker-compose up -d
+
+# Проверить статус
+docker-compose ps
+
+# Остановить
+docker-compose down
+```
+
+### Использование API
+
+После запуска доступны endpoints:
+
+```bash
+# Health check
+curl http://localhost:8080/api/health
+
+# Загрузка файла (multipart/form-data)
+curl -X POST -F "file=@result.json" http://localhost:8080/api/convert
+
+# Загрузка JSON напрямую (application/json)
+curl -X POST -H "Content-Type: application/json" \
+  -d @result.json \
+  http://localhost:8080/api/convert/json
+```
+
+### Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/health` | Проверка здоровья сервиса |
+| POST | `/api/convert` | Загрузка файла result.json |
+| POST | `/api/convert/json` | Отправка JSON напрямую |
 
 ## Тесты
 
