@@ -123,10 +123,95 @@ curl -X POST -H "Content-Type: application/json" \
 | POST | `/api/convert` | Загрузка файла result.json |
 | POST | `/api/convert/json` | Отправка JSON напрямую |
 
+### Формат запросов и ответов
+
+#### POST /api/convert
+
+**Request:**
+```
+Content-Type: multipart/form-data
+Body: file=@result.json
+```
+
+**Success Response (200):**
+```
+Content-Type: text/plain
+Body: (текстовый файл с результатом)
+```
+
+**Error Response (400):**
+```json
+{"error": "Файл пустой"}
+```
+или
+```json
+{"error": "Ожидается JSON файл"}
+```
+
+#### POST /api/convert/json
+
+**Request:**
+```
+Content-Type: application/json
+Body: {"messages": [...]}
+```
+
+**Success Response (200):**
+```
+Content-Type: text/plain
+Body: (текстовый файл с результатом)
+```
+
+**Error Response (400):**
+```json
+{"error": "Пустое содержимое"}
+```
+
+#### GET /api/health
+
+**Success Response (200):**
+```json
+{"status": "UP"}
+```
+
+### Примеры использования
+
+```bash
+# Health check
+curl http://localhost:8080/api/health
+
+# Загрузка файла
+curl -X POST -F "file=@result.json" http://localhost:8080/api/convert -o output.txt
+
+# Загрузка JSON
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"messages":[{"id":1,"type":"message","date":"2025-06-24T10:00:00","text":"Hello"}]}' \
+  http://localhost:8080/api/convert/json
+```
+
 ## Тесты
 
 ```bash
 mvn test
+```
+
+## Обработка ошибок
+
+Приложение логирует все операции и ошибки. Уровень логирования можно настроить в `logback.xml`.
+
+### Коды ошибок
+
+| Код | Описание |
+|-----|----------|
+| `FILE_NOT_FOUND` | Файл result.json не найден |
+| `INVALID_JSON` | Невалидный JSON файл |
+
+### Пример логов
+
+```
+14:30:15.123 [main] DEBUG com.tcleaner.TelegramExporter - Начало обработки файла: /path/to/result.json
+14:30:15.234 [main] DEBUG com.tcleaner.MessageProcessor - Начало обработки 150 сообщений
+14:30:15.456 [main] INFO  com.tcleaner.TelegramExporter - Обработано 142 сообщений из файла result.json
 ```
 
 ## Лицензия

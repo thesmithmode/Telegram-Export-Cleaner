@@ -1,6 +1,8 @@
 package com.tcleaner;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -11,6 +13,8 @@ import java.util.List;
  * Преобразует сообщения в формат "YYYYMMDDtext".
  */
 public class MessageProcessor {
+
+    private static final Logger log = LoggerFactory.getLogger(MessageProcessor.class);
 
     public MessageProcessor() {
     }
@@ -62,16 +66,23 @@ public class MessageProcessor {
         List<String> result = new ArrayList<>();
         
         if (messages == null || messages.isEmpty()) {
+            log.debug("Получен пустой или null список сообщений");
             return result;
         }
 
+        log.debug("Начало обработки {} сообщений", messages.size());
+        int skipped = 0;
+        
         for (JsonNode message : messages) {
             String processed = processMessage(message);
             if (processed != null) {
                 result.add(processed);
+            } else {
+                skipped++;
             }
         }
 
+        log.debug("Обработка завершена: обработано={}, пропущено={}", result.size(), skipped);
         return result;
     }
 }
