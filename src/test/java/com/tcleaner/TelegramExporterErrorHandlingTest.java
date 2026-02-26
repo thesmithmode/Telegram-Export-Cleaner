@@ -42,7 +42,8 @@ class TelegramExporterErrorHandlingTest {
             TelegramExporter exporter = new TelegramExporter();
 
             assertThatThrownBy(() -> exporter.processFile(nonExistent))
-                    .isInstanceOf(IOException.class);
+                    .isInstanceOf(TelegramExporterException.class)
+                    .hasFieldOrPropertyWithValue("errorCode", "FILE_NOT_FOUND");
         }
 
         @Test
@@ -54,7 +55,8 @@ class TelegramExporterErrorHandlingTest {
             TelegramExporter exporter = new TelegramExporter();
 
             assertThatThrownBy(() -> exporter.processFile(invalidJson))
-                    .isInstanceOf(IOException.class);
+                    .isInstanceOf(TelegramExporterException.class)
+                    .hasFieldOrPropertyWithValue("errorCode", "INVALID_JSON");
         }
 
         @Test
