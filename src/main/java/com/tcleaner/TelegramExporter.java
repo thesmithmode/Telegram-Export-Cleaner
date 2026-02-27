@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.springframework.stereotype.Service;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -15,7 +17,8 @@ import java.util.List;
  * Основной класс для экспорта Telegram чата.
  * Читает result.json и преобразует в текстовый формат.
  */
-public class TelegramExporter {
+@Service
+public class TelegramExporter implements TelegramExporterInterface {
 
     private static final Logger log = LoggerFactory.getLogger(TelegramExporter.class);
 
