@@ -3,6 +3,7 @@ package com.tcleaner;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -12,6 +13,7 @@ import java.util.List;
  * 
  * Преобразует сообщения в формат "YYYYMMDDtext".
  */
+@Component
 public class MessageProcessor {
 
     private static final Logger log = LoggerFactory.getLogger(MessageProcessor.class);
