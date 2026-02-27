@@ -5,6 +5,7 @@ target/
 .kotlin
 
 ### IntelliJ IDEA ###
+.idea/
 .idea/modules.xml
 .idea/jarRepositories.xml
 .idea/compiler.xml
@@ -51,3 +52,12 @@ dependency-reduced-pom.xml
 ### Project specific ###
 *.txt
 nul
+
+
+Контекст*/
+opencode.json
+.kilo/
+.kilofiles/
+*.kilo.db
+.kilocode/
+AGENTS.md
