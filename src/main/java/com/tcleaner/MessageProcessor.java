@@ -10,8 +10,9 @@ import java.util.List;
 
 /**
  * Обработчик сообщений Telegram export.
- * 
- * Преобразует сообщения в формат "YYYYMMDDtext".
+ *
+ * <p>Извлекает дату и текст из JSON-узла сообщения.
+ * Форматирование итоговой строки делегируется {@link MessageFormatter}.</p>
  */
 @Component
 public class MessageProcessor {
@@ -23,9 +24,9 @@ public class MessageProcessor {
 
     /**
      * Обрабатывает одно сообщение.
-     * 
+     *
      * @param message JSON-узел сообщения
-     * @return строка формата "YYYYMMDDtext" или null для service-сообщений/пустых сообщений
+     * @return строка формата "YYYYMMDD текст" или null для service/пустых/невалидных сообщений
      */
     public String processMessage(JsonNode message) {
         if (message == null) {
@@ -47,26 +48,24 @@ public class MessageProcessor {
 
         JsonNode textNode = message.get("text");
         String text = MarkdownParser.parseText(textNode);
-        
+
         if (text.isBlank()) {
             return null;
         }
 
-        // Replace newlines with spaces to keep each message on single line
-        text = text.replace('\n', ' ').replace('\r', ' ');
-
-        return date + " " + text;
+        text = MessageFormatter.normalizeNewlines(text);
+        return MessageFormatter.format(date, text);
     }
 
     /**
      * Обрабатывает список сообщений.
-     * 
+     *
      * @param messages список JSON-узлов сообщений
      * @return список обработанных строк
      */
     public List<String> processMessages(List<JsonNode> messages) {
         List<String> result = new ArrayList<>();
-        
+
         if (messages == null || messages.isEmpty()) {
             log.debug("Получен пустой или null список сообщений");
             return result;
@@ -74,7 +73,7 @@ public class MessageProcessor {
 
         log.debug("Начало обработки {} сообщений", messages.size());
         int skipped = 0;
-        
+
         for (JsonNode message : messages) {
             String processed = processMessage(message);
             if (processed != null) {
