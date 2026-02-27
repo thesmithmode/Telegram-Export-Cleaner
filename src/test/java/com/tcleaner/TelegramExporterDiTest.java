@@ -37,10 +37,18 @@ class TelegramExporterDiTest {
         ObjectMapper realMapper = new ObjectMapper();
         MessageProcessor realProcessor = new MessageProcessor();
 
-        TelegramExporter exporterWithMocks = new TelegramExporter(realMapper, realProcessor);
+        TelegramExporter exporterWithDi = new TelegramExporter(realMapper, realProcessor);
         TelegramExporter exporterDefault = new TelegramExporter();
 
-        assertThat(exporterWithMocks).isNotNull();
+        assertThat(exporterWithDi).isNotNull();
         assertThat(exporterDefault).isNotNull();
+    }
+
+    @Test
+    @DisplayName("Дефолтный ObjectMapper содержит JavaTimeModule")
+    void defaultObjectMapperHasJavaTimeModule() {
+        ObjectMapper mapper = TelegramExporter.createDefaultObjectMapper();
+        assertThat(mapper.getRegisteredModuleIds())
+                .contains("com.fasterxml.jackson.datatype.jsr310.JavaTimeModule");
     }
 }
