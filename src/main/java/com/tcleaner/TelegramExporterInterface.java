@@ -24,6 +24,16 @@ public interface TelegramExporterInterface {
     List<String> processFile(Path inputPath) throws IOException;
 
     /**
+     * Обрабатывает файл result.json с фильтрацией сообщений.
+     * 
+     * @param inputPath путь к файлу result.json
+     * @param filter фильтр для сообщений (может быть null)
+     * @return список обработанных строк
+     * @throws IOException при ошибках чтения файла
+     */
+    List<String> processFile(Path inputPath, MessageFilter filter) throws IOException;
+
+    /**
      * Обрабатывает файл и записывает результат в выходной файл.
      * 
      * @param inputPath путь к файлу result.json

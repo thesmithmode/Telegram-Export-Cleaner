@@ -93,14 +93,8 @@ public class Main {
             }
 
             TelegramExporter exporter = new TelegramExporter();
-            List<String> processed = exporter.processFile(resultFile);
-
-            if (hasFilters()) {
-                if (verbose) {
-                    System.out.println("Applying filters...");
-                }
-                processed = applyFilters(processed);
-            }
+            MessageFilter filter = hasFilters() ? buildFilter() : null;
+            List<String> processed = exporter.processFile(resultFile, filter);
 
             Path outputFile = Paths.get(outputPath);
             StringBuilder sb = new StringBuilder();
@@ -131,59 +125,25 @@ public class Main {
                !keywords.isEmpty() || !excludeKeywords.isEmpty();
     }
 
-    private List<String> applyFilters(List<String> messages) {
-        return messages.stream()
-                .filter(line -> filterLine(line))
-                .toList();
-    }
-
-    private boolean filterLine(String line) {
-        if (line == null || line.isBlank()) {
-            return false;
+    private MessageFilter buildFilter() {
+        MessageFilter filter = new MessageFilter();
+        
+        if (startDate != null) {
+            filter.withStartDate(LocalDate.parse(startDate));
         }
-
-        if (!keywords.isEmpty()) {
-            boolean hasKeyword = keywords.stream()
-                    .anyMatch(kw -> line.toLowerCase().contains(kw.toLowerCase()));
-            if (!hasKeyword) {
-                return false;
-            }
+        
+        if (endDate != null) {
+            filter.withEndDate(LocalDate.parse(endDate));
         }
-
-        if (!excludeKeywords.isEmpty()) {
-            boolean hasExclude = excludeKeywords.stream()
-                    .anyMatch(kw -> line.toLowerCase().contains(kw.toLowerCase()));
-            if (hasExclude) {
-                return false;
-            }
+        
+        for (String kw : keywords) {
+            filter.withKeyword(kw);
         }
-
-        if (startDate != null || endDate != null) {
-            String datePart = line.length() >= 8 ? line.substring(0, 8) : "";
-            try {
-                int year = Integer.parseInt(datePart.substring(0, 4));
-                int month = Integer.parseInt(datePart.substring(4, 6));
-                int day = Integer.parseInt(datePart.substring(6, 8));
-                LocalDate msgDate = LocalDate.of(year, month, day);
-
-                if (startDate != null) {
-                    LocalDate start = LocalDate.parse(startDate);
-                    if (msgDate.isBefore(start)) {
-                        return false;
-                    }
-                }
-
-                if (endDate != null) {
-                    LocalDate end = LocalDate.parse(endDate);
-                    if (msgDate.isAfter(end)) {
-                        return false;
-                    }
-                }
-            } catch (Exception e) {
-                return false;
-            }
+        
+        for (String kw : excludeKeywords) {
+            filter.withExcludeKeyword(kw);
         }
-
-        return true;
+        
+        return filter;
     }
 }
