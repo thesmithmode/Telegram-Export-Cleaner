@@ -145,7 +145,7 @@ class TelegramExporterFilterTest {
         List<String> result = exporter.processFile(inputFile, filter);
         
         assertThat(result).hasSize(2);
-        assertThat(result).allMatch(line -> line.contains("message"));
+        assertThat(result).allMatch(line -> line.contains("Regular") || line.contains("Another"));
     }
 
     @Test
