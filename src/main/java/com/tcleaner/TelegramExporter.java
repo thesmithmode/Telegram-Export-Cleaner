@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -25,6 +26,22 @@ public class TelegramExporter implements TelegramExporterInterface {
     private final ObjectMapper objectMapper;
     private final MessageProcessor messageProcessor;
 
+    /**
+     * Конструктор для Spring DI.
+     *
+     * @param objectMapper     Jackson ObjectMapper для парсинга JSON
+     * @param messageProcessor процессор сообщений
+     */
+    @Autowired
+    public TelegramExporter(ObjectMapper objectMapper, MessageProcessor messageProcessor) {
+        this.objectMapper = objectMapper;
+        this.messageProcessor = messageProcessor;
+    }
+
+    /**
+     * Конструктор по умолчанию. Создаёт реальные объекты.
+     * Используется для CLI и обратной совместимости.
+     */
     public TelegramExporter() {
         this.objectMapper = new ObjectMapper();
         this.messageProcessor = new MessageProcessor();
