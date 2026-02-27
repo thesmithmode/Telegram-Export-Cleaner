@@ -12,7 +12,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -81,8 +80,8 @@ public class TelegramController {
 
             file.transferTo(inputFile.toFile());
             
-            List<String> processed = exporter.processFile(inputFile);
-            processed = applyFilters(processed, startDate, endDate, keywords, excludeKeywords);
+            MessageFilter filter = buildFilter(startDate, endDate, keywords, excludeKeywords);
+            List<String> processed = exporter.processFile(inputFile, filter);
             
             String result = String.join("\n", processed) + "\n";
 
@@ -124,8 +123,8 @@ public class TelegramController {
 
             Files.writeString(inputFile, jsonContent);
             
-            List<String> processed = exporter.processFile(inputFile);
-            processed = applyFilters(processed, startDate, endDate, keywords, excludeKeywords);
+            MessageFilter filter = buildFilter(startDate, endDate, keywords, excludeKeywords);
+            List<String> processed = exporter.processFile(inputFile, filter);
             
             String result = String.join("\n", processed) + "\n";
 
@@ -150,84 +149,39 @@ public class TelegramController {
         return ResponseEntity.ok(Map.of("status", "UP"));
     }
 
-    private List<String> applyFilters(List<String> messages, String startDate, 
-            String endDate, String keywords, String excludeKeywords) {
-        
-        if (startDate == null && endDate == null && 
-            keywords == null && excludeKeywords == null) {
-            return messages;
-        }
-
-        return messages.stream()
-                .filter(line -> filterLine(line, startDate, endDate, keywords, excludeKeywords))
-                .toList();
-    }
-
-    private boolean filterLine(String line, String startDate, String endDate, 
+    private MessageFilter buildFilter(String startDate, String endDate, 
             String keywords, String excludeKeywords) {
         
-        if (line == null || line.isBlank()) {
-            return false;
+        MessageFilter filter = new MessageFilter();
+        
+        if (startDate != null && !startDate.isBlank()) {
+            filter.withStartDate(LocalDate.parse(startDate));
         }
-
+        
+        if (endDate != null && !endDate.isBlank()) {
+            filter.withEndDate(LocalDate.parse(endDate));
+        }
+        
         if (keywords != null && !keywords.isBlank()) {
-            List<String> keywordList = parseKeywords(keywords);
-            boolean hasKeyword = keywordList.stream()
-                    .anyMatch(kw -> line.toLowerCase().contains(kw.toLowerCase()));
-            if (!hasKeyword) {
-                return false;
-            }
-        }
-
-        if (excludeKeywords != null && !excludeKeywords.isBlank()) {
-            List<String> excludeList = parseKeywords(excludeKeywords);
-            boolean hasExclude = excludeList.stream()
-                    .anyMatch(kw -> line.toLowerCase().contains(kw.toLowerCase()));
-            if (hasExclude) {
-                return false;
-            }
-        }
-
-        if (startDate != null || endDate != null) {
-            String datePart = line.length() >= 8 ? line.substring(0, 8) : "";
-            try {
-                int year = Integer.parseInt(datePart.substring(0, 4));
-                int month = Integer.parseInt(datePart.substring(4, 6));
-                int day = Integer.parseInt(datePart.substring(6, 8));
-                LocalDate msgDate = LocalDate.of(year, month, day);
-
-                if (startDate != null) {
-                    LocalDate start = LocalDate.parse(startDate);
-                    if (msgDate.isBefore(start)) {
-                        return false;
-                    }
-                }
-
-                if (endDate != null) {
-                    LocalDate end = LocalDate.parse(endDate);
-                    if (msgDate.isAfter(end)) {
-                        return false;
-                    }
-                }
-            } catch (Exception e) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private List<String> parseKeywords(String value) {
-        List<String> result = new ArrayList<>();
-        if (value != null && !value.isBlank()) {
-            for (String part : value.split(",")) {
-                String trimmed = part.trim();
+            for (String kw : keywords.split(",")) {
+                String trimmed = kw.trim();
                 if (!trimmed.isEmpty()) {
-                    result.add(trimmed);
+                    filter.withKeyword(trimmed);
                 }
             }
         }
-        return result;
+        
+        if (excludeKeywords != null && !excludeKeywords.isBlank()) {
+            for (String kw : excludeKeywords.split(",")) {
+                String trimmed = kw.trim();
+                if (!trimmed.isEmpty()) {
+                    filter.withExcludeKeyword(trimmed);
+                }
+            }
+        }
+        
+        // Возвращаем пустой фильтр если ничего не задано
+        return filter;
     }
 
     /**

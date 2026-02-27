@@ -55,6 +55,18 @@ public class TelegramExporter implements TelegramExporterInterface {
      * @throws IOException при ошибках чтения файла
      */
     public List<String> processFile(Path inputPath) throws IOException {
+        return processFile(inputPath, null);
+    }
+
+    /**
+     * Обрабатывает файл result.json с фильтрацией сообщений.
+     * 
+     * @param inputPath путь к файлу result.json
+     * @param filter фильтр для сообщений (может быть null)
+     * @return список обработанных строк
+     * @throws IOException при ошибках чтения файла
+     */
+    public List<String> processFile(Path inputPath, MessageFilter filter) throws IOException {
         log.debug("Начало обработки файла: {}", inputPath);
         
         if (!Files.exists(inputPath)) {
@@ -79,6 +91,11 @@ public class TelegramExporter implements TelegramExporterInterface {
 
         List<JsonNode> messages = new ArrayList<>();
         messagesNode.forEach(messages::add);
+
+        // Применяем фильтр на уровне JsonNode, если он передан
+        if (filter != null) {
+            messages = filter.filter(messages);
+        }
         
         log.debug("Найдено {} сообщений для обработки", messages.size());
 
