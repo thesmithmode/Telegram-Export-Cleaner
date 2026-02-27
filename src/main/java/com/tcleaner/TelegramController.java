@@ -70,7 +70,8 @@ public class TelegramController {
                     .body(Map.of("error", "Файл пустой"));
         }
 
-        if (!file.getOriginalFilename().endsWith(".json")) {
+        String originalFilename = file.getOriginalFilename();
+        if (originalFilename == null || !originalFilename.endsWith(".json")) {
             return ResponseEntity.badRequest()
                     .body(Map.of("error", "Ожидается JSON файл"));
         }
