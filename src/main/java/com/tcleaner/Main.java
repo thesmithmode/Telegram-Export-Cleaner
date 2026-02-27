@@ -121,8 +121,10 @@ public class Main {
     }
 
     private boolean hasFilters() {
-        return startDate != null || endDate != null || 
-               !keywords.isEmpty() || !excludeKeywords.isEmpty();
+        return startDate != null
+               || endDate != null
+               || !keywords.isEmpty()
+               || !excludeKeywords.isEmpty();
     }
 
     private MessageFilter buildFilter() {
@@ -136,12 +138,12 @@ public class Main {
             filter.withEndDate(LocalDate.parse(endDate));
         }
         
-        for (String kw : keywords) {
-            filter.withKeyword(kw);
+        for (String keyword : keywords) {
+            filter.withKeyword(keyword);
         }
         
-        for (String kw : excludeKeywords) {
-            filter.withExcludeKeyword(kw);
+        for (String keyword : excludeKeywords) {
+            filter.withExcludeKeyword(keyword);
         }
         
         return filter;
