@@ -77,7 +77,6 @@ public class TelegramController {
 
         try (TempDirectory tempDir = new TempDirectory()) {
             Path inputFile = tempDir.resolve("result.json");
-            Path outputFile = tempDir.resolve("output.txt");
 
             file.transferTo(inputFile.toFile());
             
@@ -121,7 +120,6 @@ public class TelegramController {
 
         try (TempDirectory tempDir = new TempDirectory()) {
             Path inputFile = tempDir.resolve("result.json");
-            Path outputFile = tempDir.resolve("output.txt");
 
             Files.writeString(inputFile, jsonContent);
             
