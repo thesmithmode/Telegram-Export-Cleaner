@@ -185,6 +185,15 @@ public class TelegramController {
 
     private MessageFilter buildFilter(String startDate, String endDate,
             String keywords, String excludeKeywords) {
+        boolean hasFilters = (startDate != null && !startDate.isBlank())
+                || (endDate != null && !endDate.isBlank())
+                || (keywords != null && !keywords.isBlank())
+                || (excludeKeywords != null && !excludeKeywords.isBlank());
+
+        if (!hasFilters) {
+            return null;
+        }
+
         MessageFilter filter = new MessageFilter();
 
         if (startDate != null && !startDate.isBlank()) {
