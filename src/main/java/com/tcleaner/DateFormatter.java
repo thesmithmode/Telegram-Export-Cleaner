@@ -54,7 +54,7 @@ public class DateFormatter {
             LocalDateTime dateTime = LocalDateTime.parse(isoDateTime, INPUT_FORMAT);
             return dateTime.format(OUTPUT_DATE_FORMAT);
         } catch (DateTimeParseException e) {
-            return "";
+            return isoDateTime;
         }
     }
 
