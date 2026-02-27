@@ -59,7 +59,7 @@ public class MarkdownParser {
             case "pre" -> parsePre(entity, text);
             case "link" -> text;
             case "text_link" -> parseTextLink(entity, text);
-            case "mention" -> text;
+            case "mention" -> "@" + text;
             case "mention_name" -> text;
             case "hashtag" -> "#" + text;
             case "cashtag" -> "$" + text;
