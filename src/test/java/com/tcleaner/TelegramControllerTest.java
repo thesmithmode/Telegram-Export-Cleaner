@@ -4,25 +4,45 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+
+import java.util.Map;
+
+import static org.mockito.Mockito.mock;
+import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockMultipartFile;
 
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 
 /**
  * Тесты для TelegramController.
- * 
+ *
  * Ожидаемое поведение:
  * - convert() возвращает ошибку при null originalFilename
  * - convert() возвращает ошибку при пустом файле
  * - convert() принимает только JSON файлы
+ * - Controller работает с интерфейсом TelegramExporterInterface
  */
 @DisplayName("TelegramController")
 class TelegramControllerTest {
 
     private final TelegramExporter exporter = new TelegramExporter();
     private final TelegramController controller = new TelegramController(exporter);
+
+    @Test
+    @DisplayName("Конструктор принимает интерфейс TelegramExporterInterface")
+    void constructorAcceptsInterface() {
+        // given: мок интерфейса
+        TelegramExporterInterface mockExporter = mock(TelegramExporterInterface.class);
+
+        // when: создаём контроллер с моком
+        TelegramController controllerWithMock = new TelegramController(mockExporter);
+
+        // then: контроллер создан без ошибок
+        assertThat(controllerWithMock).isNotNull();
+    }
 
     @Nested
     @DisplayName("convert() - загрузка файла")

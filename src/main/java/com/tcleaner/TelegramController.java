@@ -37,14 +37,14 @@ public class TelegramController {
 
     private static final Logger log = LoggerFactory.getLogger(TelegramController.class);
 
-    private final TelegramExporter exporter;
+    private final TelegramExporterInterface exporter;
 
     /**
      * Конструктор с внедрением зависимости.
      * 
      * @param exporter экземпляр экспортера для обработки файлов
      */
-    public TelegramController(TelegramExporter exporter) {
+    public TelegramController(TelegramExporterInterface exporter) {
         this.exporter = exporter;
     }
 
