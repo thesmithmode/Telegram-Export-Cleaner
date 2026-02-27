@@ -19,7 +19,7 @@ import java.util.List;
  * Читает result.json и преобразует в текстовый формат.
  */
 @Service
-public class TelegramExporter implements TelegramExporterInterface {
+public class TelegramExporter implements TelegramFileExporterInterface {
 
     private static final Logger log = LoggerFactory.getLogger(TelegramExporter.class);
 
