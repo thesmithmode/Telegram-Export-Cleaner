@@ -59,15 +59,15 @@ class DateFormatterTest {
         }
         
         @Test
-        @DisplayName("Возвращает исходную строку для невалидного формата")
-        void returnsOriginalForInvalidFormat() {
-            assertThat(DateFormatter.parseDate("invalid-date")).isEqualTo("invalid-date");
+        @DisplayName("Возвращает пустую строку для невалидного формата")
+        void returnsEmptyForInvalidFormat() {
+            assertThat(DateFormatter.parseDate("invalid-date")).isEmpty();
         }
-        
+
         @Test
-        @DisplayName("Возвращает исходную строку для неполной даты")
-        void returnsOriginalForPartialDate() {
-            assertThat(DateFormatter.parseDate("2025-06")).isEqualTo("2025-06");
+        @DisplayName("Возвращает пустую строку для неполной даты")
+        void returnsEmptyForPartialDate() {
+            assertThat(DateFormatter.parseDate("2025-06")).isEmpty();
         }
     }
     
