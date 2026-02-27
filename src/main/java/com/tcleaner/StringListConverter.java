@@ -1,12 +1,11 @@
 package com.tcleaner;
 
-import com.beust.jcommander.converters.CompositeConverter;
 import com.beust.jcommander.converters.IParameterConverter;
 
 import java.util.ArrayList;
 import java.util.List;
 
-public class StringListConverter implements IParameterConverter {
+public class StringListConverter implements IParameterConverter<List<String>> {
 
     @Override
     public List<String> convert(String value) {
