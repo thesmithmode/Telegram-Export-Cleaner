@@ -185,6 +185,55 @@ class MessageFilterTest {
     }
 
     @Nested
+    @DisplayName("Кастомные предикаты")
+    class CustomPredicates {
+
+        @Test
+        @DisplayName("Пропускает сообщения по кастомному предикату (by author)")
+        void filterByCustomPredicateAuthor() throws Exception {
+            JsonNode msg = objectMapper.readTree("""
+                    {"id": 1, "type": "message", "date": "2025-06-24T10:00:00",
+                     "from": "Alice", "text": "Hello"}
+                    """);
+            MessageFilter filter = new MessageFilter()
+                    .withPredicate(node -> "Alice".equals(
+                            node.has("from") ? node.get("from").asText() : ""));
+
+            assertThat(filter.matches(msg)).isTrue();
+        }
+
+        @Test
+        @DisplayName("Отсеивает сообщения по кастомному предикату (wrong author)")
+        void rejectsByCustomPredicateWrongAuthor() throws Exception {
+            JsonNode msg = objectMapper.readTree("""
+                    {"id": 1, "type": "message", "date": "2025-06-24T10:00:00",
+                     "from": "Bob", "text": "Hello"}
+                    """);
+            MessageFilter filter = new MessageFilter()
+                    .withPredicate(node -> "Alice".equals(
+                            node.has("from") ? node.get("from").asText() : ""));
+
+            assertThat(filter.matches(msg)).isFalse();
+        }
+
+        @Test
+        @DisplayName("Несколько предикатов комбинируются через AND")
+        void multiplePredicatesCombineAsAnd() throws Exception {
+            JsonNode msg = objectMapper.readTree("""
+                    {"id": 1, "type": "message", "date": "2025-06-24T10:00:00",
+                     "from": "Alice", "text": "important news"}
+                    """);
+            MessageFilter filter = new MessageFilter()
+                    .withPredicate(node -> "Alice".equals(
+                            node.has("from") ? node.get("from").asText() : ""))
+                    .withPredicate(node -> node.has("text")
+                            && node.get("text").asText().contains("important"));
+
+            assertThat(filter.matches(msg)).isTrue();
+        }
+    }
+
+    @Nested
     @DisplayName("Граничные случаи")
     class EdgeCases {
 
