@@ -49,6 +49,6 @@ class TelegramExporterDiTest {
     void defaultObjectMapperHasJavaTimeModule() {
         ObjectMapper mapper = TelegramExporter.createDefaultObjectMapper();
         assertThat(mapper.getRegisteredModuleIds())
-                .contains("com.fasterxml.jackson.datatype.jsr310.JavaTimeModule");
+                .contains("jackson-datatype-jsr310");
     }
 }
