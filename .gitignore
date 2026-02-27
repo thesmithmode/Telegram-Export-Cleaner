@@ -44,3 +44,10 @@ checkstyle-results.xml
 ### JaCoCo ###
 jacoco/
 *.exec
+
+### Maven ###
+dependency-reduced-pom.xml
+
+### Project specific ###
+*.txt
+nul
