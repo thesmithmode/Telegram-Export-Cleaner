@@ -229,6 +229,7 @@ public class TelegramController {
      * Утилита для автоматической очистки временной директории.
      */
     private static class TempDirectory implements AutoCloseable {
+        private static final Logger log = LoggerFactory.getLogger(TempDirectory.class);
         private final Path path;
 
         TempDirectory() throws IOException {
@@ -246,7 +247,8 @@ public class TelegramController {
                     .forEach(pp -> {
                         try {
                             Files.deleteIfExists(pp);
-                        } catch (IOException ignored) {
+                        } catch (IOException e) {
+                            log.warn("Не удалось удалить временный файл: {}", pp, e);
                         }
                     });
         }
