@@ -16,7 +16,6 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Map;
@@ -86,7 +85,7 @@ public class TelegramController {
         }
 
         try {
-            MessageFilter filter = buildFilter(startDate, endDate, keywords, excludeKeywords);
+            MessageFilter filter = MessageFilterFactory.build(startDate, endDate, keywords, excludeKeywords);
             return processWithTempDir(file, filter);
         } catch (DateTimeParseException ex) {
             log.warn("Невалидный формат даты в запросе: {}", ex.getParsedString());
@@ -129,7 +128,7 @@ public class TelegramController {
         }
 
         try {
-            MessageFilter filter = buildFilter(startDate, endDate, keywords, excludeKeywords);
+            MessageFilter filter = MessageFilterFactory.build(startDate, endDate, keywords, excludeKeywords);
             return processJsonWithTempDir(jsonContent, filter);
         } catch (DateTimeParseException ex) {
             log.warn("Невалидный формат даты в запросе: {}", ex.getParsedString());
@@ -181,48 +180,6 @@ public class TelegramController {
                     .contentType(MediaType.TEXT_PLAIN)
                     .body(result);
         }
-    }
-
-    private MessageFilter buildFilter(String startDate, String endDate,
-            String keywords, String excludeKeywords) {
-        boolean hasFilters = (startDate != null && !startDate.isBlank())
-                || (endDate != null && !endDate.isBlank())
-                || (keywords != null && !keywords.isBlank())
-                || (excludeKeywords != null && !excludeKeywords.isBlank());
-
-        if (!hasFilters) {
-            return null;
-        }
-
-        MessageFilter filter = new MessageFilter();
-
-        if (startDate != null && !startDate.isBlank()) {
-            filter.withStartDate(LocalDate.parse(startDate));
-        }
-
-        if (endDate != null && !endDate.isBlank()) {
-            filter.withEndDate(LocalDate.parse(endDate));
-        }
-
-        if (keywords != null && !keywords.isBlank()) {
-            for (String kw : keywords.split(",")) {
-                String trimmed = kw.trim();
-                if (!trimmed.isEmpty()) {
-                    filter.withKeyword(trimmed);
-                }
-            }
-        }
-
-        if (excludeKeywords != null && !excludeKeywords.isBlank()) {
-            for (String kw : excludeKeywords.split(",")) {
-                String trimmed = kw.trim();
-                if (!trimmed.isEmpty()) {
-                    filter.withExcludeKeyword(trimmed);
-                }
-            }
-        }
-
-        return filter;
     }
 
     /**

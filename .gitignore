@@ -50,14 +50,18 @@ jacoco/
 dependency-reduced-pom.xml
 
 ### Project specific ###
-*.txt
+# Выходные файлы CLI
+tcleaner_output.txt
+*_output.txt
 nul
 
-
-Контекст*/
+# Контекст AI-агентов (локальные настройки, не для репо)
 opencode.json
 .kilo/
 .kilofiles/
 *.kilo.db
 .kilocode/
 AGENTS.md
+
+# Личные данные для тестирования (real Telegram exports)
+Контекст*/

@@ -178,6 +178,8 @@ class IntegrationTest {
     @Test
     @DisplayName("Корректная обработка сообщений с различными сущностями")
     void handlesVariousEntities() throws IOException {
+        // В реальном Telegram export пробелы между сущностями идут отдельными plain-элементами.
+        // Текст сущностей не содержит лишних пробелов в начале/конце.
         String json = """
             {
                 "messages": [
@@ -188,23 +190,30 @@ class IntegrationTest {
                         "text": [
                             {"type": "plain", "text": "Check "},
                             {"type": "bold", "text": "bold"},
-                            {"type": "italic", "text": " italic"},
-                            {"type": "code", "text": " code"},
-                            {"type": "link", "text": " https://test.com"},
-                            {"type": "spoiler", "text": " secret"}
+                            {"type": "plain", "text": " "},
+                            {"type": "italic", "text": "italic"},
+                            {"type": "plain", "text": " "},
+                            {"type": "code", "text": "code"},
+                            {"type": "plain", "text": " "},
+                            {"type": "link", "text": "https://test.com"},
+                            {"type": "plain", "text": " "},
+                            {"type": "spoiler", "text": "secret"}
                         ]
                     }
                 ]
             }
             """;
-        
+
         Path inputFile = tempDir.resolve("result.json");
         Files.writeString(inputFile, json);
-        
+
         TelegramExporter exporter = new TelegramExporter();
         List<String> result = exporter.processFile(inputFile);
-        
+
         assertThat(result).hasSize(1);
-        assertThat(result.get(0)).isEqualTo("20250624 Check **bold*** italic*` code` https://test.com|| secret||");
+        // plain("Check ") + bold("bold") + plain(" ") + italic("italic") + plain(" ")
+        // + code("code") + plain(" ") + link("https://test.com") + plain(" ") + spoiler("secret")
+        assertThat(result.get(0)).isEqualTo(
+                "20250624 Check **bold** *italic* `code` https://test.com ||secret||");
     }
 }
