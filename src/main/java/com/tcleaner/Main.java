@@ -8,7 +8,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -93,16 +92,14 @@ public class Main {
             }
 
             TelegramExporter exporter = new TelegramExporter();
-            MessageFilter filter = hasFilters() ? buildFilter() : null;
+            MessageFilter filter = MessageFilterFactory.build(
+                    startDate, endDate,
+                    keywords.isEmpty() ? null : String.join(",", keywords),
+                    excludeKeywords.isEmpty() ? null : String.join(",", excludeKeywords));
             List<String> processed = exporter.processFile(resultFile, filter);
 
             Path outputFile = Paths.get(outputPath);
-            StringBuilder sb = new StringBuilder();
-            for (String line : processed) {
-                sb.append(line).append("\n");
-            }
-
-            Files.writeString(outputFile, sb.toString());
+            Files.writeString(outputFile, String.join("\n", processed) + "\n");
 
             if (verbose) {
                 System.out.println("Output written to: " + outputFile.toAbsolutePath());
@@ -120,32 +117,5 @@ public class Main {
         }
     }
 
-    private boolean hasFilters() {
-        return startDate != null
-               || endDate != null
-               || !keywords.isEmpty()
-               || !excludeKeywords.isEmpty();
-    }
-
-    private MessageFilter buildFilter() {
-        MessageFilter filter = new MessageFilter();
-        
-        if (startDate != null) {
-            filter.withStartDate(LocalDate.parse(startDate));
-        }
-        
-        if (endDate != null) {
-            filter.withEndDate(LocalDate.parse(endDate));
-        }
-        
-        for (String keyword : keywords) {
-            filter.withKeyword(keyword);
-        }
-        
-        for (String keyword : excludeKeywords) {
-            filter.withExcludeKeyword(keyword);
-        }
-        
-        return filter;
-    }
 }
+

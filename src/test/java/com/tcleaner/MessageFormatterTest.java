@@ -40,10 +40,17 @@ class MessageFormatterTest {
     }
 
     @Test
-    @DisplayName("normalizeNewlines() заменяет множественные переносы")
-    void normalizeNewlinesReplacesMultiple() {
-        assertThat(MessageFormatter.normalizeNewlines("a\n\nb\r\nc"))
-                .isEqualTo("a  b  c");
+    @DisplayName("normalizeNewlines() заменяет \\r\\n одним пробелом (Windows CRLF)")
+    void normalizeNewlinesReplacesCrLfAsSingleSpace() {
+        assertThat(MessageFormatter.normalizeNewlines("line1\r\nline2"))
+                .isEqualTo("line1 line2");
+    }
+
+    @Test
+    @DisplayName("normalizeNewlines() заменяет множественные переносы \\nна пробелы")
+    void normalizeNewlinesReplacesMultipleLf() {
+        assertThat(MessageFormatter.normalizeNewlines("a\n\nb"))
+                .isEqualTo("a  b");
     }
 
     @Test

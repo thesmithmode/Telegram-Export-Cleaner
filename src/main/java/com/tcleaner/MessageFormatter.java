@@ -25,10 +25,13 @@ public class MessageFormatter {
     /**
      * Заменяет переносы строк пробелами — каждое сообщение на одной строке.
      *
+     * <p>Обрабатывает все варианты: \r\n (Windows), \n (Unix), \r (Mac classic).
+     * Пара \r\n заменяется одним пробелом, не двумя.</p>
+     *
      * @param text исходный текст
      * @return текст без переносов строк
      */
     public static String normalizeNewlines(String text) {
-        return text.replace('\n', ' ').replace('\r', ' ');
+        return text.replaceAll("\\r\\n|\\r|\\n", " ");
     }
 }
