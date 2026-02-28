@@ -7,6 +7,7 @@
 - Парсит `result.json` из Telegram Desktop экспорта (machine-readable format)
 - Конвертирует дату в формат `YYYYMMDD` (компактный)
 - Обрабатывает Markdown форматирование (bold, italic, code, spoiler и др.)
+- Корректно парсит mention-сущности: не дублирует `@`, если Telegram уже включает его в текст
 - Каждое сообщение на отдельной строке
 - Пропускает служебные сообщения (service messages)
 
