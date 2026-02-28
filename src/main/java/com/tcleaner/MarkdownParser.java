@@ -16,7 +16,7 @@ import java.util.List;
  * - pre → ```\ntext\n```
  * - link → text
  * - text_link → [text](href)
- * - mention → @username
+ * - mention → @username (если text уже начинается с @, не дублирует символ)
  * - hashtag → #hashtag
  * - email → email
  * - phone → phone
@@ -59,7 +59,7 @@ public class MarkdownParser {
             case "pre" -> parsePre(entity, text);
             case "link" -> text;
             case "text_link" -> parseTextLink(entity, text);
-            case "mention" -> "@" + text;
+            case "mention" -> text.startsWith("@") ? text : "@" + text;
             case "mention_name" -> text;
             case "hashtag" -> "#" + text;
             case "cashtag" -> "$" + text;

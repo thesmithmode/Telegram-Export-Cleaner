@@ -128,12 +128,23 @@ class MarkdownParserTest {
         }
 
         @Test
-        @DisplayName("Парсит mention")
-        void parsesMention() throws Exception {
+        @DisplayName("Парсит mention без @ в тексте (редкий случай)")
+        void parsesMentionWithoutAt() throws Exception {
             JsonNode entity = createEntity("mention", "username");
-            
+
             String result = MarkdownParser.parseEntity(entity);
             assertThat(result).isEqualTo("@username");
+        }
+
+        @Test
+        @DisplayName("Парсит mention с @ в тексте — Telegram Desktop уже включает @")
+        void parsesMentionWithAt() throws Exception {
+            // В реальном Telegram Desktop export поле text уже содержит @username
+            JsonNode entity = createEntity("mention", "@sprut_ai");
+
+            String result = MarkdownParser.parseEntity(entity);
+            // Не должно быть @@sprut_ai
+            assertThat(result).isEqualTo("@sprut_ai");
         }
 
         @Test
