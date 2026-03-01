@@ -128,6 +128,9 @@ public class FileController {
                 .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition.toString())
                 .body(resource);
 
+        } catch (IllegalArgumentException e) {
+            log.warn("Недопустимый fileId при скачивании: {}", fileId);
+            return ResponseEntity.notFound().build();
         } catch (IOException e) {
             log.error("Ошибка при скачивании файла {}: {}", fileId, e.getMessage());
             return ResponseEntity.notFound().build();
@@ -142,7 +145,13 @@ public class FileController {
      */
     @GetMapping("/{fileId}/status")
     public ResponseEntity<Map<String, Object>> getFileStatus(@PathVariable String fileId) {
-        boolean exists = fileStorageService.exportFileExists(fileId);
+        boolean exists;
+        try {
+            exists = fileStorageService.exportFileExists(fileId);
+        } catch (IllegalArgumentException e) {
+            // Невалидный fileId (не UUID) — файл заведомо не существует
+            exists = false;
+        }
 
         Map<String, Object> response = new HashMap<>();
         response.put("fileId", fileId);
