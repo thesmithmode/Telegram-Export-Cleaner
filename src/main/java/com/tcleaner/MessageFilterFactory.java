@@ -9,6 +9,9 @@ import java.time.LocalDate;
  * {@link TelegramController}. Возвращает {@code null} если ни одно условие
  * фильтрации не задано — это сигнал для вызывающей стороны пропустить
  * фильтрацию целиком.</p>
+ *
+ * <p>Если задан диапазон дат, проверяется что startDate не позже endDate.
+ * При нарушении бросается {@link IllegalArgumentException}.</p>
  */
 public final class MessageFilterFactory {
 
@@ -41,12 +44,20 @@ public final class MessageFilterFactory {
 
         MessageFilter filter = new MessageFilter();
 
-        if (isPresent(startDate)) {
-            filter.withStartDate(LocalDate.parse(startDate));
+        LocalDate parsedStart = isPresent(startDate) ? LocalDate.parse(startDate) : null;
+        LocalDate parsedEnd = isPresent(endDate) ? LocalDate.parse(endDate) : null;
+
+        if (parsedStart != null && parsedEnd != null && parsedStart.isAfter(parsedEnd)) {
+            throw new IllegalArgumentException(
+                "startDate не может быть позже endDate: " + startDate + " > " + endDate);
         }
 
-        if (isPresent(endDate)) {
-            filter.withEndDate(LocalDate.parse(endDate));
+        if (parsedStart != null) {
+            filter.withStartDate(parsedStart);
+        }
+
+        if (parsedEnd != null) {
+            filter.withEndDate(parsedEnd);
         }
 
         if (isPresent(keywords)) {

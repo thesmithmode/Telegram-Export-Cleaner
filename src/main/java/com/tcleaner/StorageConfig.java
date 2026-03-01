@@ -10,11 +10,13 @@ import org.springframework.context.annotation.Configuration;
 @ConfigurationProperties(prefix = "app.storage")
 public class StorageConfig {
 
-    /** Путь к папке Import. */
-    private String importPath = "/data/import";
+    /** Путь к папке Import.
+     * Для продакшн обязательно задайте APP_STORAGE_IMPORT_PATH (либо app.storage.import-path). */
+    private String importPath = System.getProperty("java.io.tmpdir") + "/tcleaner/import";
 
-    /** Путь к папке Export. */
-    private String exportPath = "/data/export";
+    /** Путь к папке Export.
+     * Для продакшн обязательно задайте APP_STORAGE_EXPORT_PATH (либо app.storage.export-path). */
+    private String exportPath = System.getProperty("java.io.tmpdir") + "/tcleaner/export";
 
     /** Время жизни файлов в папке Export (минуты). */
     private int exportTtlMinutes = 10;

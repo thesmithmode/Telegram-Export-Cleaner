@@ -14,6 +14,10 @@ RUN addgroup -g 1000 appgroup && adduser -u 1000 -G appgroup -D appuser
 
 COPY --from=builder /app/target/telegram-cleaner-1.0.0.jar app.jar
 
+# Volumes for Import/Export directories
+VOLUME /data/import
+VOLUME /data/export
+
 USER appuser
 
 EXPOSE 8080

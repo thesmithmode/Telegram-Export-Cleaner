@@ -101,4 +101,51 @@ class MessageFilterFactoryTest {
             assertThat(filter).isNotNull();
         }
     }
+
+    @Nested
+    @DisplayName("Валидация диапазона дат")
+    class DateRangeValidation {
+
+        @Test
+        @DisplayName("startDate раньше endDate — OK")
+        void startBeforeEndIsOk() {
+            MessageFilter filter = MessageFilterFactory.build(
+                    "2025-01-01", "2025-12-31", null, null);
+            assertThat(filter).isNotNull();
+        }
+
+        @Test
+        @DisplayName("startDate равен endDate — OK")
+        void startEqualsEndIsOk() {
+            MessageFilter filter = MessageFilterFactory.build(
+                    "2025-06-15", "2025-06-15", null, null);
+            assertThat(filter).isNotNull();
+        }
+
+        @Test
+        @DisplayName("startDate позже endDate — исключение")
+        void startAfterEndThrows() {
+            assertThatThrownBy(() -> MessageFilterFactory.build(
+                    "2025-12-31", "2025-01-01", null, null))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("startDate")
+                    .hasMessageContaining("endDate");
+        }
+
+        @Test
+        @DisplayName("Только startDate задан — OK (нечего сравнивать)")
+        void onlyStartDateIsOk() {
+            MessageFilter filter = MessageFilterFactory.build(
+                    "2025-06-01", null, null, null);
+            assertThat(filter).isNotNull();
+        }
+
+        @Test
+        @DisplayName("Только endDate задан — OK (нечего сравнивать)")
+        void onlyEndDateIsOk() {
+            MessageFilter filter = MessageFilterFactory.build(
+                    null, "2025-06-30", null, null);
+            assertThat(filter).isNotNull();
+        }
+    }
 }

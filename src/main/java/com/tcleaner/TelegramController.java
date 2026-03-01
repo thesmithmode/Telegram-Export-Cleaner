@@ -91,6 +91,10 @@ public class TelegramController {
             log.warn("Невалидный формат даты в запросе: {}", ex.getParsedString());
             return ResponseEntity.badRequest()
                     .body(Map.of("error", "Невалидный формат даты. Используйте YYYY-MM-DD"));
+        } catch (IllegalArgumentException ex) {
+            log.warn("Невалидный диапазон дат: {}", ex.getMessage());
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", ex.getMessage()));
         } catch (TelegramExporterException ex) {
             log.error("Ошибка экспортера [{}]", ex.getErrorCode());
             return ResponseEntity.badRequest()
@@ -127,6 +131,12 @@ public class TelegramController {
                     .body(Map.of("error", "Пустое содержимое"));
         }
 
+        // Ограничение размера JSON-тела: multipart-лимит 10MB не применяется к @RequestBody
+        if (jsonContent.length() > 10 * 1024 * 1024) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "Содержимое превышает максимально допустимый размер 10MB"));
+        }
+
         try {
             MessageFilter filter = MessageFilterFactory.build(startDate, endDate, keywords, excludeKeywords);
             return processJsonWithTempDir(jsonContent, filter);
@@ -134,6 +144,10 @@ public class TelegramController {
             log.warn("Невалидный формат даты в запросе: {}", ex.getParsedString());
             return ResponseEntity.badRequest()
                     .body(Map.of("error", "Невалидный формат даты. Используйте YYYY-MM-DD"));
+        } catch (IllegalArgumentException ex) {
+            log.warn("Невалидный диапазон дат: {}", ex.getMessage());
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", ex.getMessage()));
         } catch (TelegramExporterException ex) {
             log.error("Ошибка экспортера [{}]", ex.getErrorCode());
             return ResponseEntity.badRequest()

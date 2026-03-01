@@ -148,12 +148,41 @@ class MarkdownParserTest {
         }
 
         @Test
-        @DisplayName("Парсит hashtag")
-        void parsesHashtag() throws Exception {
+        @DisplayName("Парсит hashtag без # в тексте (редкий случай)")
+        void parsesHashtagWithoutHash() throws Exception {
             JsonNode entity = createEntity("hashtag", "java");
-            
+
             String result = MarkdownParser.parseEntity(entity);
             assertThat(result).isEqualTo("#java");
+        }
+
+        @Test
+        @DisplayName("Парсит hashtag с # в тексте (реальный Telegram Desktop export)")
+        void parsesHashtagWithHash() throws Exception {
+            // Telegram Desktop export уже включает # в text: {"type":"hashtag","text":"#java"}
+            JsonNode entity = createEntity("hashtag", "#java");
+
+            String result = MarkdownParser.parseEntity(entity);
+            // Не должно быть ##java
+            assertThat(result).isEqualTo("#java");
+        }
+
+        @Test
+        @DisplayName("Парсит cashtag с $ в тексте — не дублирует")
+        void parsesCashtagWithDollar() throws Exception {
+            JsonNode entity = createEntity("cashtag", "$BTC");
+
+            String result = MarkdownParser.parseEntity(entity);
+            assertThat(result).isEqualTo("$BTC");
+        }
+
+        @Test
+        @DisplayName("Парсит cashtag без $ — добавляет")
+        void parsesCashtagWithoutDollar() throws Exception {
+            JsonNode entity = createEntity("cashtag", "BTC");
+
+            String result = MarkdownParser.parseEntity(entity);
+            assertThat(result).isEqualTo("$BTC");
         }
 
         @Test

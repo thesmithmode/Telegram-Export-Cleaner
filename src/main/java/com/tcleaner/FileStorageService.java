@@ -3,6 +3,7 @@ package com.tcleaner;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -13,6 +14,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 /**
@@ -24,7 +26,11 @@ public class FileStorageService {
     private static final Logger log = LoggerFactory.getLogger(FileStorageService.class);
     private static final String JSON_EXTENSION = ".json";
     private static final String MD_EXTENSION = ".md";
-    private static final ReentrantLock cleanupLock = new ReentrantLock();
+    /** UUID v4 формат: 8-4-4-4-12 hex-символов. */
+    private static final Pattern VALID_FILE_ID = Pattern.compile(
+            "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
+    /** Нестатический лок — каждый экземпляр сервиса независим (корректно для тестов). */
+    private final ReentrantLock cleanupLock = new ReentrantLock();
 
     private final StorageConfig config;
     private final Path importPath;
@@ -78,15 +84,33 @@ public class FileStorageService {
     }
 
     /**
+     * Загружает multipart-файл в папку Import.
+     * Используется в {@link com.tcleaner.FileController} — инкапсуляция генерации UUID.
+     *
+     * @param file загружаемый мультипарт-файл
+     * @return ID файла (UUID v4)
+     * @throws IOException при ошибке записи
+     */
+    public String uploadFile(MultipartFile file) throws IOException {
+        String fileId = UUID.randomUUID().toString();
+        Path targetPath = importPath.resolve(fileId + JSON_EXTENSION);
+        file.transferTo(targetPath.toFile());
+        log.info("Файл загружен: {} -> {}", file.getOriginalFilename(), targetPath);
+        return fileId;
+    }
+
+    /**
      * Обрабатывает файл из Import и перемещает результат в Export.
      *
      * <p>Метод выполняется синхронно в вызывающем потоке. Для асинхронной
      * обработки оберните вызов в {@link java.util.concurrent.CompletableFuture}.</p>
      *
-     * @param fileId ID файла
+     * @param fileId ID файла (UUID v4)
      * @return результат обработки
+     * @throws IllegalArgumentException если fileId не соответствует UUID-формату
      */
     public ProcessingResult processFile(String fileId) {
+        validateFileId(fileId);
         Path importFile = importPath.resolve(fileId + JSON_EXTENSION);
         Path exportFile = exportPath.resolve(fileId + MD_EXTENSION);
 
@@ -97,7 +121,7 @@ public class FileStorageService {
             }
 
             List<String> lines = exporter.processFile(importFile);
-            String result = String.join("\n", lines);
+            String result = lines.isEmpty() ? "" : String.join("\n", lines) + "\n";
 
             Files.writeString(exportFile, result);
             Files.delete(importFile);
@@ -165,11 +189,13 @@ public class FileStorageService {
     /**
      * Получает файл из папки Export.
      *
-     * @param fileId ID файла
+     * @param fileId ID файла (UUID v4)
      * @return путь к файлу
      * @throws IOException если файл не найден
+     * @throws IllegalArgumentException если fileId не соответствует UUID-формату
      */
     public Path getExportFile(String fileId) throws IOException {
+        validateFileId(fileId);
         Path exportFile = exportPath.resolve(fileId + MD_EXTENSION);
 
         if (!Files.exists(exportFile)) {
@@ -182,11 +208,26 @@ public class FileStorageService {
     /**
      * Проверяет существование файла в Export.
      *
-     * @param fileId ID файла
+     * @param fileId ID файла (UUID v4)
      * @return true если файл существует
+     * @throws IllegalArgumentException если fileId не соответствует UUID-формату
      */
     public boolean exportFileExists(String fileId) {
+        validateFileId(fileId);
         return Files.exists(exportPath.resolve(fileId + MD_EXTENSION));
+    }
+
+    /**
+     * Валидирует fileId: должен быть UUID v4 в lower-case hex.
+     * Защищает от path-traversal атак (например fileId = "../../etc/passwd").
+     *
+     * @param fileId проверяемый идентификатор
+     * @throws IllegalArgumentException если формат неверен
+     */
+    private void validateFileId(String fileId) {
+        if (fileId == null || !VALID_FILE_ID.matcher(fileId).matches()) {
+            throw new IllegalArgumentException("Недопустимый fileId: " + fileId);
+        }
     }
 
     public Path getImportPath() {

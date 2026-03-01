@@ -36,7 +36,7 @@ open target/site/jacoco/index.html
 mvn package
 
 # Запуск в режиме CLI
-java -jar target/telegram-cleaner-1.0.0.jar --cli -i <путь_к_папке_экспорта>
+java -jar target/telegram-cleaner-1.0.0.jar -i <путь_к_папке_экспорта>
 
 # Запуск в режиме Web API (по умолчанию)
 java -jar target/telegram-cleaner-1.0.0.jar
@@ -145,25 +145,31 @@ docker-compose down
 После запуска доступны endpoints:
 
 ```bash
-# Health check
+# Health check (публичный endpoint, аутентификация не нужна)
 curl http://localhost:8080/api/health
 
-# Загрузка файла (multipart/form-data)
-curl -X POST -F "file=@result.json" http://localhost:8080/api/convert
+# Загрузка файла (multipart/form-data) — требует Basic Auth
+curl -u admin:password -X POST -F "file=@result.json" http://localhost:8080/api/convert
 
-# Загрузка JSON напрямую (application/json)
-curl -X POST -H "Content-Type: application/json" \
+# Загрузка JSON напрямую (application/json) — требует Basic Auth
+curl -u admin:password -X POST -H "Content-Type: application/json" \
   -d @result.json \
   http://localhost:8080/api/convert/json
 ```
 
 ### Endpoints
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/health` | Проверка здоровья сервиса |
-| POST | `/api/convert` | Загрузка файла result.json |
-| POST | `/api/convert/json` | Отправка JSON напрямую |
+> **Аутентификация:** все endpoints кроме `/api/health` требуют HTTP Basic Auth.
+> По умолчанию: `admin` / `password`. В production установите переменные окружения `APP_ADMIN_USER` и `APP_ADMIN_PASSWORD`.
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/api/health` | — | Проверка здоровья сервиса |
+| POST | `/api/convert` | ✅ | Загрузка файла result.json |
+| POST | `/api/convert/json` | ✅ | Отправка JSON напрямую |
+| POST | `/api/files/upload` | ✅ | Загрузка файла с асинхронной обработкой |
+| GET | `/api/files/{id}/download` | ✅ | Скачивание обработанного файла (.md) |
+| GET | `/api/files/{id}/status` | ✅ | Проверка статуса обработки |
 
 ### Формат запросов и ответов
 
@@ -219,31 +225,41 @@ Body: (текстовый файл с результатом)
 ### Примеры использования
 
 ```bash
-# Health check
+# Health check (без аутентификации)
 curl http://localhost:8080/api/health
 
 # Загрузка файла
-curl -X POST -F "file=@result.json" http://localhost:8080/api/convert -o output.txt
+curl -u admin:password -X POST -F "file=@result.json" http://localhost:8080/api/convert -o output.txt
 
 # Загрузка JSON
-curl -X POST -H "Content-Type: application/json" \
+curl -u admin:password -X POST -H "Content-Type: application/json" \
   -d '{"messages":[{"id":1,"type":"message","date":"2025-06-24T10:00:00","text":"Hello"}]}' \
   http://localhost:8080/api/convert/json
 
 # С фильтрацией по дате
-curl -X POST -F "file=@result.json" \
+curl -u admin:password -X POST -F "file=@result.json" \
   -F "startDate=2025-01-01" -F "endDate=2025-06-30" \
   http://localhost:8080/api/convert -o filtered.txt
 
 # С фильтрацией по ключевым словам
-curl -X POST -F "file=@result.json" \
+curl -u admin:password -X POST -F "file=@result.json" \
   -F "keywords=привет,пока" \
   http://localhost:8080/api/convert -o filtered.txt
 
 # С исключением ключевых слов
-curl -X POST -F "file=@result.json" \
+curl -u admin:password -X POST -F "file=@result.json" \
   -F "excludeKeywords=спам,реклама" \
   http://localhost:8080/api/convert -o filtered.txt
+
+# Загрузка через /api/files (возвращает fileId для последующего скачивания)
+curl -u admin:password -X POST -F "file=@result.json" \
+  http://localhost:8080/api/files/upload
+
+# Скачивание результата по fileId
+curl -u admin:password http://localhost:8080/api/files/<fileId>/download -o output.md
+
+# Проверка статуса обработки
+curl -u admin:password http://localhost:8080/api/files/<fileId>/status
 ```
 
 ## Тесты

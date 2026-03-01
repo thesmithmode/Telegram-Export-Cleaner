@@ -61,8 +61,10 @@ public class MarkdownParser {
             case "text_link" -> parseTextLink(entity, text);
             case "mention" -> text.startsWith("@") ? text : "@" + text;
             case "mention_name" -> text;
-            case "hashtag" -> "#" + text;
-            case "cashtag" -> "$" + text;
+            // В Telegram Desktop export поле text уже содержит # (например "#java") — не дублируем
+            case "hashtag" -> text.startsWith("#") ? text : "#" + text;
+            // Аналогично для cashtag
+            case "cashtag" -> text.startsWith("$") ? text : "$" + text;
             case "email" -> text;
             case "phone" -> text;
             case "spoiler" -> "||" + text + "||";
