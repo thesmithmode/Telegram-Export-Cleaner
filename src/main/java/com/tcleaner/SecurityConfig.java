@@ -75,11 +75,13 @@ public class SecurityConfig {
         // Используем значения по умолчанию для development
         if (adminUser == null || adminUser.isBlank()) {
             adminUser = "admin";
-            log.warn("⚠️  APP_ADMIN_USER не задан — используется дефолтное значение 'admin'. Не используйте в production!");
+            log.warn("⚠️  APP_ADMIN_USER не задан — используется 'admin'."
+                    + " Не используйте в production!");
         }
         if (adminPass == null || adminPass.isBlank()) {
             adminPass = "password";
-            log.warn("⚠️  APP_ADMIN_PASSWORD не задан — используется дефолтный пароль 'password'. Не используйте в production!");
+            log.warn("⚠️  APP_ADMIN_PASSWORD не задан — используется 'password'."
+                    + " Не используйте в production!");
         }
         
         InMemoryUserDetailsManager manager = new InMemoryUserDetailsManager();

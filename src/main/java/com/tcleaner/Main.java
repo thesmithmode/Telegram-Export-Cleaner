@@ -22,8 +22,8 @@ import java.util.List;
  *   -o, --output <path>      Output file (default: tcleaner_output.txt)
  *   -s, --start-date <date>  Start date filter (YYYY-MM-DD)
  *   -e, --end-date <date>    End date filter (YYYY-MM-DD)
- *   -k, --keyword <word>     Include only messages with keyword
- *   -x, --exclude <word>     Exclude messages with keyword
+ *   -k, --keyword &lt;word&gt;     Include only messages with keyword
+ *   -x, --exclude &lt;word&gt;     Exclude messages with keyword
  *   -v, --verbose            Verbose output
  *   --help                   Show help
  */
@@ -41,10 +41,12 @@ public class Main {
     @Parameter(names = {"-e", "--end-date"}, description = "End date filter (YYYY-MM-DD)")
     private String endDate;
 
-    @Parameter(names = {"-k", "--keyword"}, description = "Include only messages with keyword", listConverter = StringListConverter.class)
+    @Parameter(names = {"-k", "--keyword"}, description = "Include only messages with keyword",
+            listConverter = StringListConverter.class)
     private List<String> keywords = new ArrayList<>();
 
-    @Parameter(names = {"-x", "--exclude"}, description = "Exclude messages with keyword", listConverter = StringListConverter.class)
+    @Parameter(names = {"-x", "--exclude"}, description = "Exclude messages with keyword",
+            listConverter = StringListConverter.class)
     private List<String> excludeKeywords = new ArrayList<>();
 
     @Parameter(names = {"-v", "--verbose"}, description = "Verbose output")
@@ -55,22 +57,22 @@ public class Main {
 
     public static void main(String[] args) {
         Main main = new Main();
-        JCommander jCommander = JCommander.newBuilder()
+        JCommander commander = JCommander.newBuilder()
                 .addObject(main)
                 .build();
 
-        jCommander.setProgramName("tcleaner");
+        commander.setProgramName("tcleaner");
 
         try {
-            jCommander.parse(args);
+            commander.parse(args);
         } catch (ParameterException e) {
             System.err.println("Error: " + e.getMessage());
-            jCommander.usage();
+            commander.usage();
             System.exit(1);
         }
 
         if (main.help) {
-            jCommander.usage();
+            commander.usage();
             return;
         }
 
