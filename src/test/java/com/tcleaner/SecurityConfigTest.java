@@ -4,8 +4,11 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+
+import java.nio.file.Path;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -17,8 +20,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
-@ActiveProfiles("test")
 class SecurityConfigTest {
+
+    @DynamicPropertySource
+    static void storageProperties(DynamicPropertyRegistry registry) {
+        Path tmp = Path.of(System.getProperty("java.io.tmpdir"));
+        registry.add("app.storage.import-path", () -> tmp.resolve("tcleaner-test/import").toString());
+        registry.add("app.storage.export-path", () -> tmp.resolve("tcleaner-test/export").toString());
+    }
 
     @Autowired
     private MockMvc mockMvc;
