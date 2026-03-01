@@ -8,6 +8,7 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration
 @ConfigurationProperties(prefix = "app.storage")
+@Primary
 public class StorageConfig {
 
     /** Путь к папке Import.

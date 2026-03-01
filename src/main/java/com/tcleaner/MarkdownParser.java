@@ -126,7 +126,7 @@ public class MarkdownParser {
      * Парсит поле text из сообщения.
      * Может быть строкой или массивом (mixed content).
      * 
-     * @param textField значение поля text (String, List<JsonNode> или null)
+     * @param textField значение поля text (String, List&lt;JsonNode&gt; или null)
      * @return обработанный текст
      */
     public static String parseText(Object textField) {
