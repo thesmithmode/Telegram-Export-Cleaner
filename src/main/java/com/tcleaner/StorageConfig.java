@@ -2,6 +2,7 @@ package com.tcleaner;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 
 /**
  * Конфигурация для путей хранения файлов.
