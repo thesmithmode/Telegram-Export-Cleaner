@@ -21,7 +21,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.UUID;
 
 /**
  * REST контроллер для работы с файлами через папки Import/Export.
@@ -50,7 +49,8 @@ public class FileController {
      * Загружает файл в папку Import и запускает обработку.
      *
      * <p>Файл сохраняется под уникальным UUID-именем во избежание
-     * конфликтов при параллельных загрузках.</p>
+     * конфликтов при параллельных загрузках. Копирование происходит
+     * ровно один раз — напрямую в целевой путь.</p>
      *
      * @param file загружаемый файл (result.json из Telegram)
      * @return ID файла и статус обработки
@@ -71,16 +71,8 @@ public class FileController {
                     .body(Map.of("error", "Ожидается файл с расширением .json"));
             }
 
-            // Сохраняем напрямо с UUID-именем, избегая race condition при параллельных загрузках
-            Path importPath = fileStorageService.getImportPath();
-            Path tempFile = importPath.resolve(UUID.randomUUID() + ".json");
-            file.transferTo(tempFile.toFile());
-
-            // uploadFile копирует файл в внутреннее хранилище с новым UUID
-            String fileId = fileStorageService.uploadFile(tempFile);
-
-            // Удаляем временный файл
-            java.nio.file.Files.deleteIfExists(tempFile);
+            // Делегируем сохранение сервису: он генерирует UUID и возвращает fileId
+            String fileId = fileStorageService.uploadFile(file);
 
             ProcessingResult result = fileStorageService.processFile(fileId);
 
@@ -96,10 +88,15 @@ public class FileController {
                 return ResponseEntity.internalServerError().body(response);
             }
 
-        } catch (Exception e) {
-            log.error("Ошибка при загрузке файла: {}", e.getMessage(), e);
+        } catch (IOException e) {
+            log.error("Ошибка ввода/вывода при загрузке файла: {}", e.getMessage(), e);
             Map<String, Object> error = new HashMap<>();
-            error.put("error", "Ошибка при обработке файла: " + e.getMessage());
+            error.put("error", "Ошибка при сохранении файла: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(error);
+        } catch (Exception e) {
+            log.error("Неожиданная ошибка при загрузке файла: {}", e.getMessage(), e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("error", "Внутренняя ошибка сервера");
             return ResponseEntity.internalServerError().body(error);
         }
     }

@@ -95,9 +95,18 @@ class FileControllerTest {
     }
 
     @Test
-    @DisplayName("downloadFile возвращает 404 для несуществующего fileId")
+    @DisplayName("downloadFile возвращает 404 для несуществующего UUID fileId")
     void downloadNonExistentFileReturns404() {
-        ResponseEntity<?> response = controller.downloadFile("nonexistent-id");
+        // Валидный UUID, но файла не существует
+        ResponseEntity<?> response = controller.downloadFile(UUID.randomUUID().toString());
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    @Test
+    @DisplayName("downloadFile возвращает 404 для невалидного fileId (не UUID)")
+    void downloadInvalidFileIdReturns404() {
+        // не UUID — сервис бросит IllegalArgumentException, контроллер должен вернуть 404
+        ResponseEntity<?> response = controller.downloadFile("../../etc/passwd");
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }
 
@@ -140,15 +149,25 @@ class FileControllerTest {
     @Test
     @DisplayName("uploadFile отклоняет path-traversal в имени файла")
     void uploadPathTraversalFilenameReturns400() {
+        // Имя "../evil.json" заканчивается на .json, но содержит path-traversal.
+        // Файл сохраняется по UUID-пути (безопасно), но должен быть принят как обычный файл.
+        // Тест документирует: UUID-путь изолирует хранилище от оригинального имени.
         MockMultipartFile file = new MockMultipartFile(
                 "file", "../evil.json", "application/json",
                 "{\"messages\":[]}".getBytes());
 
-        // Имя файла будет санитизировано — файл не сохранится вне importPath
-        // Допустимы как 200 (если санитизация успешна), так и 400 (если отклонено явно)
         ResponseEntity<Map<String, Object>> response = controller.uploadFile(file);
 
-        // Главное — не должно быть 500
+        // Файл принимается (имя игнорируется, UUID безопасен), 500 недопустим
         assertThat(response.getStatusCode()).isNotEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+        // Проверяем что файл сохранён внутри importDir, а не вне её
+        if (response.getStatusCode() == HttpStatus.OK) {
+            String fileId = (String) response.getBody().get("fileId");
+            java.nio.file.Path exportDir = storageService.getExportPath();
+            // Файл должен быть в export директории (после обработки)
+            assertThat(exportDir.resolve(fileId + ".md")).exists();
+            // Файл не должен выйти за пределы tempDir
+            assertThat(exportDir.resolve(fileId + ".md").startsWith(tempDir)).isTrue();
+        }
     }
 }
