@@ -21,6 +21,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -34,10 +35,10 @@ import static org.mockito.Mockito.when;
 /**
  * Юнит-тесты для FileController.
  *
- * <p>Содержит два вложенных класса:
+ * <p>Два вложенных класса:
  * <ul>
- *   <li>{@link WithRealStorage} — интеграционные тесты с реальным FileStorageService и диском</li>
- *   <li>{@link WithMockedStorage} — unit-тесты через Mockito (@Mock, @Captor, verify)</li>
+ *   <li>{@link WithRealStorage} — интеграционные тесты с реальным диском</li>
+ *   <li>{@link WithMockedStorage} — unit-тесты через Mockito (@Mock, @InjectMocks, @Captor)</li>
  * </ul>
  * </p>
  */
@@ -45,7 +46,6 @@ import static org.mockito.Mockito.when;
 @DisplayName("FileController")
 class FileControllerTest {
 
-    // Мок-объекты для WithMockedStorage — инжектируются через @InjectMocks
     @Mock
     private FileStorageService storageService;
 
@@ -115,16 +115,18 @@ class FileControllerTest {
         }
 
         @Test
-        @DisplayName("uploadFile успешно обрабатывает корректный result.json")
-        void uploadValidJsonReturns200() {
+        @DisplayName("uploadFile возвращает 202 Accepted и PENDING для корректного файла")
+        void uploadValidJsonReturns202() {
             String json = "{\"messages\":[{\"id\":1,\"type\":\"message\","
                     + "\"date\":\"2025-06-24T10:00:00\",\"text\":\"Hi\"}]}";
             MockMultipartFile file = new MockMultipartFile(
                     "file", "result.json", "application/json", json.getBytes());
+
             ResponseEntity<Map<String, Object>> response = realController.uploadFile(file);
-            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
             assertThat(response.getBody()).containsKey("fileId");
-            assertThat(response.getBody()).containsEntry("status", "COMPLETED");
+            assertThat(response.getBody()).containsEntry("status", "PENDING");
         }
 
         @Test
@@ -142,7 +144,7 @@ class FileControllerTest {
         }
 
         @Test
-        @DisplayName("downloadFile возвращает файл для существующего fileId")
+        @DisplayName("downloadFile возвращает 200 для существующего файла")
         void downloadExistingFileReturns200() throws IOException {
             String fileId = UUID.randomUUID().toString();
             Files.writeString(exportDir.resolve(fileId + ".md"), "20250624 Hello");
@@ -177,13 +179,7 @@ class FileControllerTest {
                     "file", "../evil.json", "application/json",
                     "{\"messages\":[]}".getBytes());
             ResponseEntity<Map<String, Object>> response = realController.uploadFile(file);
-            // 500 недопустим в любом случае
             assertThat(response.getStatusCode()).isNotEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
-            if (response.getStatusCode() == HttpStatus.OK) {
-                String fileId = (String) response.getBody().get("fileId");
-                assertThat(exportDir.resolve(fileId + ".md")).exists();
-                assertThat(exportDir.resolve(fileId + ".md").startsWith(tempDir)).isTrue();
-            }
         }
     }
 
@@ -197,7 +193,7 @@ class FileControllerTest {
 
         @Test
         @DisplayName("uploadFile не обращается к сервису если файл пустой")
-        void uploadEmptyFile_neverCallsService() throws IOException {
+        void uploadEmptyFile_neverCallsService() {
             MockMultipartFile file = new MockMultipartFile(
                     "file", "result.json", "application/json", new byte[0]);
 
@@ -208,21 +204,44 @@ class FileControllerTest {
         }
 
         @Test
-        @DisplayName("uploadFile передаёт в processFile именно тот fileId, что вернул uploadFile")
-        void uploadFile_passesCorrectFileIdToProcessFile() throws IOException {
+        @DisplayName("uploadFile передаёт в processFileAsync именно тот fileId, что вернул uploadFile")
+        void uploadFile_passesCorrectFileIdToProcessFileAsync() throws IOException {
             String expectedFileId = UUID.randomUUID().toString();
             MockMultipartFile file = new MockMultipartFile(
                     "file", "result.json", "application/json",
                     "{\"messages\":[]}".getBytes());
 
             when(storageService.uploadFile(any(MultipartFile.class))).thenReturn(expectedFileId);
-            when(storageService.processFile(anyString()))
-                    .thenReturn(ProcessingResult.success(expectedFileId));
+            when(storageService.processFileAsync(anyString()))
+                    .thenReturn(CompletableFuture.completedFuture(
+                            ProcessingResult.success(expectedFileId)));
 
             controller.uploadFile(file);
 
-            verify(storageService).processFile(fileIdCaptor.capture());
+            // ArgumentCaptor захватывает аргумент переданный в processFileAsync
+            verify(storageService).processFileAsync(fileIdCaptor.capture());
             assertThat(fileIdCaptor.getValue()).isEqualTo(expectedFileId);
+        }
+
+        @Test
+        @DisplayName("uploadFile возвращает 202 и не ждёт завершения обработки")
+        void uploadFile_returns202Immediately() throws IOException {
+            String fileId = UUID.randomUUID().toString();
+            MockMultipartFile file = new MockMultipartFile(
+                    "file", "result.json", "application/json",
+                    "{\"messages\":[]}".getBytes());
+
+            when(storageService.uploadFile(any(MultipartFile.class))).thenReturn(fileId);
+            when(storageService.processFileAsync(anyString()))
+                    .thenReturn(CompletableFuture.completedFuture(
+                            ProcessingResult.success(fileId)));
+
+            ResponseEntity<Map<String, Object>> response = controller.uploadFile(file);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+            assertThat(response.getBody()).containsEntry("status", "PENDING");
+            // processFile (синхронный) не должен вызываться — только async
+            verify(storageService, never()).processFile(anyString());
         }
 
         @Test
