@@ -38,18 +38,22 @@ public class FileStorageService {
     private final Path importPath;
     private final Path exportPath;
     private final TelegramExporter exporter;
+    private final ProcessingStatusService statusService;
 
     /**
      * Конструктор.
      *
-     * @param config   конфигурация хранилища
-     * @param exporter обработчик Telegram файлов
+     * @param config        конфигурация хранилища
+     * @param exporter      обработчик Telegram файлов
+     * @param statusService сервис хранения статусов в Redis
      */
-    public FileStorageService(StorageConfig config, TelegramExporter exporter) {
+    public FileStorageService(StorageConfig config, TelegramExporter exporter,
+            ProcessingStatusService statusService) {
         this.config = config;
         this.importPath = Paths.get(config.getImportPath());
         this.exportPath = Paths.get(config.getExportPath());
         this.exporter = exporter;
+        this.statusService = statusService;
 
         initializeDirectories();
     }
@@ -115,10 +119,13 @@ public class FileStorageService {
         Path importFile = importPath.resolve(fileId + JSON_EXTENSION);
         Path exportFile = exportPath.resolve(fileId + MD_EXTENSION);
 
+        statusService.setStatus(fileId, ProcessingStatus.PENDING);
         try {
             if (!Files.exists(importFile)) {
                 log.error("Файл не найден: {}", importFile);
-                return ProcessingResult.error(fileId, "Файл не найден в папке Import");
+                ProcessingResult err = ProcessingResult.error(fileId, "Файл не найден в папке Import");
+                statusService.setStatus(fileId, ProcessingStatus.FAILED);
+                return err;
             }
 
             List<String> lines = exporter.processFile(importFile);
@@ -127,12 +134,14 @@ public class FileStorageService {
             Files.writeString(exportFile, result);
             Files.delete(importFile);
 
+            statusService.setStatus(fileId, ProcessingStatus.COMPLETED);
             log.info("Файл обработан: {} -> {}", importFile, exportFile);
             return ProcessingResult.success(fileId);
 
-        } catch (Exception e) {
-            log.error("Ошибка при обработке файла {}: {}", fileId, e.getMessage());
-            return ProcessingResult.error(fileId, e.getMessage());
+        } catch (Exception ex) {
+            log.error("Ошибка при обработке файла {}: {}", fileId, ex.getMessage());
+            statusService.setStatus(fileId, ProcessingStatus.FAILED);
+            return ProcessingResult.error(fileId, ex.getMessage());
         }
     }
 
