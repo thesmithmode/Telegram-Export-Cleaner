@@ -132,8 +132,8 @@ public class FileController {
             log.warn("Недопустимый fileId при скачивании: {}", fileId);
             return ResponseEntity.notFound().build();
         } catch (IOException e) {
-            log.error("Ошибка при скачивании файла {}: {}", fileId, e.getMessage());
-            return ResponseEntity.notFound().build();
+            log.error("Ошибка чтения файла {}: {}", fileId, e.getMessage());
+            return ResponseEntity.internalServerError().build();
         }
     }
 
