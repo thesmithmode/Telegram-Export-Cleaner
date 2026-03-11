@@ -2,6 +2,7 @@ package com.tcleaner;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
@@ -13,6 +14,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -102,8 +104,7 @@ public class FileStorageService {
     /**
      * Обрабатывает файл из Import и перемещает результат в Export.
      *
-     * <p>Метод выполняется синхронно в вызывающем потоке. Для асинхронной
-     * обработки оберните вызов в {@link java.util.concurrent.CompletableFuture}.</p>
+     * <p>Метод выполняется синхронно в вызывающем потоке.</p>
      *
      * @param fileId ID файла (UUID v4)
      * @return результат обработки
@@ -228,6 +229,22 @@ public class FileStorageService {
         if (fileId == null || !VALID_FILE_ID.matcher(fileId).matches()) {
             throw new IllegalArgumentException("Недопустимый fileId: " + fileId);
         }
+    }
+
+    /**
+     * Асинхронно обрабатывает файл из Import и перемещает результат в Export.
+     *
+     * <p>Запускается в отдельном потоке из пула Spring {@code @Async}.
+     * Вызывающий поток освобождается немедленно — результат доступен
+     * через возвращённый {@link CompletableFuture}.</p>
+     *
+     * @param fileId ID файла (UUID v4)
+     * @return будущий результат обработки
+     */
+    @Async
+    public CompletableFuture<ProcessingResult> processFileAsync(String fileId) {
+        log.info("Асинхронная обработка файла: {}", fileId);
+        return CompletableFuture.completedFuture(processFile(fileId));
     }
 
     public Path getImportPath() {

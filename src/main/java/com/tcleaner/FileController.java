@@ -6,6 +6,7 @@ import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -46,14 +47,14 @@ public class FileController {
     }
 
     /**
-     * Загружает файл в папку Import и запускает обработку.
+     * Загружает файл в папку Import и запускает асинхронную обработку.
      *
-     * <p>Файл сохраняется под уникальным UUID-именем во избежание
-     * конфликтов при параллельных загрузках. Копирование происходит
-     * ровно один раз — напрямую в целевой путь.</p>
+     * <p>Файл сохраняется под UUID-именем, обработка запускается в фоне.
+     * Отвечает сразу — 202 Accepted — не дожидаясь завершения обработки.
+     * Клиент опрашивает GET /api/files/{fileId}/status для получения результата.</p>
      *
      * @param file загружаемый файл (result.json из Telegram)
-     * @return ID файла и статус обработки
+     * @return 202 Accepted с fileId, либо 400/500 при ошибке
      */
     @PostMapping("/upload")
     public ResponseEntity<Map<String, Object>> uploadFile(@RequestParam("file") MultipartFile file) {
@@ -71,27 +72,23 @@ public class FileController {
                     .body(Map.of("error", "Ожидается файл с расширением .json"));
             }
 
-            // Делегируем сохранение сервису: он генерирует UUID и возвращает fileId
+            // Сохраняем файл синхронно — быстрое I/O, необходимо до запуска async
             String fileId = fileStorageService.uploadFile(file);
 
-            ProcessingResult result = fileStorageService.processFile(fileId);
+            // Обработка запускается в отдельном потоке — HTTP-поток свободен немедленно
+            fileStorageService.processFileAsync(fileId);
 
             Map<String, Object> response = new HashMap<>();
             response.put("fileId", fileId);
-            response.put("status", result.getStatus().name());
-            response.put("message", "Файл успешно обработан");
+            response.put("status", ProcessingStatus.PENDING.name());
+            response.put("message", "Файл принят в обработку");
 
-            if (result.getStatus() == ProcessingStatus.COMPLETED) {
-                return ResponseEntity.ok(response);
-            } else {
-                response.put("error", result.getErrorMessage());
-                return ResponseEntity.internalServerError().body(response);
-            }
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
 
         } catch (IOException e) {
             log.error("Ошибка ввода/вывода при загрузке файла: {}", e.getMessage(), e);
             Map<String, Object> error = new HashMap<>();
-            error.put("error", "Ошибка при сохранении файла: " + e.getMessage());
+            error.put("error", "Ошибка при сохранении файла");
             return ResponseEntity.internalServerError().body(error);
         } catch (Exception e) {
             log.error("Неожиданная ошибка при загрузке файла: {}", e.getMessage(), e);
