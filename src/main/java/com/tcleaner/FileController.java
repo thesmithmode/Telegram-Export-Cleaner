@@ -22,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * REST контроллер для работы с файлами через папки Import/Export.
@@ -36,14 +37,18 @@ public class FileController {
     private static final Logger log = LoggerFactory.getLogger(FileController.class);
 
     private final FileStorageService fileStorageService;
+    private final ProcessingStatusService statusService;
 
     /**
      * Конструктор.
      *
      * @param fileStorageService сервис для работы с файлами
+     * @param statusService      сервис статусов из Redis
      */
-    public FileController(FileStorageService fileStorageService) {
+    public FileController(FileStorageService fileStorageService,
+            ProcessingStatusService statusService) {
         this.fileStorageService = fileStorageService;
+        this.statusService = statusService;
     }
 
     /**
@@ -135,26 +140,37 @@ public class FileController {
     }
 
     /**
-     * Проверяет статус обработки файла.
+     * Возвращает статус обработки файла.
+     *
+     * <p>Сначала смотрим статус в Redis (быстро), потом на диск (запасной вариант).</p>
      *
      * @param fileId ID файла
      * @return статус файла
      */
     @GetMapping("/{fileId}/status")
     public ResponseEntity<Map<String, Object>> getFileStatus(@PathVariable String fileId) {
+        // 1. Redis — быстрый ответ (есть PENDING / COMPLETED / FAILED)
+        Optional<ProcessingStatus> redisStatus = statusService.getStatus(fileId);
+        if (redisStatus.isPresent()) {
+            Map<String, Object> response = new HashMap<>();
+            response.put("fileId", fileId);
+            response.put("status", redisStatus.get().name());
+            response.put("exists", redisStatus.get() == ProcessingStatus.COMPLETED);
+            return ResponseEntity.ok(response);
+        }
+
+        // 2. Диск — запасной вариант (например, Redis перезапустился)
         boolean exists;
         try {
             exists = fileStorageService.exportFileExists(fileId);
-        } catch (IllegalArgumentException e) {
-            // Невалидный fileId (не UUID) — файл заведомо не существует
+        } catch (IllegalArgumentException ex) {
             exists = false;
         }
 
         Map<String, Object> response = new HashMap<>();
         response.put("fileId", fileId);
         response.put("exists", exists);
-        response.put("status", exists ? "COMPLETED" : "NOT_FOUND");
-
+        response.put("status", exists ? ProcessingStatus.COMPLETED.name() : "NOT_FOUND");
         return ResponseEntity.ok(response);
     }
 }

@@ -11,6 +11,7 @@ import org.mockito.Captor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.Mockito;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockMultipartFile;
@@ -49,6 +50,9 @@ class FileControllerTest {
     @Mock
     private FileStorageService storageService;
 
+    @Mock
+    private ProcessingStatusService statusService;
+
     @InjectMocks
     private FileController controller;
 
@@ -81,8 +85,10 @@ class FileControllerTest {
             config.setExportPath(exportDir.toString());
             config.setExportTtlMinutes(10);
 
-            FileStorageService realService = new FileStorageService(config, new TelegramExporter());
-            realController = new FileController(realService);
+            ProcessingStatusService mockStatus = Mockito.mock(ProcessingStatusService.class);
+            FileStorageService realService = new FileStorageService(
+                    config, new TelegramExporter(), mockStatus);
+            realController = new FileController(realService, mockStatus);
         }
 
         @Test

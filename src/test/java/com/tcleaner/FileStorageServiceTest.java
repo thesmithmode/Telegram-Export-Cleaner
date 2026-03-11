@@ -4,16 +4,14 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import com.tcleaner.TelegramExporter;
-
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
-import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.mock;
 
 /**
  * Тесты для FileStorageService.
@@ -40,8 +38,8 @@ class FileStorageServiceTest {
         config.setExportPath(exportDir.toString());
         config.setExportTtlMinutes(10);
 
-        TelegramExporter exporter = new TelegramExporter();
-        storageService = new FileStorageService(config, exporter);
+        ProcessingStatusService mockStatus = mock(ProcessingStatusService.class);
+        storageService = new FileStorageService(config, new TelegramExporter(), mockStatus);
     }
 
     @Test
@@ -65,8 +63,9 @@ class FileStorageServiceTest {
         config.setExportPath(newExportDir.toString());
         config.setExportTtlMinutes(10);
 
-        TelegramExporter exporter = new TelegramExporter();
-        FileStorageService newService = new FileStorageService(config, exporter);
+        ProcessingStatusService mockStatus2 = mock(ProcessingStatusService.class);
+        FileStorageService newService = new FileStorageService(
+                config, new TelegramExporter(), mockStatus2);
 
         Path testFile = newImportDir.resolve("test.json");
         Files.writeString(testFile, "{\"messages\": []}");
