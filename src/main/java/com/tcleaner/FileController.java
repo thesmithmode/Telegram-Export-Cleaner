@@ -23,6 +23,7 @@ import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * REST контроллер для работы с файлами через папки Import/Export.
@@ -35,6 +36,8 @@ import java.util.Optional;
 public class FileController {
 
     private static final Logger log = LoggerFactory.getLogger(FileController.class);
+    private static final long RATE_LIMIT_MS = 15_000L;
+    private final AtomicLong lastUploadTime = new AtomicLong(0);
 
     private final FileStorageService fileStorageService;
     private final ProcessingStatusService statusService;
@@ -64,6 +67,18 @@ public class FileController {
     @PostMapping("/upload")
     public ResponseEntity<Map<String, Object>> uploadFile(@RequestParam("file") MultipartFile file) {
         log.info("Получен файл: {}, размер: {} байт", file.getOriginalFilename(), file.getSize());
+
+        long now = System.currentTimeMillis();
+        long last = lastUploadTime.get();
+        long elapsed = now - last;
+        if (elapsed < RATE_LIMIT_MS) {
+            long waitSec = (RATE_LIMIT_MS - elapsed) / 1000 + 1;
+            log.warn("Rate limit: запрос отклонён, следующий через {} сек", waitSec);
+            Map<String, Object> err = new HashMap<>();
+            err.put("error", "Слишком частые запросы. Подождите " + waitSec + " сек.");
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(err);
+        }
+        lastUploadTime.set(now);
 
         try {
             if (file.isEmpty()) {
