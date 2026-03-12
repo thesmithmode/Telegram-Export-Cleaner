@@ -4,89 +4,65 @@ import java.time.Instant;
 
 /**
  * Результат обработки файла.
+ *
+ * <p>Создаётся через фабричные методы {@link #success(String)} и {@link #error(String, String)}.
+ * Экземпляры неизменяемы после создания.</p>
  */
 public class ProcessingResult {
 
-    /** ID файла. */
-    private String fileId;
+    private final String fileId;
+    private final ProcessingStatus status;
+    private final String errorMessage;
+    private final Instant startedAt;
+    private final Instant completedAt;
 
-    /** Статус обработки. */
-    private ProcessingStatus status;
-
-    /** Сообщение об ошибке (если есть). */
-    private String errorMessage;
-
-    /** Время начала обработки. */
-    private Instant startedAt;
-
-    /** Время окончания обработки. */
-    private Instant completedAt;
-
-    public ProcessingResult() {
-    }
-
-    public ProcessingResult(String fileId, ProcessingStatus status) {
+    private ProcessingResult(String fileId, ProcessingStatus status,
+            String errorMessage, Instant completedAt) {
         this.fileId = fileId;
         this.status = status;
+        this.errorMessage = errorMessage;
         this.startedAt = Instant.now();
+        this.completedAt = completedAt;
+    }
+
+    /**
+     * Успешный результат обработки.
+     *
+     * @param fileId ID обработанного файла
+     * @return результат со статусом COMPLETED
+     */
+    public static ProcessingResult success(String fileId) {
+        return new ProcessingResult(fileId, ProcessingStatus.COMPLETED, null, Instant.now());
+    }
+
+    /**
+     * Результат с ошибкой.
+     *
+     * @param fileId  ID файла
+     * @param message описание ошибки
+     * @return результат со статусом FAILED
+     */
+    public static ProcessingResult error(String fileId, String message) {
+        return new ProcessingResult(fileId, ProcessingStatus.FAILED, message, Instant.now());
     }
 
     public String getFileId() {
         return fileId;
     }
 
-    public void setFileId(String fileId) {
-        this.fileId = fileId;
-    }
-
     public ProcessingStatus getStatus() {
         return status;
-    }
-
-    public void setStatus(ProcessingStatus status) {
-        this.status = status;
     }
 
     public String getErrorMessage() {
         return errorMessage;
     }
 
-    public void setErrorMessage(String errorMessage) {
-        this.errorMessage = errorMessage;
-    }
-
     public Instant getStartedAt() {
         return startedAt;
     }
 
-    public void setStartedAt(Instant startedAt) {
-        this.startedAt = startedAt;
-    }
-
     public Instant getCompletedAt() {
         return completedAt;
-    }
-
-    public void setCompletedAt(Instant completedAt) {
-        this.completedAt = completedAt;
-    }
-
-    /**
-     * Успешный результат.
-     */
-    public static ProcessingResult success(String fileId) {
-        ProcessingResult result = new ProcessingResult(fileId, ProcessingStatus.COMPLETED);
-        result.setCompletedAt(Instant.now());
-        return result;
-    }
-
-    /**
-     * Результат с ошибкой.
-     */
-    public static ProcessingResult error(String fileId, String message) {
-        ProcessingResult result = new ProcessingResult(fileId, ProcessingStatus.FAILED);
-        result.setErrorMessage(message);
-        result.setCompletedAt(Instant.now());
-        return result;
     }
 }

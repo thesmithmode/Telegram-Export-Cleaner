@@ -9,7 +9,10 @@ import org.springframework.security.web.SecurityFilterChain;
 
 /**
  * Конфигурация безопасности приложения.
- * Все endpoints публичные — аутентификация не требуется.
+ *
+ * <p>Все endpoints публичные — аутентификация не требуется.
+ * UserDetailsServiceAutoConfiguration исключён в {@link TelegramCleanerApplication},
+ * чтобы Spring Boot не генерировал случайный пароль при старте.</p>
  */
 @Configuration
 @EnableWebSecurity
@@ -17,7 +20,9 @@ public class SecurityConfig {
 
     /**
      * Фильтр цепочки безопасности для HTTP запросов.
-     * CSRF отключён (stateless REST API), все запросы публичные.
+     *
+     * <p>CSRF отключён (stateless REST API).
+     * Все запросы разрешены без аутентификации.</p>
      *
      * @param http конфигурация HTTP безопасности
      * @return настроенный SecurityFilterChain
