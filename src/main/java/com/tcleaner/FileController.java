@@ -20,7 +20,6 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
@@ -30,6 +29,14 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * <p>Файл сохраняется под UUID-именем сразу при получении,
  * что исключает конфликты при параллельных запросах.</p>
+ *
+ * <p>Порядок проверок в {@link #uploadFile}:
+ * <ol>
+ *   <li>Валидация файла (400) — не засоряет rate limit таймер</li>
+ *   <li>Rate limit (429) — проверяется только для корректных файлов</li>
+ *   <li>Сохранение и асинхронная обработка</li>
+ * </ol>
+ * </p>
  */
 @RestController
 @RequestMapping("/api/files")
@@ -57,72 +64,68 @@ public class FileController {
     /**
      * Загружает файл в папку Import и запускает асинхронную обработку.
      *
-     * <p>Файл сохраняется под UUID-именем, обработка запускается в фоне.
-     * Отвечает сразу — 202 Accepted — не дожидаясь завершения обработки.
-     * Клиент опрашивает GET /api/files/{fileId}/status для получения результата.</p>
+     * <p>Порядок проверок: сначала валидация файла (400), потом rate limit (429).
+     * Невалидные запросы не расходуют квоту rate limit.</p>
      *
      * @param file загружаемый файл (result.json из Telegram)
-     * @return 202 Accepted с fileId, либо 400/500 при ошибке
+     * @return 202 Accepted с fileId, либо 400/429/500 при ошибке
      */
     @PostMapping("/upload")
-    public ResponseEntity<Map<String, Object>> uploadFile(@RequestParam("file") MultipartFile file) {
+    public ResponseEntity<Map<String, Object>> uploadFile(
+            @RequestParam("file") MultipartFile file) {
         log.info("Получен файл: {}, размер: {} байт", file.getOriginalFilename(), file.getSize());
 
+        // 1. Валидация — до rate limit, чтобы невалидные запросы не расходовали квоту
+        if (file.isEmpty()) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "Файл пустой"));
+        }
+
+        String filename = file.getOriginalFilename();
+        if (filename == null || !filename.toLowerCase().endsWith(".json")) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "Ожидается файл с расширением .json"));
+        }
+
+        // 2. Rate limit — только для корректных файлов
         long now = System.currentTimeMillis();
         long last = lastUploadTime.get();
         long elapsed = now - last;
         if (elapsed < RATE_LIMIT_MS) {
             long waitSec = (RATE_LIMIT_MS - elapsed) / 1000 + 1;
             log.warn("Rate limit: запрос отклонён, следующий через {} сек", waitSec);
-            Map<String, Object> err = new HashMap<>();
-            err.put("error", "Слишком частые запросы. Подождите " + waitSec + " сек.");
-            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(err);
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .body(Map.of("error", "Слишком частые запросы. Подождите " + waitSec + " сек."));
         }
         lastUploadTime.set(now);
 
+        // 3. Сохранение и запуск обработки
         try {
-            if (file.isEmpty()) {
-                return ResponseEntity.badRequest()
-                    .body(Map.of("error", "Файл пустой"));
-            }
-
-            String filename = file.getOriginalFilename();
-            if (filename == null || !filename.toLowerCase().endsWith(".json")) {
-                return ResponseEntity.badRequest()
-                    .body(Map.of("error", "Ожидается файл с расширением .json"));
-            }
-
-            // Сохраняем файл синхронно — быстрое I/O, необходимо до запуска async
             String fileId = fileStorageService.uploadFile(file);
-
-            // Обработка запускается в отдельном потоке — HTTP-поток свободен немедленно
             fileStorageService.processFileAsync(fileId);
 
-            Map<String, Object> response = new HashMap<>();
-            response.put("fileId", fileId);
-            response.put("status", ProcessingStatus.PENDING.name());
-            response.put("message", "Файл принят в обработку");
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(Map.of(
+                    "fileId", fileId,
+                    "status", ProcessingStatus.PENDING.name(),
+                    "message", "Файл принят в обработку"
+            ));
 
-            return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
-
-        } catch (IOException e) {
-            log.error("Ошибка ввода/вывода при загрузке файла: {}", e.getMessage(), e);
-            Map<String, Object> error = new HashMap<>();
-            error.put("error", "Ошибка при сохранении файла");
-            return ResponseEntity.internalServerError().body(error);
-        } catch (Exception e) {
-            log.error("Неожиданная ошибка при загрузке файла: {}", e.getMessage(), e);
-            Map<String, Object> error = new HashMap<>();
-            error.put("error", "Внутренняя ошибка сервера");
-            return ResponseEntity.internalServerError().body(error);
+        } catch (IOException ex) {
+            log.error("Ошибка ввода/вывода при загрузке файла: {}", ex.getMessage(), ex);
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", "Ошибка при сохранении файла"));
+        } catch (Exception ex) {
+            log.error("Неожиданная ошибка при загрузке файла: {}", ex.getMessage(), ex);
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", "Внутренняя ошибка сервера"));
         }
     }
 
     /**
      * Скачивает обработанный файл из папки Export.
      *
-     * @param fileId ID файла
-     * @return файл для скачивания
+     * @param fileId ID файла (UUID v4)
+     * @return файл для скачивания, 404 если не найден
      */
     @GetMapping("/{fileId}/download")
     public ResponseEntity<Resource> downloadFile(@PathVariable String fileId) {
@@ -137,19 +140,19 @@ public class FileController {
             Resource resource = new UrlResource(filePath.toUri());
 
             ContentDisposition contentDisposition = ContentDisposition.attachment()
-                .filename(fileId + ".md", StandardCharsets.UTF_8)
-                .build();
+                    .filename(fileId + ".md", StandardCharsets.UTF_8)
+                    .build();
 
             return ResponseEntity.ok()
-                .contentType(MediaType.parseMediaType("text/markdown; charset=UTF-8"))
-                .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition.toString())
-                .body(resource);
+                    .contentType(MediaType.parseMediaType("text/markdown; charset=UTF-8"))
+                    .header(HttpHeaders.CONTENT_DISPOSITION, contentDisposition.toString())
+                    .body(resource);
 
-        } catch (IllegalArgumentException e) {
+        } catch (IllegalArgumentException ex) {
             log.warn("Недопустимый fileId при скачивании: {}", fileId);
             return ResponseEntity.notFound().build();
-        } catch (IOException e) {
-            log.error("Ошибка чтения файла {}: {}", fileId, e.getMessage());
+        } catch (IOException ex) {
+            log.error("Ошибка чтения файла {}: {}", fileId, ex.getMessage());
             return ResponseEntity.internalServerError().build();
         }
     }
@@ -159,19 +162,20 @@ public class FileController {
      *
      * <p>Сначала смотрим статус в Redis (быстро), потом на диск (запасной вариант).</p>
      *
-     * @param fileId ID файла
+     * @param fileId ID файла (UUID v4)
      * @return статус файла
      */
     @GetMapping("/{fileId}/status")
     public ResponseEntity<Map<String, Object>> getFileStatus(@PathVariable String fileId) {
-        // 1. Redis — быстрый ответ (есть PENDING / COMPLETED / FAILED)
+        // 1. Redis — быстрый ответ
         Optional<ProcessingStatus> redisStatus = statusService.getStatus(fileId);
         if (redisStatus.isPresent()) {
-            Map<String, Object> response = new HashMap<>();
-            response.put("fileId", fileId);
-            response.put("status", redisStatus.get().name());
-            response.put("exists", redisStatus.get() == ProcessingStatus.COMPLETED);
-            return ResponseEntity.ok(response);
+            ProcessingStatus status = redisStatus.get();
+            return ResponseEntity.ok(Map.of(
+                    "fileId", fileId,
+                    "status", status.name(),
+                    "exists", status == ProcessingStatus.COMPLETED
+            ));
         }
 
         // 2. Диск — запасной вариант (например, Redis перезапустился)
@@ -182,10 +186,10 @@ public class FileController {
             exists = false;
         }
 
-        Map<String, Object> response = new HashMap<>();
-        response.put("fileId", fileId);
-        response.put("exists", exists);
-        response.put("status", exists ? ProcessingStatus.COMPLETED.name() : "NOT_FOUND");
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok(Map.of(
+                "fileId", fileId,
+                "exists", exists,
+                "status", exists ? ProcessingStatus.COMPLETED.name() : "NOT_FOUND"
+        ));
     }
 }

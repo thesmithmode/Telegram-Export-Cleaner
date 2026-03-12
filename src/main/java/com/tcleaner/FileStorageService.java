@@ -256,11 +256,4 @@ public class FileStorageService {
         return CompletableFuture.completedFuture(processFile(fileId));
     }
 
-    public Path getImportPath() {
-        return importPath;
-    }
-
-    public Path getExportPath() {
-        return exportPath;
-    }
 }
