@@ -38,13 +38,7 @@ public class SecurityConfig {
             .sessionManagement(session -> session
                 .sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                // Публичные endpoints
-                .requestMatchers("/api/health").permitAll()
-                // Требуют аутентификации
-                .requestMatchers("/api/files/**").authenticated()
-                .requestMatchers("/api/convert/**").authenticated()
-                .anyRequest().authenticated())
-            .httpBasic(basic -> {});
+                .anyRequest().permitAll());
 
         return http.build();
     }

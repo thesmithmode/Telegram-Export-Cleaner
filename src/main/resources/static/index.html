@@ -19,14 +19,12 @@
     </style>
 </head>
 <body>
-
 <div class="container">
     <h1>Telegram Cleaner</h1>
     <label class="upload-area" for="fileInput">
         <div id="fileName">Выберите result.json</div>
         <input type="file" id="fileInput" accept=".json" onchange="updateFileName()">
     </label>
-
     <button id="uploadBtn" onclick="uploadFile()">Конвертировать в MD</button>
     <div id="status">Готов к работе</div>
 </div>
@@ -44,6 +42,12 @@
 
         if (!fileInput.files[0]) return alert('Сначала выберите файл!');
 
+        const maxSize = 50 * 1024 * 1024;
+        if (fileInput.files[0].size > maxSize) {
+            status.innerText = 'Файл слишком большой. Максимум 50 МБ.';
+            return;
+        }
+
         btn.disabled = true;
         status.innerText = 'Загрузка на сервер...';
 
@@ -56,8 +60,9 @@
                 body: formData
             });
 
-            if (response.status === 401) {
-                status.innerText = 'Ошибка авторизации. Перезагрузите страницу и введите логин/пароль.';
+            if (response.status === 429) {
+                const data = await response.json();
+                status.innerText = data.error || 'Слишком частые запросы, подождите.';
                 btn.disabled = false;
                 return;
             }
@@ -66,7 +71,7 @@
 
             const data = await response.json();
             status.innerText = 'Обработка запущена...';
-            pollStatus(data.taskId);
+            pollStatus(data.fileId);
 
         } catch (e) {
             status.innerText = 'Ошибка соединения или файл слишком большой.';
@@ -74,27 +79,26 @@
         }
     }
 
-    async function pollStatus(taskId) {
+    async function pollStatus(fileId) {
         const status = document.getElementById('status');
         try {
-            const res = await fetch(`/api/files/${taskId}/status`);
+            const res = await fetch(`/api/files/${fileId}/status`);
             const data = await res.json();
 
             if (data.status === 'COMPLETED') {
-                status.innerHTML = `<a href="/api/files/${taskId}/download" class="success-link" download>👉 Скачать результат (.md)</a>`;
+                status.innerHTML = `<a href="/api/files/${fileId}/download" class="success-link" download>👉 Скачать результат (.md)</a>`;
                 document.getElementById('uploadBtn').disabled = false;
             } else if (data.status === 'FAILED') {
                 status.innerText = 'Ошибка обработки файла.';
                 document.getElementById('uploadBtn').disabled = false;
             } else {
                 status.innerText = 'Чистим мусор... подождите';
-                setTimeout(() => pollStatus(taskId), 2000);
+                setTimeout(() => pollStatus(fileId), 2000);
             }
         } catch (e) {
             status.innerText = 'Потеряно соединение с сервером.';
         }
     }
 </script>
-
 </body>
 </html>
