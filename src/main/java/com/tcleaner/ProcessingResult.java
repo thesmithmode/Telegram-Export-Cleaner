@@ -46,22 +46,47 @@ public class ProcessingResult {
         return new ProcessingResult(fileId, ProcessingStatus.FAILED, message, Instant.now());
     }
 
+    /**
+     * Возвращает идентификатор файла.
+     *
+     * @return UUID v4 файла
+     */
     public String getFileId() {
         return fileId;
     }
 
+    /**
+     * Возвращает статус обработки.
+     *
+     * @return {@link ProcessingStatus#COMPLETED} или {@link ProcessingStatus#FAILED}
+     */
     public ProcessingStatus getStatus() {
         return status;
     }
 
+    /**
+     * Возвращает описание ошибки.
+     *
+     * @return текст ошибки, или {@code null} при успешной обработке
+     */
     public String getErrorMessage() {
         return errorMessage;
     }
 
+    /**
+     * Возвращает время начала обработки.
+     *
+     * @return момент создания объекта результата
+     */
     public Instant getStartedAt() {
         return startedAt;
     }
 
+    /**
+     * Возвращает время завершения обработки.
+     *
+     * @return момент завершения (успех или ошибка)
+     */
     public Instant getCompletedAt() {
         return completedAt;
     }

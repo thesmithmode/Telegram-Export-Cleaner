@@ -19,6 +19,10 @@ public class MessageProcessor {
 
     private static final Logger log = LoggerFactory.getLogger(MessageProcessor.class);
 
+    /**
+     * Создаёт экземпляр процессора. Активируется Spring как {@code @Component},
+     * а также напрямую в CLI-режиме из {@link TelegramExporter#TelegramExporter()}.
+     */
     public MessageProcessor() {
     }
 
