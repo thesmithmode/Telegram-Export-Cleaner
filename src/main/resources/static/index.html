@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram Export Cleaner</title>
+    <style>
+        :root { --primary: #0088cc; --bg: #f4f7f9; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg); display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .container { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); width: 100%; max-width: 400px; text-align: center; }
+        h1 { color: #333; font-size: 1.5rem; margin-bottom: 1.5rem; }
+        .upload-area { border: 2px dashed #cbd5e0; padding: 2rem; border-radius: 8px; cursor: pointer; transition: all 0.3s; margin-bottom: 1.5rem; }
+        .upload-area:hover { border-color: var(--primary); background: #f0f9ff; }
+        input[type="file"] { display: none; }
+        button { background: var(--primary); color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 6px; font-weight: 600; cursor: pointer; width: 100%; transition: opacity 0.2s; }
+        button:disabled { opacity: 0.6; cursor: not-allowed; }
+        #status { margin-top: 1rem; font-size: 0.9rem; color: #4a5568; min-height: 1.5rem; }
+        .success-link { color: #38a169; font-weight: bold; text-decoration: none; display: block; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Telegram Cleaner</h1>
+    <label class="upload-area" for="fileInput">
+        <div id="fileName">Выберите result.json</div>
+        <input type="file" id="fileInput" accept=".json" onchange="updateFileName()">
+    </label>
+
+    <button id="uploadBtn" onclick="uploadFile()">Конвертировать в MD</button>
+    <div id="status">Готов к работе</div>
+</div>
+
+<script>
+    function updateFileName() {
+        const input = document.getElementById('fileInput');
+        document.getElementById('fileName').innerText = input.files[0] ? input.files[0].name : 'Выберите result.json';
+    }
+
+    async function uploadFile() {
+        const fileInput = document.getElementById('fileInput');
+        const btn = document.getElementById('uploadBtn');
+        const status = document.getElementById('status');
+
+        if (!fileInput.files[0]) return alert('Сначала выберите файл!');
+
+        btn.disabled = true;
+        status.innerText = 'Загрузка на сервер...';
+
+        const formData = new FormData();
+        formData.append('file', fileInput.files[0]);
+
+        try {
+            const response = await fetch('/api/files/upload', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (response.status === 401) {
+                status.innerText = 'Ошибка авторизации. Перезагрузите страницу и введите логин/пароль.';
+                btn.disabled = false;
+                return;
+            }
+
+            if (!response.ok) throw new Error('Ошибка сервера');
+
+            const data = await response.json();
+            status.innerText = 'Обработка запущена...';
+            pollStatus(data.taskId);
+
+        } catch (e) {
+            status.innerText = 'Ошибка соединения или файл слишком большой.';
+            btn.disabled = false;
+        }
+    }
+
+    async function pollStatus(taskId) {
+        const status = document.getElementById('status');
+        try {
+            const res = await fetch(`/api/files/${taskId}/status`);
+            const data = await res.json();
+
+            if (data.status === 'COMPLETED') {
+                status.innerHTML = `<a href="/api/files/${taskId}/download" class="success-link" download>👉 Скачать результат (.md)</a>`;
+                document.getElementById('uploadBtn').disabled = false;
+            } else if (data.status === 'FAILED') {
+                status.innerText = 'Ошибка обработки файла.';
+                document.getElementById('uploadBtn').disabled = false;
+            } else {
+                status.innerText = 'Чистим мусор... подождите';
+                setTimeout(() => pollStatus(taskId), 2000);
+            }
+        } catch (e) {
+            status.innerText = 'Потеряно соединение с сервером.';
+        }
+    }
+</script>
+
+</body>
+</html>
