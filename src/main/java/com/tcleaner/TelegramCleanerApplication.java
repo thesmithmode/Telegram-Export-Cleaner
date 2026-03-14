@@ -2,15 +2,26 @@ package com.tcleaner;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
-import com.tcleaner.StorageConfig;
-
 import java.util.Arrays;
 
-@SpringBootApplication
+/**
+ * Точка входа приложения.
+ *
+ * <p>Поддерживает два режима:</p>
+ * <ul>
+ *   <li>Web API (по умолчанию) — Spring Boot с REST API</li>
+ *   <li>CLI — аргумент {@code --cli} запускает {@link Main} без веб-сервера</li>
+ * </ul>
+ *
+ * <p>{@link UserDetailsServiceAutoConfiguration} исключён,
+ * чтобы Spring не генерировал случайный пароль и не печатал его в лог.</p>
+ */
+@SpringBootApplication(exclude = UserDetailsServiceAutoConfiguration.class)
 @EnableScheduling
 @EnableAsync
 @EnableConfigurationProperties(StorageConfig.class)
@@ -18,9 +29,6 @@ public class TelegramCleanerApplication {
 
     /**
      * Точка входа приложения.
-     *
-     * <p>Если передан аргумент --cli, запускается в режиме командной строки
-     * без старта веб-сервера. Иначе стартует Spring Boot с REST API.</p>
      *
      * @param args аргументы командной строки
      */

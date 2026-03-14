@@ -142,36 +142,85 @@ docker-compose down
 
 ### Использование API
 
+> **Аутентификация не требуется** — все endpoints публичные.
+
 После запуска доступны endpoints:
 
 ```bash
-# Health check (публичный endpoint, аутентификация не нужна)
+# Health check
 curl http://localhost:8080/api/health
 
-# Загрузка файла (multipart/form-data) — требует Basic Auth
-curl -u admin:password -X POST -F "file=@result.json" http://localhost:8080/api/convert
+# Загрузка файла (асинхронная обработка)
+curl -X POST -F "file=@result.json" http://localhost:8080/api/files/upload
 
-# Загрузка JSON напрямую (application/json) — требует Basic Auth
-curl -u admin:password -X POST -H "Content-Type: application/json" \
+# Проверка статуса обработки
+curl http://localhost:8080/api/files/<fileId>/status
+
+# Скачивание результата
+curl http://localhost:8080/api/files/<fileId>/download -o output.md
+
+# Синхронная конвертация (ответ сразу)
+curl -X POST -F "file=@result.json" http://localhost:8080/api/convert -o output.txt
+
+# Конвертация JSON напрямую
+curl -X POST -H "Content-Type: application/json" \
   -d @result.json \
   http://localhost:8080/api/convert/json
 ```
 
+### Ограничения
+
+- Максимальный размер файла: **50 МБ**
+- Rate limit: **1 запрос в 15 секунд** (при превышении — 429 Too Many Requests)
+
 ### Endpoints
 
-> **Аутентификация:** все endpoints кроме `/api/health` требуют HTTP Basic Auth.
-> По умолчанию: `admin` / `password`. В production установите переменные окружения `APP_ADMIN_USER` и `APP_ADMIN_PASSWORD`.
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| GET | `/api/health` | — | Проверка здоровья сервиса |
-| POST | `/api/convert` | ✅ | Загрузка файла result.json |
-| POST | `/api/convert/json` | ✅ | Отправка JSON напрямую |
-| POST | `/api/files/upload` | ✅ | Загрузка файла с асинхронной обработкой |
-| GET | `/api/files/{id}/download` | ✅ | Скачивание обработанного файла (.md) |
-| GET | `/api/files/{id}/status` | ✅ | Проверка статуса обработки |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/health` | Проверка здоровья сервиса |
+| POST | `/api/convert` | Синхронная конвертация файла result.json |
+| POST | `/api/convert/json` | Синхронная конвертация JSON напрямую |
+| POST | `/api/files/upload` | Загрузка файла с асинхронной обработкой |
+| GET | `/api/files/{id}/status` | Проверка статуса обработки |
+| GET | `/api/files/{id}/download` | Скачивание обработанного файла (.md) |
 
 ### Формат запросов и ответов
+
+#### POST /api/files/upload
+
+**Request:**
+```
+Content-Type: multipart/form-data
+Body: file=@result.json
+```
+
+**Success Response (202 Accepted):**
+```json
+{
+  "fileId": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "PENDING",
+  "message": "Файл принят в обработку"
+}
+```
+
+**Rate limit Response (429):**
+```json
+{"error": "Слишком частые запросы. Подождите 13 сек."}
+```
+
+**Error Response (400):**
+```json
+{"error": "Файл пустой"}
+```
+
+#### GET /api/files/{id}/status
+
+**Response (200):**
+```json
+{"fileId": "...", "status": "COMPLETED", "exists": true}
+```
+
+Возможные статусы: `PENDING`, `COMPLETED`, `FAILED`, `NOT_FOUND`
 
 #### POST /api/convert
 
@@ -187,34 +236,6 @@ Content-Type: text/plain
 Body: (текстовый файл с результатом)
 ```
 
-**Error Response (400):**
-```json
-{"error": "Файл пустой"}
-```
-или
-```json
-{"error": "Ожидается JSON файл"}
-```
-
-#### POST /api/convert/json
-
-**Request:**
-```
-Content-Type: application/json
-Body: {"messages": [...]}
-```
-
-**Success Response (200):**
-```
-Content-Type: text/plain
-Body: (текстовый файл с результатом)
-```
-
-**Error Response (400):**
-```json
-{"error": "Пустое содержимое"}
-```
-
 #### GET /api/health
 
 **Success Response (200):**
@@ -225,41 +246,34 @@ Body: (текстовый файл с результатом)
 ### Примеры использования
 
 ```bash
-# Health check (без аутентификации)
+# Health check
 curl http://localhost:8080/api/health
 
-# Загрузка файла
-curl -u admin:password -X POST -F "file=@result.json" http://localhost:8080/api/convert -o output.txt
+# Загрузка файла (асинхронно)
+RESPONSE=$(curl -s -X POST -F "file=@result.json" http://localhost:8080/api/files/upload)
+FILE_ID=$(echo $RESPONSE | python3 -c "import sys,json; print(json.load(sys.stdin)['fileId'])")
 
-# Загрузка JSON
-curl -u admin:password -X POST -H "Content-Type: application/json" \
-  -d '{"messages":[{"id":1,"type":"message","date":"2025-06-24T10:00:00","text":"Hello"}]}' \
-  http://localhost:8080/api/convert/json
+# Ожидание готовности и скачивание
+curl -s http://localhost:8080/api/files/$FILE_ID/status
+curl http://localhost:8080/api/files/$FILE_ID/download -o output.md
+
+# Синхронная конвертация (проще для скриптов)
+curl -X POST -F "file=@result.json" http://localhost:8080/api/convert -o output.txt
 
 # С фильтрацией по дате
-curl -u admin:password -X POST -F "file=@result.json" \
+curl -X POST -F "file=@result.json" \
   -F "startDate=2025-01-01" -F "endDate=2025-06-30" \
   http://localhost:8080/api/convert -o filtered.txt
 
 # С фильтрацией по ключевым словам
-curl -u admin:password -X POST -F "file=@result.json" \
+curl -X POST -F "file=@result.json" \
   -F "keywords=привет,пока" \
   http://localhost:8080/api/convert -o filtered.txt
 
 # С исключением ключевых слов
-curl -u admin:password -X POST -F "file=@result.json" \
+curl -X POST -F "file=@result.json" \
   -F "excludeKeywords=спам,реклама" \
   http://localhost:8080/api/convert -o filtered.txt
-
-# Загрузка через /api/files (возвращает fileId для последующего скачивания)
-curl -u admin:password -X POST -F "file=@result.json" \
-  http://localhost:8080/api/files/upload
-
-# Скачивание результата по fileId
-curl -u admin:password http://localhost:8080/api/files/<fileId>/download -o output.md
-
-# Проверка статуса обработки
-curl -u admin:password http://localhost:8080/api/files/<fileId>/status
 ```
 
 ## Тесты
