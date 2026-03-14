@@ -24,6 +24,9 @@ public class MessageFilter {
     private List<String> excludeTypes;
     private List<Predicate<JsonNode>> customPredicates;
 
+    /**
+     * Создаёт пустой фильтр без условий (все сообщения проходят).
+     */
     public MessageFilter() {
         this.keywords = new ArrayList<>();
         this.excludeKeywords = new ArrayList<>();
@@ -32,31 +35,70 @@ public class MessageFilter {
         this.customPredicates = new ArrayList<>();
     }
 
+    /**
+     * Устанавливает начальную дату диапазона фильтрации.
+     *
+     * @param startDate нижняя граница диапазона дат (включительно)
+     * @return this для цепочки вызовов
+     */
     public MessageFilter withStartDate(LocalDate startDate) {
         this.startDate = startDate;
         return this;
     }
 
+    /**
+     * Устанавливает конечную дату диапазона фильтрации.
+     *
+     * @param endDate верхняя граница диапазона дат (включительно)
+     * @return this для цепочки вызовов
+     */
     public MessageFilter withEndDate(LocalDate endDate) {
         this.endDate = endDate;
         return this;
     }
 
+    /**
+     * Добавляет ключевое слово для включения: сообщение проходит фильтр только если
+     * содержит хотя бы одно из заданных ключевых слов (case-insensitive).
+     *
+     * @param keyword ключевое слово (регистр игнорируется)
+     * @return this для цепочки вызовов
+     */
     public MessageFilter withKeyword(String keyword) {
         this.keywords.add(keyword.toLowerCase());
         return this;
     }
 
+    /**
+     * Добавляет ключевое слово для исключения: сообщение отклоняется если
+     * содержит хотя бы одно из исключаемых слов (case-insensitive).
+     *
+     * @param keyword ключевое слово для исключения (регистр игнорируется)
+     * @return this для цепочки вызовов
+     */
     public MessageFilter withExcludeKeyword(String keyword) {
         this.excludeKeywords.add(keyword.toLowerCase());
         return this;
     }
 
+    /**
+     * Добавляет тип сообщения для включения (например {@code "message"}).
+     * Если список непустой, пропускаются только сообщения указанных типов.
+     *
+     * @param type тип сообщения из поля {@code "type"} в JSON
+     * @return this для цепочки вызовов
+     */
     public MessageFilter withIncludeType(String type) {
         this.includeTypes.add(type);
         return this;
     }
 
+    /**
+     * Добавляет тип сообщения для исключения (например {@code "service"}).
+     *
+     * @param type тип сообщения из поля {@code "type"} в JSON
+     * @return this для цепочки вызовов
+     */
     public MessageFilter withExcludeType(String type) {
         this.excludeTypes.add(type);
         return this;
