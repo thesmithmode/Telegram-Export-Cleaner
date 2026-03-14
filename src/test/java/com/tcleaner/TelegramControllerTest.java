@@ -135,7 +135,23 @@ class TelegramControllerTest {
         }
 
         @Test
-        @DisplayName("Сообщение об ошибке не содержит пути к файлам сервера")
+        @DisplayName("Возвращает 400 при startDate позже endDate")
+        void returns400WhenStartDateAfterEndDate() {
+            MockMultipartFile file = new MockMultipartFile(
+                    "file", "result.json", "application/json",
+                    "{\"messages\":[]}".getBytes());
+
+            ResponseEntity<?> response = controller.convert(
+                    file, "2025-12-31", "2025-01-01", null, null);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            @SuppressWarnings("unchecked")
+            Map<String, String> body = (Map<String, String>) response.getBody();
+            assertThat(body.get("error")).contains("startDate");
+        }
+
+        @Test
+        @DisplayName("Сообщение об ошибке не содержит путей к файлам сервера")
         void errorMessageDoesNotLeakServerPaths() throws IOException {
             TelegramExporterInterface mockExporter = mock(TelegramExporterInterface.class);
             when(mockExporter.processFile(any(Path.class), any()))
@@ -199,6 +215,36 @@ class TelegramControllerTest {
                     "not valid json", null, null, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        }
+
+        @Test
+        @DisplayName("Возвращает 400 при startDate позже endDate")
+        void returns400WhenStartDateAfterEndDate() {
+            ResponseEntity<?> response = controller.convertJson(
+                    "{\"messages\":[]}", "2025-12-31", "2025-01-01", null, null);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            @SuppressWarnings("unchecked")
+            Map<String, String> body = (Map<String, String>) response.getBody();
+            assertThat(body.get("error")).contains("startDate");
+        }
+    }
+
+    @Nested
+    @DisplayName("convertJson() — дополнительные проверки")
+    class ConvertJsonExtra {
+
+        @Test
+        @DisplayName("Возвращает 400 при слишком большом содержимом (> 10MB)")
+        void returns400WhenBodyTooLarge() {
+            String huge = "x".repeat(10 * 1024 * 1024 + 1);
+
+            ResponseEntity<?> response = controller.convertJson(huge, null, null, null, null);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            @SuppressWarnings("unchecked")
+            Map<String, String> body = (Map<String, String>) response.getBody();
+            assertThat(body.get("error")).contains("10MB");
         }
     }
 
