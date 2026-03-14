@@ -4,32 +4,253 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Telegram Export Cleaner</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
-        :root { --primary: #0088cc; --bg: #f4f7f9; }
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg); display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-        .container { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); width: 100%; max-width: 400px; text-align: center; }
-        h1 { color: #333; font-size: 1.5rem; margin-bottom: 1.5rem; }
-        .upload-area { border: 2px dashed #cbd5e0; padding: 2rem; border-radius: 8px; cursor: pointer; transition: all 0.3s; margin-bottom: 1.5rem; }
-        .upload-area:hover { border-color: var(--primary); background: #f0f9ff; }
-        input[type="file"] { display: none; }
-        button { background: var(--primary); color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 6px; font-weight: 600; cursor: pointer; width: 100%; transition: opacity 0.2s; }
-        button:disabled { opacity: 0.6; cursor: not-allowed; }
-        #status { margin-top: 1rem; font-size: 0.9rem; color: #4a5568; min-height: 1.5rem; }
-        .success-link { color: #38a169; font-weight: bold; text-decoration: none; display: block; margin-top: 10px; }
+        :root {
+            --bg-color: #0f0f0f;
+            --glass-bg: rgba(30, 30, 30, 0.4);
+            --glass-border: rgba(255, 255, 255, 0.08);
+            --text-primary: #ededed;
+            --text-secondary: #a1a1aa;
+            --accent: #ffffff;
+            --accent-hover: #e4e4e7;
+            --danger: #ef4444;
+            --input-bg: rgba(0, 0, 0, 0.2);
+            --input-border: rgba(255, 255, 255, 0.12);
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            background-image: 
+                radial-gradient(circle at 15% 50%, rgba(255, 255, 255, 0.03), transparent 25%),
+                radial-gradient(circle at 85% 30%, rgba(255, 255, 255, 0.02), transparent 25%);
+            color: var(--text-primary);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+
+        .container {
+            background: var(--glass-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--glass-border);
+            padding: 2.5rem;
+            border-radius: 16px;
+            box-shadow: 0 4px 40px rgba(0, 0, 0, 0.4);
+            width: 100%;
+            max-width: 380px;
+            text-align: center;
+            box-sizing: border-box;
+        }
+
+        h1 {
+            font-weight: 500;
+            font-size: 1.4rem;
+            margin-top: 0;
+            margin-bottom: 2rem;
+            letter-spacing: -0.02em;
+            color: #ffffff;
+        }
+
+        /* Форма логина */
+        #loginForm input {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 0.85rem 1rem;
+            margin-bottom: 1rem;
+            background: var(--input-bg);
+            border: 1px solid var(--input-border);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-size: 0.95rem;
+            transition: all 0.2s ease;
+        }
+
+        #loginForm input:focus {
+            outline: none;
+            border-color: rgba(255, 255, 255, 0.3);
+            background: rgba(0, 0, 0, 0.4);
+        }
+
+        #loginForm input::placeholder {
+            color: #616161;
+        }
+
+        #loginError {
+            color: var(--danger);
+            font-size: 0.85rem;
+            margin-bottom: 1rem;
+            min-height: 1.2rem;
+        }
+
+        /* Область загрузки */
+        .upload-area {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            border: 1px dashed var(--input-border);
+            background: var(--input-bg);
+            padding: 2.5rem 1.5rem;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 1.5rem;
+        }
+
+        .upload-area:hover {
+            border-color: rgba(255, 255, 255, 0.3);
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        #fileName {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            word-break: break-all;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        button {
+            background: var(--accent);
+            color: #000000;
+            border: none;
+            padding: 0.8rem 1.5rem;
+            border-radius: 8px;
+            font-weight: 500;
+            cursor: pointer;
+            width: 100%;
+            transition: all 0.2s;
+            font-size: 0.95rem;
+        }
+
+        button:hover:not(:disabled) {
+            background: var(--accent-hover);
+        }
+
+        button:active:not(:disabled) {
+            transform: scale(0.98);
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        button.danger {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-secondary);
+            border: 1px solid transparent;
+            margin-top: 1rem;
+        }
+
+        button.danger:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary);
+        }
+
+        #status {
+            margin-top: 1.25rem;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            min-height: 1.5rem;
+            line-height: 1.4;
+        }
+
+        .success-link {
+            color: #ffffff;
+            font-weight: 500;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: background 0.2s;
+        }
+
+        .success-link:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
     </style>
 </head>
 <body>
 <div class="container">
     <h1>Telegram Cleaner</h1>
-    <label class="upload-area" for="fileInput">
-        <div id="fileName">Выберите result.json</div>
-        <input type="file" id="fileInput" accept=".json" onchange="updateFileName()">
-    </label>
-    <button id="uploadBtn" onclick="uploadFile()">Конвертировать в MD</button>
-    <div id="status">Готов к работе</div>
+
+    <!-- Экран логина -->
+    <div id="loginForm">
+        <input type="text" id="username" placeholder="Логин" autocomplete="username">
+        <input type="password" id="password" placeholder="Пароль" autocomplete="current-password">
+        <div id="loginError"></div>
+        <button onclick="login()">Войти</button>
+    </div>
+
+    <!-- Основной экран (скрыт до логина) -->
+    <div id="mainForm" style="display:none">
+        <label class="upload-area" for="fileInput">
+            <div id="fileName">Выберите result.json</div>
+            <input type="file" id="fileInput" accept=".json" onchange="updateFileName()">
+        </label>
+        <button id="uploadBtn" onclick="uploadFile()">Конвертировать в MD</button>
+        <div id="status">Готов к работе</div>
+        <button class="danger" onclick="logout()">Выйти</button>
+    </div>
 </div>
 
 <script>
+    let authHeader = null;
+
+    async function login() {
+        const user = document.getElementById('username').value.trim();
+        const pass = document.getElementById('password').value;
+        const errEl = document.getElementById('loginError');
+        errEl.innerText = '';
+
+        if (!user || !pass) { errEl.innerText = 'Введите логин и пароль'; return; }
+
+        const encoded = btoa(user + ':' + pass);
+        const candidate = 'Basic ' + encoded;
+
+        try {
+            const res = await fetch('/api/health', { headers: { 'Authorization': candidate } });
+            // health публичный, поэтому проверяем реальный защищённый endpoint
+            const check = await fetch('/api/files/ping-auth', { headers: { 'Authorization': candidate } });
+            if (check.status === 401) {
+                errEl.innerText = 'Неверный логин или пароль';
+                return;
+            }
+            // 404 — endpoint не найден, но авторизация прошла
+            authHeader = candidate;
+            document.getElementById('loginForm').style.display = 'none';
+            document.getElementById('mainForm').style.display = 'block';
+        } catch (e) {
+            errEl.innerText = 'Ошибка соединения с сервером';
+        }
+    }
+
+    function logout() {
+        authHeader = null;
+        document.getElementById('loginForm').style.display = 'block';
+        document.getElementById('mainForm').style.display = 'none';
+        document.getElementById('username').value = '';
+        document.getElementById('password').value = '';
+        document.getElementById('status').innerText = 'Готов к работе';
+        document.getElementById('fileName').innerText = 'Выберите result.json';
+    }
+
     function updateFileName() {
         const input = document.getElementById('fileInput');
         document.getElementById('fileName').innerText = input.files[0] ? input.files[0].name : 'Выберите result.json';
@@ -42,12 +263,6 @@
 
         if (!fileInput.files[0]) return alert('Сначала выберите файл!');
 
-        const maxSize = 50 * 1024 * 1024;
-        if (fileInput.files[0].size > maxSize) {
-            status.innerText = 'Файл слишком большой. Максимум 50 МБ.';
-            return;
-        }
-
         btn.disabled = true;
         status.innerText = 'Загрузка на сервер...';
 
@@ -57,16 +272,15 @@
         try {
             const response = await fetch('/api/files/upload', {
                 method: 'POST',
+                headers: { 'Authorization': authHeader },
                 body: formData
             });
 
-            if (response.status === 429) {
-                const data = await response.json();
-                status.innerText = data.error || 'Слишком частые запросы, подождите.';
-                btn.disabled = false;
+            if (response.status === 401) {
+                status.innerText = 'Сессия истекла, войдите заново.';
+                logout();
                 return;
             }
-
             if (!response.ok) throw new Error('Ошибка сервера');
 
             const data = await response.json();
@@ -82,7 +296,9 @@
     async function pollStatus(fileId) {
         const status = document.getElementById('status');
         try {
-            const res = await fetch(`/api/files/${fileId}/status`);
+            const res = await fetch(`/api/files/${fileId}/status`, {
+                headers: { 'Authorization': authHeader }
+            });
             const data = await res.json();
 
             if (data.status === 'COMPLETED') {
@@ -93,6 +309,20 @@
                 document.getElementById('uploadBtn').disabled = false;
             } else {
                 status.innerText = 'Чистим мусор... подождите';
+                setTimeout(() => pollStatus(fileId), 2000);
+            }
+        } catch (e) {
+            status.innerText = 'Потеряно соединение с сервером.';
+        }
+    }
+
+    // Логин по Enter
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && document.getElementById('loginForm').style.display !== 'none') login();
+    });
+</script>
+</body>
+</html>erText = 'Чистим мусор... подождите';
                 setTimeout(() => pollStatus(fileId), 2000);
             }
         } catch (e) {
