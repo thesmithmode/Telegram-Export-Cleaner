@@ -16,14 +16,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
 /**
- * Тесты для Main - CLI точка входа.
+ * Тесты для {@link Main} — CLI-точки входа.
  *
- * <p>Примечание: сценарии с System.exit() (отсутствующий result.json,
- * невалидные флаги) не тестируются напрямую — System.exit() убивает
- * всю JVM Surefire независимо от daemon-потоков. Эти пути покрываются
- * интеграционными тестами TelegramExporter.</p>
+ * <p><strong>Примечание о System.exit():</strong> сценарии, где CLI вызывает
+ * {@code System.exit(1)} (отсутствующий {@code result.json}, невалидные флаги),
+ * не тестируются напрямую — {@code System.exit()} завершает JVM Surefire.
+ * Такие пути покрыты тестами {@code TelegramExporter}.</p>
+ *
+ * <p>Запись в выходной файл делегируется в
+ * {@link TelegramExporter#processFileToFile(Path, Path, MessageFilter)},
+ * который использует {@code Files.write(path, lines)} без промежуточного
+ * {@code String.join}. Тесты проверяют корректность итогового файла.</p>
  */
-@DisplayName("Main - CLI точка входа")
+@DisplayName("Main — CLI точка входа")
 class MainTest {
 
     @TempDir
@@ -45,6 +50,8 @@ class MainTest {
         Files.writeString(tempDir.resolve("result.json"), MINIMAL_JSON);
         outputFile = tempDir.resolve("output.txt");
     }
+
+    // ─── Базовый запуск ───────────────────────────────────────────────────────
 
     @Nested
     @DisplayName("Базовый запуск CLI")
@@ -98,12 +105,14 @@ class MainTest {
         }
     }
 
+    // ─── Фильтрация ───────────────────────────────────────────────────────────
+
     @Nested
     @DisplayName("Фильтрация через CLI-флаги")
     class CliFilters {
 
         @Test
-        @DisplayName("--start-date фильтрует сообщения до указанной даты")
+        @DisplayName("--start-date исключает сообщения до указанной даты")
         void startDateFilterExcludesOlderMessages() throws IOException {
             Main.main(new String[]{
                 "-i", tempDir.toString(), "-o", outputFile.toString(),
@@ -115,7 +124,7 @@ class MainTest {
         }
 
         @Test
-        @DisplayName("--end-date фильтрует сообщения после указанной даты")
+        @DisplayName("--end-date исключает сообщения после указанной даты")
         void endDateFilterExcludesNewerMessages() throws IOException {
             Main.main(new String[]{
                 "-i", tempDir.toString(), "-o", outputFile.toString(),
@@ -127,7 +136,7 @@ class MainTest {
         }
 
         @Test
-        @DisplayName("--keyword оставляет только совпадающие сообщения")
+        @DisplayName("--keyword оставляет только сообщения с ключевым словом")
         void keywordFilterKeepsOnlyMatching() throws IOException {
             Main.main(new String[]{
                 "-i", tempDir.toString(), "-o", outputFile.toString(),
@@ -153,7 +162,7 @@ class MainTest {
         @Test
         @DisplayName("Комбинация --start-date и --keyword: ни одно сообщение не проходит")
         void combinedStartDateAndKeywordYieldsEmpty() throws IOException {
-            // Hello: 2025-06-24 — не проходит по дате
+            // Hello: 2025-06-24 — не проходит по дате (до 2025-07-01)
             // Universe: 2025-07-15 — проходит по дате, но не содержит "hello"
             Main.main(new String[]{
                 "-i", tempDir.toString(), "-o", outputFile.toString(),
@@ -164,14 +173,18 @@ class MainTest {
         }
     }
 
+    // ─── Формат вывода ────────────────────────────────────────────────────────
+
     @Nested
     @DisplayName("Формат выходного файла")
     class OutputFormat {
 
         @Test
-        @DisplayName("Каждое сообщение на отдельной строке")
+        @DisplayName("Каждое сообщение на отдельной строке (Files.write построчно)")
         void eachMessageOnSeparateLine() throws IOException {
             Main.main(new String[]{"-i", tempDir.toString(), "-o", outputFile.toString()});
+            // Files.write пишет строки через системный разделитель;
+            // strip().split("\n") даёт ровно 2 строки для 2 сообщений
             String[] lines = Files.readString(outputFile).strip().split("\n");
             assertThat(lines).hasSize(2);
         }
@@ -184,6 +197,15 @@ class MainTest {
             assertThat(content).containsPattern("\\d{8} .+");
             assertThat(content).contains("20250624 Hello");
             assertThat(content).contains("20250715 Universe");
+        }
+
+        @Test
+        @DisplayName("Пустой список сообщений даёт пустой файл")
+        void emptyMessagesYieldsEmptyFile() throws IOException {
+            Files.writeString(tempDir.resolve("result.json"), "{\"messages\": []}");
+            Main.main(new String[]{"-i", tempDir.toString(), "-o", outputFile.toString()});
+            assertThat(outputFile).exists();
+            assertThat(Files.readString(outputFile).trim()).isEmpty();
         }
     }
 }

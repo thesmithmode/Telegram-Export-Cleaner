@@ -88,16 +88,19 @@ public class FileController {
         }
 
         // 2. Rate limit — только для корректных файлов
-        long now = System.currentTimeMillis();
         long last = lastUploadTime.get();
-        long elapsed = now - last;
-        if (elapsed < RATE_LIMIT_MS) {
-            long waitSec = (RATE_LIMIT_MS - elapsed) / 1000 + 1;
+        long now = System.currentTimeMillis();
+        if (now - last < RATE_LIMIT_MS) {
+            long waitSec = (RATE_LIMIT_MS - (now - last)) / 1000 + 1;
             log.warn("Rate limit: запрос отклонён, следующий через {} сек", waitSec);
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
                     .body(Map.of("error", "Слишком частые запросы. Подождите " + waitSec + " сек."));
         }
-        lastUploadTime.set(now);
+        if (!lastUploadTime.compareAndSet(last, now)) {
+            // Другой поток успел раньше — тоже rate limit
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .body(Map.of("error", "Слишком частые запросы."));
+        }
 
         // 3. Сохранение и запуск обработки
         try {
