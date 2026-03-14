@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram Export Cleaner</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0f0f0f;
+            --glass-bg: rgba(30, 30, 30, 0.4);
+            --glass-border: rgba(255, 255, 255, 0.08);
+            --text-primary: #ededed;
+            --text-secondary: #a1a1aa;
+            --accent: #ffffff;
+            --accent-hover: #e4e4e7;
+            --danger: #ef4444;
+            --input-bg: rgba(0, 0, 0, 0.2);
+            --input-border: rgba(255, 255, 255, 0.12);
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            background-image: 
+                radial-gradient(circle at 15% 50%, rgba(255, 255, 255, 0.03), transparent 25%),
+                radial-gradient(circle at 85% 30%, rgba(255, 255, 255, 0.02), transparent 25%);
+            color: var(--text-primary);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+
+        .container {
+            background: var(--glass-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--glass-border);
+            padding: 2.5rem;
+            border-radius: 16px;
+            box-shadow: 0 4px 40px rgba(0, 0, 0, 0.4);
+            width: 100%;
+            max-width: 380px;
+            text-align: center;
+            box-sizing: border-box;
+        }
+
+        h1 {
+            font-weight: 500;
+            font-size: 1.4rem;
+            margin-top: 0;
+            margin-bottom: 2rem;
+            letter-spacing: -0.02em;
+            color: #ffffff;
+        }
+
+        /* Область загрузки */
+        .upload-area {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            border: 1px dashed var(--input-border);
+            background: var(--input-bg);
+            padding: 2.5rem 1.5rem;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 1.5rem;
+        }
+
+        .upload-area:hover {
+            border-color: rgba(255, 255, 255, 0.3);
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        #fileName {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            word-break: break-all;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        button {
+            background: var(--accent);
+            color: #000000;
+            border: none;
+            padding: 0.8rem 1.5rem;
+            border-radius: 8px;
+            font-weight: 500;
+            cursor: pointer;
+            width: 100%;
+            transition: all 0.2s;
+            font-size: 0.95rem;
+        }
+
+        button:hover:not(:disabled) {
+            background: var(--accent-hover);
+        }
+
+        button:active:not(:disabled) {
+            transform: scale(0.98);
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        #status {
+            margin-top: 1.25rem;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            min-height: 1.5rem;
+            line-height: 1.4;
+        }
+
+        .success-link {
+            color: #ffffff;
+            font-weight: 500;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: background 0.2s;
+        }
+
+        .success-link:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>Telegram Cleaner</h1>
+
+    <!-- Основной экран -->
+    <div id="mainForm">
+        <label class="upload-area" for="fileInput">
+            <div id="fileName">Выберите result.json</div>
+            <input type="file" id="fileInput" accept=".json" onchange="updateFileName()">
+        </label>
+        <button id="uploadBtn" onclick="uploadFile()">Конвертировать в MD</button>
+        <div id="status">Готов к работе</div>
+    </div>
+</div>
+
+<script>
+    function updateFileName() {
+        const input = document.getElementById('fileInput');
+        document.getElementById('fileName').innerText = input.files[0] ? input.files[0].name : 'Выберите result.json';
+    }
+
+    async function uploadFile() {
+        const fileInput = document.getElementById('fileInput');
+        const btn = document.getElementById('uploadBtn');
+        const status = document.getElementById('status');
+
+        if (!fileInput.files[0]) return alert('Сначала выберите файл!');
+
+        const maxSize = 50 * 1024 * 1024;
+        if (fileInput.files[0].size > maxSize) {
+            status.innerText = 'Файл слишком большой. Максимум 50 МБ.';
+            return;
+        }
+
+        btn.disabled = true;
+        status.innerText = 'Загрузка на сервер...';
+
+        const formData = new FormData();
+        formData.append('file', fileInput.files[0]);
+
+        try {
+            const response = await fetch('/api/files/upload', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (response.status === 429) {
+                const data = await response.json();
+                status.innerText = data.error || 'Слишком частые запросы, подождите.';
+                btn.disabled = false;
+                return;
+            }
+
+            if (!response.ok) throw new Error('Ошибка сервера');
+
+            const data = await response.json();
+            status.innerText = 'Обработка запущена...';
+            pollStatus(data.fileId);
+
+        } catch (e) {
+            status.innerText = 'Ошибка соединения или файл слишком большой.';
+            btn.disabled = false;
+        }
+    }
+
+    async function pollStatus(fileId) {
+        const status = document.getElementById('status');
+        try {
+            const res = await fetch(`/api/files/${fileId}/status`);
+            const data = await res.json();
+
+            if (data.status === 'COMPLETED') {
+                status.innerHTML = `<a href="/api/files/${fileId}/download" class="success-link" download>👉 Скачать результат (.md)</a>`;
+                document.getElementById('uploadBtn').disabled = false;
+            } else if (data.status === 'FAILED') {
+                status.innerText = 'Ошибка обработки файла.';
+                document.getElementById('uploadBtn').disabled = false;
+            } else {
+                status.innerText = 'Чистим мусор... подождите';
+                setTimeout(() => pollStatus(fileId), 2000);
+            }
+        } catch (e) {
+            status.innerText = 'Потеряно соединение с сервером.';
+        }
+    }
+</script>
+</body>
+</html>
