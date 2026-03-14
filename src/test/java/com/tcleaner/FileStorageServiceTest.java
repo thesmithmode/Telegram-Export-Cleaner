@@ -1,6 +1,8 @@
 package com.tcleaner;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -11,11 +13,21 @@ import java.time.Instant;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
- * Тесты для FileStorageService.
- * Проверяет работу с папками Import и Export.
+ * Юнит-тесты для {@link FileStorageService}.
+ *
+ * <p>Покрывает:</p>
+ * <ul>
+ *   <li>загрузку файлов (uploadFile)</li>
+ *   <li>обработку файлов (processFile): успех, ошибка, гарантии очистки</li>
+ *   <li>очистку папки Export (cleanupExportDirectory)</li>
+ *   <li>доступ к файлам (getExportFile, exportFileExists)</li>
+ *   <li>валидацию fileId (path-traversal защита)</li>
+ * </ul>
  */
 class FileStorageServiceTest {
 
@@ -42,140 +54,217 @@ class FileStorageServiceTest {
         storageService = new FileStorageService(config, new TelegramExporter(), mockStatus);
     }
 
-    @Test
-    void testUploadFile_Success() throws IOException {
-        Path testFile = importDir.resolve("test.json");
-        Files.writeString(testFile, "{\"messages\": []}");
+    // ─── uploadFile ──────────────────────────────────────────────────────────
 
-        String fileId = storageService.uploadFile(testFile);
+    @Nested
+    @DisplayName("uploadFile()")
+    class UploadFile {
 
-        assertNotNull(fileId);
-        assertTrue(Files.exists(importDir.resolve(fileId + ".json")));
+        @Test
+        @DisplayName("Возвращает UUID и создаёт файл в Import")
+        void success() throws IOException {
+            Path testFile = importDir.resolve("test.json");
+            Files.writeString(testFile, "{\"messages\": []}");
+
+            String fileId = storageService.uploadFile(testFile);
+
+            assertNotNull(fileId);
+            assertTrue(Files.exists(importDir.resolve(fileId + ".json")));
+        }
+
+        @Test
+        @DisplayName("Автоматически создаёт директории, если их нет")
+        void createsDirectoriesIfMissing() throws IOException {
+            Path newImportDir = tempDir.resolve("new_import");
+            Path newExportDir = tempDir.resolve("new_export");
+
+            StorageConfig config = new StorageConfig();
+            config.setImportPath(newImportDir.toString());
+            config.setExportPath(newExportDir.toString());
+            config.setExportTtlMinutes(10);
+
+            FileStorageService newService = new FileStorageService(
+                    config, new TelegramExporter(), mock(ProcessingStatusService.class));
+
+            Path testFile = newImportDir.resolve("test.json");
+            Files.writeString(testFile, "{\"messages\": []}");
+
+            String fileId = newService.uploadFile(testFile);
+
+            assertNotNull(fileId);
+            assertTrue(Files.exists(newImportDir.resolve(fileId + ".json")));
+        }
     }
 
-    @Test
-    void testUploadFile_CreatesDirectoryIfNotExists() throws IOException {
-        Path newImportDir = tempDir.resolve("new_import");
-        Path newExportDir = tempDir.resolve("new_export");
+    // ─── processFile ─────────────────────────────────────────────────────────
 
-        StorageConfig config = new StorageConfig();
-        config.setImportPath(newImportDir.toString());
-        config.setExportPath(newExportDir.toString());
-        config.setExportTtlMinutes(10);
+    @Nested
+    @DisplayName("processFile()")
+    class ProcessFile {
 
-        ProcessingStatusService mockStatus2 = mock(ProcessingStatusService.class);
-        FileStorageService newService = new FileStorageService(
-                config, new TelegramExporter(), mockStatus2);
+        @Test
+        @DisplayName("Успех: создаёт .md в Export, удаляет .json из Import")
+        void movesToExport() throws IOException {
+            Path testFile = importDir.resolve("test.json");
+            Files.writeString(testFile,
+                    "{\"messages\": [{\"text\": \"Hello\", \"date\": \"2024-01-01T10:00:00\", \"type\": \"message\"}]}");
 
-        Path testFile = newImportDir.resolve("test.json");
-        Files.writeString(testFile, "{\"messages\": []}");
+            String fileId = storageService.uploadFile(testFile);
+            ProcessingResult result = storageService.processFile(fileId);
 
-        String fileId = newService.uploadFile(testFile);
+            assertEquals(ProcessingStatus.COMPLETED, result.getStatus());
+            assertTrue(Files.exists(exportDir.resolve(fileId + ".md")));
+            assertFalse(Files.exists(importDir.resolve(fileId + ".json")));
+        }
 
-        assertNotNull(fileId);
-        assertTrue(Files.exists(newImportDir.resolve(fileId + ".json")));
+        @Test
+        @DisplayName("Входной файл удаляется из Import даже при успешной обработке")
+        void deletesImportFileAfterSuccess() throws IOException {
+            Path testFile = importDir.resolve("test.json");
+            Files.writeString(testFile, "{\"messages\": []}");
+
+            String fileId = storageService.uploadFile(testFile);
+            assertTrue(Files.exists(importDir.resolve(fileId + ".json")));
+
+            storageService.processFile(fileId);
+
+            assertFalse(Files.exists(importDir.resolve(fileId + ".json")));
+        }
+
+        @Test
+        @DisplayName("При ошибке обработки: входной .json удаляется, битый .md не остаётся")
+        void onErrorDeletesBothInputAndPartialExport() throws IOException {
+            // Создаём мок-экспортер, который бросает исключение
+            TelegramExporter failingExporter = mock(TelegramExporter.class);
+            when(failingExporter.processFile(any(Path.class), any()))
+                    .thenThrow(new TelegramExporterException("INVALID_JSON", "Битый JSON"));
+            when(failingExporter.processFile(any(Path.class)))
+                    .thenThrow(new TelegramExporterException("INVALID_JSON", "Битый JSON"));
+
+            StorageConfig config = new StorageConfig();
+            config.setImportPath(importDir.toString());
+            config.setExportPath(exportDir.toString());
+            config.setExportTtlMinutes(10);
+
+            FileStorageService service = new FileStorageService(
+                    config, failingExporter, mock(ProcessingStatusService.class));
+
+            // Вручную создаём файл в Import
+            String fileId = UUID.randomUUID().toString();
+            Path importFile = importDir.resolve(fileId + ".json");
+            Files.writeString(importFile, "не-валидный-json");
+
+            ProcessingResult result = service.processFile(fileId);
+
+            assertEquals(ProcessingStatus.FAILED, result.getStatus());
+            // Входной файл должен быть удалён (finally-блок)
+            assertFalse(Files.exists(importFile),
+                    "Входной .json должен быть удалён из Import даже при ошибке");
+            // Частичный файл экспорта должен быть удалён (catch-блок)
+            assertFalse(Files.exists(exportDir.resolve(fileId + ".md")),
+                    "Частичный .md не должен оставаться в Export после ошибки");
+        }
+
+        @Test
+        @DisplayName("Несуществующий файл в Import → FAILED, без NPE")
+        void missingImportFile_returnsFailed() {
+            String fileId = UUID.randomUUID().toString();
+            ProcessingResult result = storageService.processFile(fileId);
+            assertEquals(ProcessingStatus.FAILED, result.getStatus());
+        }
+
+        @Test
+        @DisplayName("Невалидный fileId → IllegalArgumentException")
+        void invalidFileId_throws() {
+            assertThrows(IllegalArgumentException.class,
+                    () -> storageService.processFile("not-a-uuid"));
+        }
+
+        @Test
+        @DisplayName("null fileId → IllegalArgumentException")
+        void nullFileId_throws() {
+            assertThrows(IllegalArgumentException.class,
+                    () -> storageService.processFile(null));
+        }
     }
 
-    @Test
-    void testProcessFile_MovesToExport() throws IOException {
-        Path testFile = importDir.resolve("test.json");
-        Files.writeString(testFile, "{\"messages\": [{\"text\": \"Hello\", \"date\": \"2024-01-01T10:00:00\"}]}");
+    // ─── cleanupExportDirectory ───────────────────────────────────────────────
 
-        String fileId = storageService.uploadFile(testFile);
+    @Nested
+    @DisplayName("cleanupExportDirectory()")
+    class CleanupExport {
 
-        ProcessingResult result = storageService.processFile(fileId);
+        @Test
+        @DisplayName("Удаляет файлы старше TTL")
+        void deletesOldFiles() throws IOException {
+            String oldFileId = UUID.randomUUID().toString();
+            Path oldFile = exportDir.resolve(oldFileId + ".md");
+            Files.writeString(oldFile, "old content");
+            Files.setLastModifiedTime(oldFile,
+                    java.nio.file.attribute.FileTime.from(Instant.now().minusSeconds(900)));
 
-        assertEquals(ProcessingStatus.COMPLETED, result.getStatus());
-        assertTrue(Files.exists(exportDir.resolve(fileId + ".md")));
-        assertFalse(Files.exists(importDir.resolve(fileId + ".json")));
+            String newFileId = UUID.randomUUID().toString();
+            Path newFile = exportDir.resolve(newFileId + ".md");
+            Files.writeString(newFile, "new content");
+
+            storageService.cleanupExportDirectory();
+
+            assertFalse(Files.exists(oldFile), "Старый файл должен быть удалён");
+            assertTrue(Files.exists(newFile), "Новый файл должен остаться");
+        }
+
+        @Test
+        @DisplayName("Не удаляет свежие файлы")
+        void keepsRecentFiles() throws IOException {
+            String recentFileId = UUID.randomUUID().toString();
+            Path recentFile = exportDir.resolve(recentFileId + ".md");
+            Files.writeString(recentFile, "recent content");
+
+            storageService.cleanupExportDirectory();
+
+            assertTrue(Files.exists(recentFile));
+        }
     }
 
-    @Test
-    void testDeleteImportFile_AfterProcessing() throws IOException {
-        Path testFile = importDir.resolve("test.json");
-        Files.writeString(testFile, "{\"messages\": []}");
+    // ─── getExportFile / exportFileExists ────────────────────────────────────
 
-        String fileId = storageService.uploadFile(testFile);
+    @Nested
+    @DisplayName("getExportFile() / exportFileExists()")
+    class ExportAccess {
 
-        assertTrue(Files.exists(importDir.resolve(fileId + ".json")));
+        @Test
+        @DisplayName("getExportFile возвращает корректный путь для существующего файла")
+        void getExportFile_success() throws IOException {
+            String fileId = UUID.randomUUID().toString();
+            Path exportFile = exportDir.resolve(fileId + ".md");
+            Files.writeString(exportFile, "exported content");
 
-        storageService.processFile(fileId);
+            Path result = storageService.getExportFile(fileId);
 
-        assertFalse(Files.exists(importDir.resolve(fileId + ".json")));
-    }
+            assertNotNull(result);
+            assertTrue(Files.exists(result));
+            assertEquals("exported content", Files.readString(result));
+        }
 
-    @Test
-    void testExportCleanup_DeletesOldFiles() throws IOException {
-        String oldFileId = UUID.randomUUID().toString();
-        Path oldFile = exportDir.resolve(oldFileId + ".md");
-        Files.writeString(oldFile, "old content");
+        @Test
+        @DisplayName("getExportFile бросает IOException для несуществующего файла")
+        void getExportFile_notFound() {
+            assertThrows(IOException.class,
+                    () -> storageService.getExportFile(UUID.randomUUID().toString()));
+        }
 
-        // Устанавливаем время модификации на 15 минут назад
-        Instant oldTime = Instant.now().minusSeconds(900);
-        Files.setLastModifiedTime(oldFile,
-            java.nio.file.attribute.FileTime.from(oldTime));
+        @Test
+        @DisplayName("getExportFile бросает IllegalArgumentException при path-traversal попытке")
+        void getExportFile_pathTraversal_throws() {
+            assertThrows(IllegalArgumentException.class,
+                    () -> storageService.getExportFile("../../etc/passwd"));
+        }
 
-        String newFileId = UUID.randomUUID().toString();
-        Path newFile = exportDir.resolve(newFileId + ".md");
-        Files.writeString(newFile, "new content");
-
-        storageService.cleanupExportDirectory();
-
-        assertFalse(Files.exists(oldFile));
-        assertTrue(Files.exists(newFile));
-    }
-
-    @Test
-    void testExportCleanup_KeepsRecentFiles() throws IOException {
-        String recentFileId = UUID.randomUUID().toString();
-        Path recentFile = exportDir.resolve(recentFileId + ".md");
-        Files.writeString(recentFile, "recent content");
-
-        storageService.cleanupExportDirectory();
-
-        assertTrue(Files.exists(recentFile));
-    }
-
-    @Test
-    void testGetExportFile() throws IOException {
-        String fileId = UUID.randomUUID().toString();
-        Path exportFile = exportDir.resolve(fileId + ".md");
-        Files.writeString(exportFile, "exported content");
-
-        Path result = storageService.getExportFile(fileId);
-
-        assertNotNull(result);
-        assertTrue(Files.exists(result));
-        assertEquals("exported content", Files.readString(result));
-    }
-
-    @Test
-    void testGetExportFile_NotFound() {
-        assertThrows(IOException.class, () -> storageService.getExportFile(UUID.randomUUID().toString()));
-    }
-
-    @Test
-    void testGetExportFile_InvalidFileId_ThrowsIllegalArgument() {
-        // path-traversal попытка
-        assertThrows(IllegalArgumentException.class,
-            () -> storageService.getExportFile("../../etc/passwd"));
-    }
-
-    @Test
-    void testExportFileExists_InvalidFileId_ThrowsIllegalArgument() {
-        assertThrows(IllegalArgumentException.class,
-            () -> storageService.exportFileExists("../evil"));
-    }
-
-    @Test
-    void testProcessFile_InvalidFileId_ThrowsIllegalArgument() {
-        assertThrows(IllegalArgumentException.class,
-            () -> storageService.processFile("not-a-uuid"));
-    }
-
-    @Test
-    void testProcessFile_NullFileId_ThrowsIllegalArgument() {
-        assertThrows(IllegalArgumentException.class,
-            () -> storageService.processFile(null));
+        @Test
+        @DisplayName("exportFileExists бросает IllegalArgumentException при невалидном fileId")
+        void exportFileExists_invalidId_throws() {
+            assertThrows(IllegalArgumentException.class,
+                    () -> storageService.exportFileExists("../evil"));
+        }
     }
 }
