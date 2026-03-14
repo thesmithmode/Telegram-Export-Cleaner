@@ -16,7 +16,6 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Map;
@@ -86,12 +85,16 @@ public class TelegramController {
         }
 
         try {
-            MessageFilter filter = buildFilter(startDate, endDate, keywords, excludeKeywords);
+            MessageFilter filter = MessageFilterFactory.build(startDate, endDate, keywords, excludeKeywords);
             return processWithTempDir(file, filter);
         } catch (DateTimeParseException ex) {
             log.warn("Невалидный формат даты в запросе: {}", ex.getParsedString());
             return ResponseEntity.badRequest()
                     .body(Map.of("error", "Невалидный формат даты. Используйте YYYY-MM-DD"));
+        } catch (IllegalArgumentException ex) {
+            log.warn("Невалидный диапазон дат: {}", ex.getMessage());
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", ex.getMessage()));
         } catch (TelegramExporterException ex) {
             log.error("Ошибка экспортера [{}]", ex.getErrorCode());
             return ResponseEntity.badRequest()
@@ -128,13 +131,23 @@ public class TelegramController {
                     .body(Map.of("error", "Пустое содержимое"));
         }
 
+        // Ограничение размера JSON-тела: multipart-лимит 10MB не применяется к @RequestBody
+        if (jsonContent.length() > 10 * 1024 * 1024) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "Содержимое превышает максимально допустимый размер 10MB"));
+        }
+
         try {
-            MessageFilter filter = buildFilter(startDate, endDate, keywords, excludeKeywords);
+            MessageFilter filter = MessageFilterFactory.build(startDate, endDate, keywords, excludeKeywords);
             return processJsonWithTempDir(jsonContent, filter);
         } catch (DateTimeParseException ex) {
             log.warn("Невалидный формат даты в запросе: {}", ex.getParsedString());
             return ResponseEntity.badRequest()
                     .body(Map.of("error", "Невалидный формат даты. Используйте YYYY-MM-DD"));
+        } catch (IllegalArgumentException ex) {
+            log.warn("Невалидный диапазон дат: {}", ex.getMessage());
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", ex.getMessage()));
         } catch (TelegramExporterException ex) {
             log.error("Ошибка экспортера [{}]", ex.getErrorCode());
             return ResponseEntity.badRequest()
@@ -183,52 +196,11 @@ public class TelegramController {
         }
     }
 
-    private MessageFilter buildFilter(String startDate, String endDate,
-            String keywords, String excludeKeywords) {
-        boolean hasFilters = (startDate != null && !startDate.isBlank())
-                || (endDate != null && !endDate.isBlank())
-                || (keywords != null && !keywords.isBlank())
-                || (excludeKeywords != null && !excludeKeywords.isBlank());
-
-        if (!hasFilters) {
-            return null;
-        }
-
-        MessageFilter filter = new MessageFilter();
-
-        if (startDate != null && !startDate.isBlank()) {
-            filter.withStartDate(LocalDate.parse(startDate));
-        }
-
-        if (endDate != null && !endDate.isBlank()) {
-            filter.withEndDate(LocalDate.parse(endDate));
-        }
-
-        if (keywords != null && !keywords.isBlank()) {
-            for (String kw : keywords.split(",")) {
-                String trimmed = kw.trim();
-                if (!trimmed.isEmpty()) {
-                    filter.withKeyword(trimmed);
-                }
-            }
-        }
-
-        if (excludeKeywords != null && !excludeKeywords.isBlank()) {
-            for (String kw : excludeKeywords.split(",")) {
-                String trimmed = kw.trim();
-                if (!trimmed.isEmpty()) {
-                    filter.withExcludeKeyword(trimmed);
-                }
-            }
-        }
-
-        return filter;
-    }
-
     /**
      * Утилита для автоматической очистки временной директории.
      */
     private static class TempDirectory implements AutoCloseable {
+        private static final Logger log = LoggerFactory.getLogger(TempDirectory.class);
         private final Path path;
 
         TempDirectory() throws IOException {
@@ -246,7 +218,8 @@ public class TelegramController {
                     .forEach(pp -> {
                         try {
                             Files.deleteIfExists(pp);
-                        } catch (IOException ignored) {
+                        } catch (IOException e) {
+                            log.warn("Не удалось удалить временный файл: {}", pp, e);
                         }
                     });
         }
