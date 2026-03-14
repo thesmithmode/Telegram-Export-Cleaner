@@ -129,10 +129,7 @@ public class FileStorageService {
             }
 
             List<String> lines = exporter.processFile(importFile);
-            String result = lines.isEmpty() ? "" : String.join("\n", lines) + "\n";
-
-            Files.writeString(exportFile, result);
-            Files.delete(importFile);
+            Files.write(exportFile, lines, java.nio.charset.StandardCharsets.UTF_8);
 
             statusService.setStatus(fileId, ProcessingStatus.COMPLETED);
             log.info("Файл обработан: {} -> {}", importFile, exportFile);
@@ -142,6 +139,12 @@ public class FileStorageService {
             log.error("Ошибка при обработке файла {}: {}", fileId, ex.getMessage());
             statusService.setStatus(fileId, ProcessingStatus.FAILED);
             return ProcessingResult.error(fileId, ex.getMessage());
+        } finally {
+            try {
+                Files.deleteIfExists(importFile);
+            } catch (IOException ignore) {
+                log.warn("Не удалось удалить {}", importFile, ignore);
+            }
         }
     }
 
