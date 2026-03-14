@@ -2,6 +2,10 @@ package com.tcleaner;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -13,7 +17,10 @@ import java.util.List;
  * Основной класс для экспорта Telegram чата.
  * Читает result.json и преобразует в текстовый формат.
  */
-public class TelegramExporter {
+@Service
+public class TelegramExporter implements TelegramExporterInterface {
+
+    private static final Logger log = LoggerFactory.getLogger(TelegramExporter.class);
 
     private final ObjectMapper objectMapper;
     private final MessageProcessor messageProcessor;
@@ -31,17 +38,37 @@ public class TelegramExporter {
      * @throws IOException при ошибках чтения файла
      */
     public List<String> processFile(Path inputPath) throws IOException {
-        JsonNode root = objectMapper.readTree(inputPath.toFile());
+        log.debug("Начало обработки файла: {}", inputPath);
+        
+        if (!Files.exists(inputPath)) {
+            log.error("Файл не найден: {}", inputPath);
+            throw new TelegramExporterException("FILE_NOT_FOUND", "Файл не найден: " + inputPath);
+        }
+        
+        JsonNode root;
+        try {
+            root = objectMapper.readTree(inputPath.toFile());
+        } catch (Exception e) {
+            log.error("Ошибка парсинга JSON: {}", e.getMessage());
+            throw new TelegramExporterException("INVALID_JSON", "Невалидный JSON: " + e.getMessage(), e);
+        }
+        
         JsonNode messagesNode = root.get("messages");
 
         if (messagesNode == null || !messagesNode.isArray()) {
+            log.warn("В файле отсутствует массив messages или он имеет неверный формат: {}", inputPath);
             return List.of();
         }
 
         List<JsonNode> messages = new ArrayList<>();
         messagesNode.forEach(messages::add);
+        
+        log.debug("Найдено {} сообщений для обработки", messages.size());
 
-        return messageProcessor.processMessages(messages);
+        List<String> result = messageProcessor.processMessages(messages);
+        log.info("Обработано {} сообщений из файла {}", result.size(), inputPath.getFileName());
+        
+        return result;
     }
 
     /**
@@ -52,6 +79,8 @@ public class TelegramExporter {
      * @throws IOException при ошибках чтения/записи файла
      */
     public void processFileToFile(Path inputPath, Path outputPath) throws IOException {
+        log.debug("Начало обработки: {} -> {}", inputPath, outputPath);
+        
         List<String> processed = processFile(inputPath);
         
         StringBuilder sb = new StringBuilder();
@@ -60,5 +89,6 @@ public class TelegramExporter {
         }
         
         Files.writeString(outputPath, sb.toString());
+        log.info("Результат записан в файл: {} ({} строк)", outputPath, processed.size());
     }
 }
