@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -25,6 +26,22 @@ public class TelegramExporter implements TelegramExporterInterface {
     private final ObjectMapper objectMapper;
     private final MessageProcessor messageProcessor;
 
+    /**
+     * Конструктор для Spring DI.
+     *
+     * @param objectMapper     Jackson ObjectMapper для парсинга JSON
+     * @param messageProcessor процессор сообщений
+     */
+    @Autowired
+    public TelegramExporter(ObjectMapper objectMapper, MessageProcessor messageProcessor) {
+        this.objectMapper = objectMapper;
+        this.messageProcessor = messageProcessor;
+    }
+
+    /**
+     * Конструктор по умолчанию. Создаёт реальные объекты.
+     * Используется для CLI и обратной совместимости.
+     */
     public TelegramExporter() {
         this.objectMapper = new ObjectMapper();
         this.messageProcessor = new MessageProcessor();
@@ -38,6 +55,18 @@ public class TelegramExporter implements TelegramExporterInterface {
      * @throws IOException при ошибках чтения файла
      */
     public List<String> processFile(Path inputPath) throws IOException {
+        return processFile(inputPath, null);
+    }
+
+    /**
+     * Обрабатывает файл result.json с фильтрацией сообщений.
+     * 
+     * @param inputPath путь к файлу result.json
+     * @param filter фильтр для сообщений (может быть null)
+     * @return список обработанных строк
+     * @throws IOException при ошибках чтения файла
+     */
+    public List<String> processFile(Path inputPath, MessageFilter filter) throws IOException {
         log.debug("Начало обработки файла: {}", inputPath);
         
         if (!Files.exists(inputPath)) {
@@ -62,6 +91,11 @@ public class TelegramExporter implements TelegramExporterInterface {
 
         List<JsonNode> messages = new ArrayList<>();
         messagesNode.forEach(messages::add);
+
+        // Применяем фильтр на уровне JsonNode, если он передан
+        if (filter != null) {
+            messages = filter.filter(messages);
+        }
         
         log.debug("Найдено {} сообщений для обработки", messages.size());
 
