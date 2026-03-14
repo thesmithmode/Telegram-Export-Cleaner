@@ -16,7 +16,6 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Map;
 
@@ -87,22 +86,8 @@ public class TelegramController {
         try {
             MessageFilter filter = MessageFilterFactory.build(startDate, endDate, keywords, excludeKeywords);
             return processWithTempDir(file, filter);
-        } catch (DateTimeParseException ex) {
-            log.warn("Невалидный формат даты в запросе: {}", ex.getParsedString());
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", "Невалидный формат даты. Используйте YYYY-MM-DD"));
-        } catch (IllegalArgumentException ex) {
-            log.warn("Невалидный диапазон дат: {}", ex.getMessage());
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", ex.getMessage()));
-        } catch (TelegramExporterException ex) {
-            log.error("Ошибка экспортера [{}]", ex.getErrorCode());
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", ex.getErrorCode(), "message", ex.getMessage()));
-        } catch (IOException ex) {
-            log.error("Ошибка ввода/вывода при обработке файла");
-            return ResponseEntity.internalServerError()
-                    .body(Map.of("error", "Внутренняя ошибка сервера"));
+        } catch (Exception ex) {
+            return handleConvertException(ex);
         }
     }
 
@@ -140,22 +125,8 @@ public class TelegramController {
         try {
             MessageFilter filter = MessageFilterFactory.build(startDate, endDate, keywords, excludeKeywords);
             return processJsonWithTempDir(jsonContent, filter);
-        } catch (DateTimeParseException ex) {
-            log.warn("Невалидный формат даты в запросе: {}", ex.getParsedString());
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", "Невалидный формат даты. Используйте YYYY-MM-DD"));
-        } catch (IllegalArgumentException ex) {
-            log.warn("Невалидный диапазон дат: {}", ex.getMessage());
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", ex.getMessage()));
-        } catch (TelegramExporterException ex) {
-            log.error("Ошибка экспортера [{}]", ex.getErrorCode());
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", ex.getErrorCode(), "message", ex.getMessage()));
-        } catch (IOException ex) {
-            log.error("Ошибка ввода/вывода при обработке JSON");
-            return ResponseEntity.internalServerError()
-                    .body(Map.of("error", "Внутренняя ошибка сервера"));
+        } catch (Exception ex) {
+            return handleConvertException(ex);
         }
     }
 
@@ -167,6 +138,35 @@ public class TelegramController {
     @GetMapping("/health")
     public ResponseEntity<Map<String, String>> health() {
         return ResponseEntity.ok(Map.of("status", "UP"));
+    }
+
+    /**
+     * Общая обработка исключений контроллера.
+     */
+    private ResponseEntity<?> handleConvertException(Exception ex) {
+        if (ex instanceof java.time.format.DateTimeParseException dtpe) {
+            log.warn("Невалидный формат даты в запросе: {}", dtpe.getParsedString());
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "Невалидный формат даты. Используйте YYYY-MM-DD"));
+        }
+        if (ex instanceof IllegalArgumentException) {
+            log.warn("Невалидный диапазон дат: {}", ex.getMessage());
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", ex.getMessage()));
+        }
+        if (ex instanceof TelegramExporterException tex) {
+            log.error("Ошибка экспортера [{}]", tex.getErrorCode());
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", tex.getErrorCode(), "message", tex.getMessage()));
+        }
+        if (ex instanceof IOException) {
+            log.error("Ошибка ввода/вывода");
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", "Внутренняя ошибка сервера"));
+        }
+        log.error("Неожиданная ошибка", ex);
+        return ResponseEntity.internalServerError()
+                .body(Map.of("error", "Внутренняя ошибка сервера"));
     }
 
     private ResponseEntity<?> processWithTempDir(
