@@ -122,36 +122,7 @@ public class MarkdownParser {
         return sb.toString();
     }
 
-    /**
-     * Парсит поле text из сообщения.
-     * Может быть строкой или массивом (mixed content).
-     * 
-     * @param textField значение поля text (String, List&lt;JsonNode&gt; или null)
-     * @return обработанный текст
-     */
-    public static String parseText(Object textField) {
-        if (textField == null) {
-            return "";
-        }
 
-        if (textField instanceof String stringText) {
-            return stringText;
-        }
-
-        if (textField instanceof List<?> listText) {
-            StringBuilder sb = new StringBuilder();
-            for (Object item : listText) {
-                if (item instanceof JsonNode node) {
-                    sb.append(parseEntity(node));
-                } else if (item instanceof String stringItem) {
-                    sb.append(stringItem);
-                }
-            }
-            return sb.toString();
-        }
-
-        return "";
-    }
 
     /**
      * Парсит JsonNode, который может быть строкой или массивом.

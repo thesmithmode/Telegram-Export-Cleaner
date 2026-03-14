@@ -310,34 +310,38 @@ class MarkdownParserTest {
 
         @Test
         @DisplayName("Если text - строка, возвращает её как есть")
-        void returnsStringAsIs() {
-            String text = "Simple text message";
-            String result = MarkdownParser.parseText(text);
+        void returnsStringAsIs() throws Exception {
+            JsonNode node = objectMapper.readTree("\"Simple text message\"");
+            String result = MarkdownParser.parseText(node);
             assertThat(result).isEqualTo("Simple text message");
         }
 
         @Test
         @DisplayName("Если text - массив, парсит через parseEntityList")
         void parsesArrayAsEntityList() throws Exception {
-            List<JsonNode> entities = new ArrayList<>();
-            entities.add(createEntity("plain", "Hello "));
-            entities.add(createEntity("bold", "World"));
+            JsonNode node = objectMapper.readTree("""
+                [
+                  {"type": "plain", "text": "Hello "},
+                  {"type": "bold", "text": "World"}
+                ]
+                """);
             
-            String result = MarkdownParser.parseText(entities);
+            String result = MarkdownParser.parseText(node);
             assertThat(result).isEqualTo("Hello **World**");
         }
 
         @Test
-        @DisplayName("Если text - пустая строка, возвращает пустую строку")
-        void returnsEmptyForEmptyString() {
-            String result = MarkdownParser.parseText("");
+        @DisplayName("Если text - null узел, возвращает пустую строку")
+        void returnsEmptyForNullNode() {
+            JsonNode node = objectMapper.nullNode();
+            String result = MarkdownParser.parseText(node);
             assertThat(result).isEmpty();
         }
 
         @Test
         @DisplayName("Если text - null, возвращает пустую строку")
         void returnsEmptyForNull() {
-            String result = MarkdownParser.parseText((String) null);
+            String result = MarkdownParser.parseText((JsonNode) null);
             assertThat(result).isEmpty();
         }
     }

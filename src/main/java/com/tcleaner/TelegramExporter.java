@@ -129,7 +129,7 @@ public class TelegramExporter implements TelegramFileExporterInterface {
 
         List<String> processed = processFile(inputPath);
 
-        Files.writeString(outputPath, String.join("\n", processed) + "\n");
+        Files.write(outputPath, processed, java.nio.charset.StandardCharsets.UTF_8);
         log.info("Результат записан в файл: {} ({} строк)", outputPath, processed.size());
     }
 }
