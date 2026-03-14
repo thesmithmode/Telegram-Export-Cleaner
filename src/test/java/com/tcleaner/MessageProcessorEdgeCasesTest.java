@@ -207,28 +207,25 @@ class MessageProcessorEdgeCasesTest {
         }
 
         @Test
-        @DisplayName("Обрабатывает дату без времени")
+        @DisplayName("Пропускает сообщение с датой без времени (ISO datetime обязателен)")
         void handlesDateWithoutTime() throws Exception {
             JsonNode message = objectMapper.readTree("""
                 {"id": 1, "type": "message", "date": "2025-06-24", "text": "Test"}
                 """);
             String result = processor.processMessage(message);
-            // DateFormatter возвращает исходную строку для невалидного формата,
-            // поэтому результат будет "2025-06-24 Test" - не null
-            assertThat(result).isNotNull();
-            assertThat(result).startsWith("2025-06-24");
+            // Дата без времени не является валидным ISO datetime — сообщение пропускается
+            assertThat(result).isNull();
         }
 
         @Test
-        @DisplayName("Обрабатывает невалидную дату")
+        @DisplayName("Пропускает сообщение с невалидной датой")
         void handlesInvalidDate() throws Exception {
             JsonNode message = objectMapper.readTree("""
                 {"id": 1, "type": "message", "date": "invalid-date", "text": "Test"}
                 """);
             String result = processor.processMessage(message);
-            // DateFormatter возвращает исходную строку для невалидного формата
-            assertThat(result).isNotNull();
-            assertThat(result).startsWith("invalid-date");
+            // Невалидная дата — сообщение пропускается
+            assertThat(result).isNull();
         }
 
         @Test

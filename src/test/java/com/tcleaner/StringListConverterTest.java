@@ -1,18 +1,18 @@
 package com.tcleaner;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.util.Arrays;
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Тесты для StringListConverter.
  */
-public class StringListConverterTest {
+@DisplayName("StringListConverter")
+class StringListConverterTest {
 
     private StringListConverter converter;
 
@@ -22,48 +22,48 @@ public class StringListConverterTest {
     }
 
     @Test
-    void convert_singleValue_returnsListWithOneElement() {
+    @DisplayName("Одно значение возвращает список из одного элемента")
+    void convertSingleValueReturnsListWithOneElement() {
         List<String> result = converter.convert("value1");
-        assertEquals(1, result.size());
-        assertEquals("value1", result.get(0));
+        assertThat(result).containsExactly("value1");
     }
 
     @Test
-    void convert_multipleValuesSeparatedByComma_returnsList() {
+    @DisplayName("Несколько значений через запятую возвращает список")
+    void convertMultipleValuesSeparatedByCommaReturnsList() {
         List<String> result = converter.convert("value1,value2,value3");
-        assertEquals(3, result.size());
-        assertEquals(Arrays.asList("value1", "value2", "value3"), result);
+        assertThat(result).containsExactly("value1", "value2", "value3");
     }
 
     @Test
-    void convert_valuesWithSpaces_trimsWhitespace() {
+    @DisplayName("Пробелы вокруг значений обрезаются")
+    void convertValuesWithSpacesTrimsWhitespace() {
         List<String> result = converter.convert(" value1 , value2 , value3 ");
-        assertEquals(3, result.size());
-        assertEquals(Arrays.asList("value1", "value2", "value3"), result);
+        assertThat(result).containsExactly("value1", "value2", "value3");
     }
 
     @Test
-    void convert_emptyString_returnsEmptyList() {
-        List<String> result = converter.convert("");
-        assertTrue(result.isEmpty());
+    @DisplayName("Пустая строка возвращает пустой список")
+    void convertEmptyStringReturnsEmptyList() {
+        assertThat(converter.convert("")).isEmpty();
     }
 
     @Test
-    void convert_blankString_returnsEmptyList() {
-        List<String> result = converter.convert("   ");
-        assertTrue(result.isEmpty());
+    @DisplayName("Строка из пробелов возвращает пустой список")
+    void convertBlankStringReturnsEmptyList() {
+        assertThat(converter.convert("   ")).isEmpty();
     }
 
     @Test
-    void convert_nullValue_returnsEmptyList() {
-        List<String> result = converter.convert(null);
-        assertTrue(result.isEmpty());
+    @DisplayName("null возвращает пустой список")
+    void convertNullValueReturnsEmptyList() {
+        assertThat(converter.convert(null)).isEmpty();
     }
 
     @Test
-    void convert_emptyBetweenCommas_filtersEmptyParts() {
+    @DisplayName("Пустые части между запятыми фильтруются")
+    void convertEmptyBetweenCommasFiltersEmptyParts() {
         List<String> result = converter.convert("value1,,value2");
-        assertEquals(2, result.size());
-        assertEquals(Arrays.asList("value1", "value2"), result);
+        assertThat(result).containsExactly("value1", "value2");
     }
 }
