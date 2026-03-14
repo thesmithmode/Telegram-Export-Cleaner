@@ -248,13 +248,14 @@ class MessageProcessorEdgeCasesTest {
         void handlesLargeMessageList() {
             List<JsonNode> messages = new ArrayList<>();
             for (int i = 0; i < 1000; i++) {
+                String json = String.format("""
+                    {"id": %d, "type": "message", "date": "2025-06-24T10:00:%02d", "text": "Message %d"}
+                    """, i, i % 60, i);
                 try {
-                    String json = String.format("""
-                        {"id": %d, "type": "message", "date": "2025-06-24T10:00:%02d", "text": "Message %d"}
-                        """, i, i % 60, i);
                     messages.add(objectMapper.readTree(json));
                 } catch (Exception e) {
-                    // ignore
+                    org.junit.jupiter.api.Assertions.fail(
+                        "Неожиданный сбой парсинга JSON для i=" + i + ": " + e.getMessage());
                 }
             }
 

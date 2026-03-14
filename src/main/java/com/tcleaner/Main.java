@@ -8,7 +8,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -23,8 +22,8 @@ import java.util.List;
  *   -o, --output <path>      Output file (default: tcleaner_output.txt)
  *   -s, --start-date <date>  Start date filter (YYYY-MM-DD)
  *   -e, --end-date <date>    End date filter (YYYY-MM-DD)
- *   -k, --keyword <word>     Include only messages with keyword
- *   -x, --exclude <word>     Exclude messages with keyword
+ *   -k, --keyword &lt;word&gt;     Include only messages with keyword
+ *   -x, --exclude &lt;word&gt;     Exclude messages with keyword
  *   -v, --verbose            Verbose output
  *   --help                   Show help
  */
@@ -42,10 +41,12 @@ public class Main {
     @Parameter(names = {"-e", "--end-date"}, description = "End date filter (YYYY-MM-DD)")
     private String endDate;
 
-    @Parameter(names = {"-k", "--keyword"}, description = "Include only messages with keyword", listConverter = StringListConverter.class)
+    @Parameter(names = {"-k", "--keyword"}, description = "Include only messages with keyword",
+            listConverter = StringListConverter.class)
     private List<String> keywords = new ArrayList<>();
 
-    @Parameter(names = {"-x", "--exclude"}, description = "Exclude messages with keyword", listConverter = StringListConverter.class)
+    @Parameter(names = {"-x", "--exclude"}, description = "Exclude messages with keyword",
+            listConverter = StringListConverter.class)
     private List<String> excludeKeywords = new ArrayList<>();
 
     @Parameter(names = {"-v", "--verbose"}, description = "Verbose output")
@@ -56,22 +57,22 @@ public class Main {
 
     public static void main(String[] args) {
         Main main = new Main();
-        JCommander jCommander = JCommander.newBuilder()
+        JCommander commander = JCommander.newBuilder()
                 .addObject(main)
                 .build();
 
-        jCommander.setProgramName("tcleaner");
+        commander.setProgramName("tcleaner");
 
         try {
-            jCommander.parse(args);
+            commander.parse(args);
         } catch (ParameterException e) {
             System.err.println("Error: " + e.getMessage());
-            jCommander.usage();
+            commander.usage();
             System.exit(1);
         }
 
         if (main.help) {
-            jCommander.usage();
+            commander.usage();
             return;
         }
 
@@ -93,16 +94,14 @@ public class Main {
             }
 
             TelegramExporter exporter = new TelegramExporter();
-            MessageFilter filter = hasFilters() ? buildFilter() : null;
+            MessageFilter filter = MessageFilterFactory.build(
+                    startDate, endDate,
+                    keywords.isEmpty() ? null : String.join(",", keywords),
+                    excludeKeywords.isEmpty() ? null : String.join(",", excludeKeywords));
             List<String> processed = exporter.processFile(resultFile, filter);
 
             Path outputFile = Paths.get(outputPath);
-            StringBuilder sb = new StringBuilder();
-            for (String line : processed) {
-                sb.append(line).append("\n");
-            }
-
-            Files.writeString(outputFile, sb.toString());
+            Files.writeString(outputFile, String.join("\n", processed) + "\n");
 
             if (verbose) {
                 System.out.println("Output written to: " + outputFile.toAbsolutePath());
@@ -120,32 +119,5 @@ public class Main {
         }
     }
 
-    private boolean hasFilters() {
-        return startDate != null
-               || endDate != null
-               || !keywords.isEmpty()
-               || !excludeKeywords.isEmpty();
-    }
-
-    private MessageFilter buildFilter() {
-        MessageFilter filter = new MessageFilter();
-        
-        if (startDate != null) {
-            filter.withStartDate(LocalDate.parse(startDate));
-        }
-        
-        if (endDate != null) {
-            filter.withEndDate(LocalDate.parse(endDate));
-        }
-        
-        for (String keyword : keywords) {
-            filter.withKeyword(keyword);
-        }
-        
-        for (String keyword : excludeKeywords) {
-            filter.withExcludeKeyword(keyword);
-        }
-        
-        return filter;
-    }
 }
+

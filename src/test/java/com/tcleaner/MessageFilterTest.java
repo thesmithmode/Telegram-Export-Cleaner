@@ -260,4 +260,54 @@ class MessageFilterTest {
             assertThat(filter.matches(serviceMessage)).isTrue();
         }
     }
+
+    @Nested
+    @DisplayName("Фильтрация по тексту в виде массива (entities)")
+    class ArrayTextFilterTests {
+
+        @Test
+        @DisplayName("Keyword-фильтр находит слово в массиве entities")
+        void keywordFoundInArrayText() throws Exception {
+            JsonNode msg = objectMapper.readTree("""
+                {"id": 10, "type": "message", "date": "2025-06-24T10:00:00",
+                 "text": [
+                   {"type": "plain", "text": "Check out "},
+                   {"type": "bold", "text": "important"},
+                   {"type": "plain", "text": " news"}
+                 ]}
+                """);
+
+            MessageFilter filter = new MessageFilter().withKeyword("important");
+            assertThat(filter.matches(msg)).isTrue();
+        }
+
+        @Test
+        @DisplayName("Keyword-фильтр не находит отсутствующее слово в массиве entities")
+        void keywordNotFoundInArrayText() throws Exception {
+            JsonNode msg = objectMapper.readTree("""
+                {"id": 11, "type": "message", "date": "2025-06-24T10:00:00",
+                 "text": [
+                   {"type": "plain", "text": "Just a regular message"}
+                 ]}
+                """);
+
+            MessageFilter filter = new MessageFilter().withKeyword("important");
+            assertThat(filter.matches(msg)).isFalse();
+        }
+
+        @Test
+        @DisplayName("Exclude-фильтр исключает сообщение с нужным словом в массиве entities")
+        void excludeKeywordWorksInArrayText() throws Exception {
+            JsonNode msg = objectMapper.readTree("""
+                {"id": 12, "type": "message", "date": "2025-06-24T10:00:00",
+                 "text": [
+                   {"type": "plain", "text": "spam "},
+                   {"type": "link", "text": "https://spam.com"}
+                 ]}
+                """);
+
+            MessageFilter filter = new MessageFilter().withExcludeKeyword("spam");
+            assertThat(filter.matches(msg)).isFalse();
+        }
+    }
 }

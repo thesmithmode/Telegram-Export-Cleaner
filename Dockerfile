@@ -1,10 +1,8 @@
-FROM eclipse-temurin:21-jdk-alpine AS builder
+FROM maven:3.9-eclipse-temurin-21-alpine AS builder
 
 WORKDIR /app
 COPY pom.xml .
 COPY src ./src
-
-RUN apk add --no-cache maven
 
 RUN mvn clean package -DskipTests
 
@@ -15,6 +13,10 @@ WORKDIR /app
 RUN addgroup -g 1000 appgroup && adduser -u 1000 -G appgroup -D appuser
 
 COPY --from=builder /app/target/telegram-cleaner-1.0.0.jar app.jar
+
+# Volumes for Import/Export directories
+VOLUME /data/import
+VOLUME /data/export
 
 USER appuser
 

@@ -3,6 +3,9 @@ services:
     build: .
     ports:
       - "8080:8080"
+    volumes:
+      - ./import:/data/import
+      - ./export:/data/export
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/api/health"]
