@@ -18,7 +18,16 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * Тесты для TelegramController.
+ * Юнит-тесты для {@link TelegramController}.
+ *
+ * <p>Покрывает:</p>
+ * <ul>
+ *   <li>валидацию входных данных (400)</li>
+ *   <li>маппинг исключений на HTTP-статусы</li>
+ *   <li>корректный формат ответа (строки разделены {@code \n}, финальный {@code \n})</li>
+ *   <li>проверку, что пути сервера не утекают в ответ при ошибке</li>
+ *   <li>фильтры по дате, ключевым словам</li>
+ * </ul>
  */
 @DisplayName("TelegramController")
 class TelegramControllerTest {
@@ -34,12 +43,14 @@ class TelegramControllerTest {
         assertThat(controllerWithMock).isNotNull();
     }
 
+    // ─── convert() ───────────────────────────────────────────────────────────
+
     @Nested
-    @DisplayName("convert() - загрузка файла")
+    @DisplayName("convert() — загрузка multipart-файла")
     class Convert {
 
         @Test
-        @DisplayName("Возвращает ошибку при null originalFilename")
+        @DisplayName("Возвращает 400 при null originalFilename")
         void returnsErrorWhenOriginalFilenameIsNull() {
             MockMultipartFile file = new MockMultipartFile(
                     "file", null, "application/json",
@@ -54,7 +65,7 @@ class TelegramControllerTest {
         }
 
         @Test
-        @DisplayName("Возвращает ошибку при пустом файле")
+        @DisplayName("Возвращает 400 при пустом файле")
         void returnsErrorWhenFileIsEmpty() {
             MockMultipartFile file = new MockMultipartFile(
                     "file", "result.json", "application/json", new byte[0]);
@@ -68,7 +79,7 @@ class TelegramControllerTest {
         }
 
         @Test
-        @DisplayName("Возвращает ошибку при неверном расширении файла")
+        @DisplayName("Возвращает 400 при неверном расширении файла")
         void returnsErrorWhenFileExtensionIsNotJson() {
             MockMultipartFile file = new MockMultipartFile(
                     "file", "result.txt", "text/plain", "some content".getBytes());
@@ -82,8 +93,8 @@ class TelegramControllerTest {
         }
 
         @Test
-        @DisplayName("Возвращает 200 при корректном файле")
-        void returns200ForValidFile() throws IOException {
+        @DisplayName("Одно сообщение: ответ содержит строку с финальным \\n")
+        void returns200WithTrailingNewlineForSingleMessage() throws IOException {
             TelegramExporterInterface mockExporter = mock(TelegramExporterInterface.class);
             when(mockExporter.processFile(any(Path.class), any()))
                     .thenReturn(List.of("20250624 Hello"));
@@ -97,6 +108,42 @@ class TelegramControllerTest {
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(response.getBody()).isEqualTo("20250624 Hello\n");
+        }
+
+        @Test
+        @DisplayName("Несколько сообщений разделяются \\n, финальный \\n присутствует")
+        void multipleMessagesAreSeparatedByNewline() throws IOException {
+            TelegramExporterInterface mockExporter = mock(TelegramExporterInterface.class);
+            when(mockExporter.processFile(any(Path.class), any()))
+                    .thenReturn(List.of("20250624 First", "20250624 Second"));
+
+            TelegramController ctrl = new TelegramController(mockExporter);
+            MockMultipartFile file = new MockMultipartFile(
+                    "file", "result.json", "application/json",
+                    "{\"messages\":[]}".getBytes());
+
+            ResponseEntity<?> response = ctrl.convert(file, null, null, null, null);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(response.getBody()).isEqualTo("20250624 First\n20250624 Second\n");
+        }
+
+        @Test
+        @DisplayName("Пустой список сообщений → пустое тело ответа")
+        void emptyMessageList_returnsEmptyBody() throws IOException {
+            TelegramExporterInterface mockExporter = mock(TelegramExporterInterface.class);
+            when(mockExporter.processFile(any(Path.class), any()))
+                    .thenReturn(List.of());
+
+            TelegramController ctrl = new TelegramController(mockExporter);
+            MockMultipartFile file = new MockMultipartFile(
+                    "file", "result.json", "application/json",
+                    "{\"messages\":[]}".getBytes());
+
+            ResponseEntity<?> response = ctrl.convert(file, null, null, null, null);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(response.getBody()).isEqualTo("");
         }
 
         @Test
@@ -151,7 +198,7 @@ class TelegramControllerTest {
         }
 
         @Test
-        @DisplayName("Сообщение об ошибке не содержит путей к файлам сервера")
+        @DisplayName("Пути сервера не утекают в тело ответа при IOException")
         void errorMessageDoesNotLeakServerPaths() throws IOException {
             TelegramExporterInterface mockExporter = mock(TelegramExporterInterface.class);
             when(mockExporter.processFile(any(Path.class), any()))
@@ -171,12 +218,14 @@ class TelegramControllerTest {
         }
     }
 
+    // ─── convertJson() ───────────────────────────────────────────────────────
+
     @Nested
-    @DisplayName("convertJson() - отправка JSON напрямую")
+    @DisplayName("convertJson() — передача JSON в теле запроса")
     class ConvertJson {
 
         @Test
-        @DisplayName("Возвращает ошибку для пустого тела")
+        @DisplayName("Возвращает 400 для пустого тела")
         void returnsErrorForEmptyBody() {
             ResponseEntity<?> response = controller.convertJson("", null, null, null, null);
 
@@ -187,8 +236,8 @@ class TelegramControllerTest {
         }
 
         @Test
-        @DisplayName("Возвращает 200 при корректном JSON")
-        void returns200ForValidJson() throws IOException {
+        @DisplayName("Одно сообщение: ответ содержит строку с финальным \\n")
+        void returns200WithTrailingNewlineForSingleMessage() throws IOException {
             TelegramExporterInterface mockExporter = mock(TelegramExporterInterface.class);
             when(mockExporter.processFile(any(Path.class), any()))
                     .thenReturn(List.of("20250624 Test"));
@@ -228,14 +277,9 @@ class TelegramControllerTest {
             Map<String, String> body = (Map<String, String>) response.getBody();
             assertThat(body.get("error")).contains("startDate");
         }
-    }
-
-    @Nested
-    @DisplayName("convertJson() — дополнительные проверки")
-    class ConvertJsonExtra {
 
         @Test
-        @DisplayName("Возвращает 400 при слишком большом содержимом (> 10MB)")
+        @DisplayName("Возвращает 400 при содержимом больше 10 МБ")
         void returns400WhenBodyTooLarge() {
             String huge = "x".repeat(10 * 1024 * 1024 + 1);
 
@@ -247,6 +291,8 @@ class TelegramControllerTest {
             assertThat(body.get("error")).contains("10MB");
         }
     }
+
+    // ─── health() ────────────────────────────────────────────────────────────
 
     @Nested
     @DisplayName("health()")
