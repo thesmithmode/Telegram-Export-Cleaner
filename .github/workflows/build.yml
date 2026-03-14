@@ -41,10 +41,14 @@ jobs:
           port: ${{ secrets.SERVER_PORT }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
+          # Передаём токен через переменную окружения, а не через shell-подстановку.
+          # Прямая подстановка ${{ secrets.GITHUB_TOKEN }} в тело скрипта опасна:
+          # значение раскрывается до выполнения шага и может появиться в ps aux.
+          envs: GH_TOKEN,GH_ACTOR
           script: |
             mkdir -p /root/telegram-cleaner && cd /root/telegram-cleaner
-            echo "APP_ADMIN_USER=${{ secrets.APP_ADMIN_USER }}" > .env
-            echo "APP_ADMIN_PASSWORD=${{ secrets.APP_ADMIN_PASSWORD }}" >> .env
+            echo "APP_ADMIN_USER=$APP_ADMIN_USER" > .env
+            echo "APP_ADMIN_PASSWORD=$APP_ADMIN_PASSWORD" >> .env
             cat <<EOF > docker-compose.yml
             services:
               telegram-cleaner:
@@ -61,7 +65,12 @@ jobs:
                 healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 10s }
                 restart: unless-stopped
             EOF
-            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
             docker compose pull
             docker compose up -d
             docker image prune -f
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_ACTOR: ${{ github.actor }}
+          APP_ADMIN_USER: ${{ secrets.APP_ADMIN_USER }}
+          APP_ADMIN_PASSWORD: ${{ secrets.APP_ADMIN_PASSWORD }}
