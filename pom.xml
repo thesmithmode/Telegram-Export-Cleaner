@@ -82,6 +82,8 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+
+
     </dependencies>
 
     <build>
@@ -97,7 +99,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-checkstyle-plugin</artifactId>
-                <version>3.3.1</version>
+                <version>3.6.0</version>
                 <configuration>
                     <configLocation>checkstyle.xml</configLocation>
                     <violationSeverity>warning</violationSeverity>

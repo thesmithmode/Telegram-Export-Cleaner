@@ -18,11 +18,11 @@
 ### Запуск проверок
 
 ```bash
-# Проверка стиля кода
-mvn checkstyle:checkstyle
+# Checkstyle запускается автоматически при сборке
+mvn validate
 
 # Покрытие тестами
-mvn test jacoco:report
+mvn test
 
 # Отчёт о покрытии
 open target/site/jacoco/index.html
@@ -34,8 +34,11 @@ open target/site/jacoco/index.html
 # Сборка
 mvn package
 
-# Запуск
-java -jar target/telegram-cleaner-1.0.0.jar -i <путь_к_папке_экспорта>
+# Запуск в режиме CLI
+java -jar target/telegram-cleaner-1.0.0.jar --cli -i <путь_к_папке_экспорта>
+
+# Запуск в режиме Web API (по умолчанию)
+java -jar target/telegram-cleaner-1.0.0.jar
 ```
 
 ## Использование
@@ -112,7 +115,7 @@ YYYYMMDD Текст сообщения
 
 ## Требования
 
-- Java 17+ (рекомендуется 25)
+- Java 21+
 - Maven 3.6+
 
 ## Сборка
