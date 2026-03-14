@@ -4,10 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.util.List;
-
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.mock;
 
 /**
  * Тесты для TelegramExporter - проверка DI-конструктора.
@@ -16,12 +13,12 @@ import static org.mockito.Mockito.mock;
 class TelegramExporterDiTest {
 
     @Test
-    @DisplayName("Конструктор с @Autowired принимает моки ObjectMapper и MessageProcessor")
+    @DisplayName("Конструктор с @Autowired принимает ObjectMapper и MessageProcessor")
     void constructorWithMocksWorks() {
-        ObjectMapper mockMapper = mock(ObjectMapper.class);
-        MessageProcessor mockProcessor = mock(MessageProcessor.class);
+        ObjectMapper realMapper = new ObjectMapper();
+        MessageProcessor realProcessor = new MessageProcessor();
 
-        TelegramExporter exporter = new TelegramExporter(mockMapper, mockProcessor);
+        TelegramExporter exporter = new TelegramExporter(realMapper, realProcessor);
 
         assertThat(exporter).isNotNull();
     }
@@ -40,10 +37,18 @@ class TelegramExporterDiTest {
         ObjectMapper realMapper = new ObjectMapper();
         MessageProcessor realProcessor = new MessageProcessor();
 
-        TelegramExporter exporterWithMocks = new TelegramExporter(realMapper, realProcessor);
+        TelegramExporter exporterWithDi = new TelegramExporter(realMapper, realProcessor);
         TelegramExporter exporterDefault = new TelegramExporter();
 
-        assertThat(exporterWithMocks).isNotNull();
+        assertThat(exporterWithDi).isNotNull();
         assertThat(exporterDefault).isNotNull();
+    }
+
+    @Test
+    @DisplayName("Дефолтный ObjectMapper содержит JavaTimeModule")
+    void defaultObjectMapperHasJavaTimeModule() {
+        ObjectMapper mapper = TelegramExporter.createDefaultObjectMapper();
+        assertThat(mapper.getRegisteredModuleIds())
+                .contains("jackson-datatype-jsr310");
     }
 }
