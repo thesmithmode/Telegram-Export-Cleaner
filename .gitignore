@@ -62,7 +62,7 @@ opencode
 AGENTS.md
 
 # Личные данные для тестирования (real Telegram exports)
-Контекст*/
+Development_context*/
 
 # Credentials
 .env
