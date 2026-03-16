@@ -6,10 +6,6 @@ target/
 
 ### IntelliJ IDEA ###
 .idea/
-.idea/modules.xml
-.idea/jarRepositories.xml
-.idea/compiler.xml
-.idea/libraries/
 *.iws
 *.iml
 *.ipr
@@ -54,9 +50,11 @@ dependency-reduced-pom.xml
 tcleaner_output.txt
 *_output.txt
 nul
+$null
 
 # Контекст AI-агентов (локальные настройки, не для репо)
 opencode.json
+opencode
 .kilo/
 .kilofiles/
 *.kilo.db
@@ -66,7 +64,6 @@ AGENTS.md
 # Личные данные для тестирования (real Telegram exports)
 Контекст*/
 
-# Credentials — НИКОГДА не коммитить секреты!
-# Используйте .env.example (без реальных значений) для документирования переменных.
+# Credentials
 .env
 *.env
