@@ -31,7 +31,7 @@ YYYYMMDD Текст сообщения
 ```
 
 **Что обрабатывается:**
-- Все типы текстовых сущностей: plain, bold, italic, code, pre, strikethrough, spoiler, underline, blockquote, link, text\_link, mention, hashtag, cashtag, email, phone, bot\_command, custom\_emoji, bank\_card
+- Все типы текстовых сущностей: plain, bold, italic, code, pre, strikethrough, spoiler, underline, blockquote, link, text\_link, mention, hashtag, cashtag, email, phone, bot\_command, custom\_emoji (`→ [emoji_<document_id>]`), bank\_card (`→ [CARD]`, номер маскируется)
 - Пропускаются служебные (`type: service`) сообщения
 - Пропускаются сообщения без текста (медиа без подписи и т.п.)
 - Переносы строк внутри сообщения заменяются пробелами (одно сообщение = одна строка)
@@ -56,7 +56,7 @@ TelegramCleanerApplication   ← точка входа (Web / CLI)
 │
 └── Web-режим:
     ├── TelegramController   POST /api/convert, POST /api/convert/json, GET /api/health
-    │   └── TelegramExporter (синхронно, ответ в теле)
+    │   └── TelegramExporterInterface (синхронно, ответ в теле)
     │
     └── FileController       POST /api/files/upload, GET /api/files/{id}/status, GET /api/files/{id}/download
         ├── FileStorageService   (Import/Export папки, @Async обработка)
@@ -75,11 +75,11 @@ TelegramCleanerApplication   ← точка входа (Web / CLI)
 | `MessageFilter` | Fluent-builder фильтр: по дате, ключевым словам, типу, произвольному предикату |
 | `MessageFilterFactory` | Создаёт `MessageFilter` из строковых параметров (CLI / HTTP) |
 | `MarkdownParser` | Конвертирует массив `text_entities` в Markdown |
-| `DateFormatter` | ISO 8601 → `YYYYMMDD` и `YYYYMMDDHHmm` |
+| `DateFormatter` | ISO 8601 → `YYYYMMDD` (используется в выводе). Метод `parseDateTime` (формат `YYYYMMDDHHmm`) присутствует в классе, но в текущей версии не используется |
 | `MessageFormatter` | Собирает итоговую строку `"YYYYMMDD текст"` |
 | `TelegramController` | REST: синхронная конвертация |
 | `FileController` | REST: асинхронная обработка через Import/Export папки |
-| `FileStorageService` | Управление файлами (Import → обработка → Export), очистка по TTL |
+| `FileStorageService` | Управление файлами (Import → обработка → Export), очистка по TTL; инжектирует конкретный `TelegramExporter` (не через интерфейс) |
 | `ProcessingStatusService` | Хранение статусов обработки в Redis (`status:<fileId>`) |
 | `StorageCleanupScheduler` | `@Scheduled`: удаляет устаревшие файлы из Export |
 | `SecurityConfig` | Spring Security: все endpoints публичные, CSRF отключён |
@@ -90,8 +90,10 @@ TelegramCleanerApplication   ← точка входа (Web / CLI)
 
 | Интерфейс | Реализация | Используется в |
 |---|---|---|
-| `TelegramExporterInterface` | `TelegramExporter` | `TelegramController` (только processFile) |
-| `TelegramFileExporterInterface` | `TelegramExporter` | `Main` (processFileToFile) |
+| `TelegramFileExporterInterface` | `TelegramExporter` | `Main` (processFileToFile); extends `TelegramExporterInterface` |
+| `TelegramExporterInterface` | (расширяется через `TelegramFileExporterInterface`) | `TelegramController` (только processFile) |
+
+> `TelegramExporter` объявлен как `implements TelegramFileExporterInterface`, которое само расширяет `TelegramExporterInterface`. Таким образом, `TelegramExporter` реализует оба интерфейса, но явная декларация идёт через `TelegramFileExporterInterface`.
 
 ---
 
@@ -227,7 +229,7 @@ curl -X POST -F "file=@result.json" \
 
 | Код | Описание |
 |---|---|
-| `200` | `text/plain` с обработанными сообщениями |
+| `200` | `text/plain`; заголовок `Content-Disposition: attachment; filename=output.txt` — браузер предложит скачать файл |
 | `400` | Пустой файл / не JSON / невалидный формат даты |
 | `500` | Внутренняя ошибка |
 
@@ -236,6 +238,8 @@ curl -X POST -F "file=@result.json" \
 ### POST /api/convert/json — синхронная конвертация (JSON в теле)
 
 Принимает содержимое `result.json` напрямую в теле запроса. Лимит: **10 МБ**.
+
+> В отличие от `POST /api/convert`, ответ возвращается без заголовка `Content-Disposition` — текст передаётся inline, браузер не инициирует скачивание.
 
 ```bash
 curl -X POST \
@@ -284,10 +288,12 @@ curl http://localhost:8080/api/files/550e8400-e29b-41d4-a716-446655440000/status
 
 | Статус | Описание |
 |---|---|
-| `PENDING` | Файл принят, обработка ещё идёт |
+| `PENDING` | Обработка запущена в фоновом потоке |
 | `COMPLETED` | Файл обработан, можно скачивать |
 | `FAILED` | Ошибка при обработке |
 | `NOT_FOUND` | Файл не найден (удалён по TTL или не загружался) |
+
+> **Важно:** статус `PENDING` устанавливается в Redis в момент начала выполнения асинхронной задачи, а не в момент получения ответа `202`. В короткий промежуток между `202` и стартом задачи запрос к `/status` может вернуть `NOT_FOUND` — это штатное поведение, не ошибка.
 
 ---
 
@@ -334,13 +340,15 @@ curl "http://localhost:8080/api/files/$FILE_ID/download" -o output.md
 | Свойство | Переменная окружения | По умолчанию | Описание |
 |---|---|---|---|
 | `server.port` | — | `8080` | Порт HTTP-сервера |
-| `app.storage.import-path` | — | `/data/import` | Папка входящих файлов |
-| `app.storage.export-path` | — | `/data/export` | Папка готовых файлов |
+| `app.storage.import-path` | — | `/data/import` ¹ | Папка входящих файлов |
+| `app.storage.export-path` | — | `/data/export` ¹ | Папка готовых файлов |
 | `app.storage.export-ttl-minutes` | — | `10` | TTL файлов в Export (мин) |
 | `app.storage.cleanup-interval-ms` | — | `60000` | Интервал очистки (мс) |
 | `spring.servlet.multipart.max-file-size` | — | `50MB` | Макс. размер файла |
 | `spring.data.redis.host` | `REDIS_HOST` | `localhost` | Хост Redis |
 | `spring.data.redis.port` | `REDIS_PORT` | `6379` | Порт Redis |
+
+> ¹ Значения `/data/import` и `/data/export` заданы в `application.properties` и рассчитаны на запуск в Docker. При запуске JAR без `application.properties` класс `StorageConfig` использует системную временную директорию: `<java.io.tmpdir>/tcleaner/import` и `<java.io.tmpdir>/tcleaner/export` (например `/tmp/tcleaner/...` на Linux).
 
 ---
 
@@ -417,7 +425,7 @@ mvn test jacoco:report
 # Открыть: target/site/jacoco/index.html
 ```
 
-- **Checkstyle**: конфигурация в [`checkstyle.xml`](checkstyle.xml). Максимальная длина строки — 120 символов. Star imports запрещены. Javadoc обязателен для public методов.
+- **Checkstyle**: конфигурация в [`checkstyle.xml`](checkstyle.xml). Максимальная длина строки — 120 символов. Star imports запрещены. Javadoc обязателен для public методов. Нарушения выводятся как предупреждения и **не блокируют сборку** (`failOnViolation=false` в `pom.xml`).
 - **JaCoCo**: минимальное покрытие строк — **80%**.
 
 ---
