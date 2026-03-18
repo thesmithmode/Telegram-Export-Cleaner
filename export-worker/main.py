@@ -19,6 +19,9 @@ import logging
 import asyncio
 import signal
 import sys
+import shutil
+import psutil
+from pathlib import Path
 from typing import Optional
 
 from config import settings
@@ -47,6 +50,29 @@ class ExportWorker:
         self.running = False
         self.jobs_processed = 0
         self.jobs_failed = 0
+
+    def log_memory_usage(self, stage: str):
+        """Log current memory usage for monitoring weak server resources."""
+        try:
+            mem = psutil.virtual_memory()
+            cpu_percent = psutil.cpu_percent(interval=0.1)
+            logger.info(
+                f"📊 Resource usage [{stage}]: "
+                f"Memory {mem.percent}% ({mem.available/1024/1024:.0f}MB free), "
+                f"CPU {cpu_percent}%"
+            )
+        except Exception as e:
+            logger.warning(f"Could not get resource stats: {e}")
+
+    async def cleanup_temp_files(self, task_id: str):
+        """Delete temporary files for a task to prevent disk fill."""
+        try:
+            temp_dir = Path(f"/tmp/export_{task_id}")
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir)
+                logger.debug(f"Cleaned up temp files for task {task_id}")
+        except Exception as e:
+            logger.warning(f"Failed to cleanup temp files for {task_id}: {e}")
 
     async def initialize(self) -> bool:
         """
@@ -90,6 +116,7 @@ class ExportWorker:
         """
         try:
             logger.info(f"📝 Processing job {job.task_id} (chat {job.chat_id})")
+            self.log_memory_usage("JOB_START")
 
             # Mark job as processing
             await self.queue_consumer.mark_job_processing(job.task_id)
@@ -151,6 +178,8 @@ class ExportWorker:
                 logger.info(f"✅ Job {job.task_id} completed ({len(messages)} messages)")
                 await self.queue_consumer.mark_job_completed(job.task_id)
                 self.jobs_processed += 1
+                self.log_memory_usage("JOB_DONE")
+                await self.cleanup_temp_files(job.task_id)
                 return True
 
             else:
@@ -158,12 +187,16 @@ class ExportWorker:
                 logger.error(f"❌ {error}")
                 await self.queue_consumer.mark_job_failed(job.task_id, error)
                 self.jobs_failed += 1
+                self.log_memory_usage("JOB_FAILED")
+                await self.cleanup_temp_files(job.task_id)
                 return True
 
         except Exception as e:
             logger.error(f"❌ Unexpected error in job {job.task_id}: {e}", exc_info=True)
             await self.queue_consumer.mark_job_failed(job.task_id, str(e))
             self.jobs_failed += 1
+            self.log_memory_usage("JOB_ERROR")
+            await self.cleanup_temp_files(job.task_id)
             return True
 
     async def run(self):
