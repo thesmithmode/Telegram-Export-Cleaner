@@ -61,10 +61,6 @@ class JavaBotClient:
         Returns:
             True if sent successfully, False otherwise
         """
-        if not self.api_key:
-            logger.error("❌ JAVA_API_KEY not configured")
-            return False
-
         # Create response object
         response = ExportResponse(
             task_id=task_id,
@@ -78,10 +74,9 @@ class JavaBotClient:
 
         # Prepare request
         url = f"{self.base_url}/api/export/callback"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
-        }
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
 
         try:
             response_json = response.model_dump(exclude_none=True)
