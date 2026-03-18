@@ -23,7 +23,7 @@ import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
  *
  * <p>После успешного экспорта Python-воркер отправит пользователю файл напрямую через Bot API.</p>
  *
- * <p>Spring Boot starter автоматически регистрирует бот и запускает long polling.</p>
+ * <p>Регистрация и инициализация производится через {@link BotInitializer}.</p>
  */
 @Component
 @ConditionalOnExpression("'${telegram.bot.token:}' != ''")
