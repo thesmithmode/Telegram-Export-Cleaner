@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     LOG_FORMAT: str = "json"  # "json" or "text"
 
     class Config:
+        """Pydantic configuration for Settings class.
+
+        Specifies that environment variables should be loaded from .env file
+        and that configuration keys are case-sensitive (TELEGRAM_API_ID != telegram_api_id).
+        """
         env_file = ".env"
         case_sensitive = True
 
