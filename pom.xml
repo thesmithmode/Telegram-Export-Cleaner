@@ -102,6 +102,13 @@
             <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
 
+        <!-- Telegram Bot (long polling + Spring Boot auto-registration) -->
+        <dependency>
+            <groupId>org.telegram</groupId>
+            <artifactId>telegrambots-spring-boot-starter</artifactId>
+            <version>6.9.7</version>
+        </dependency>
+
         <!-- Testcontainers: Redis (для интеграционных тестов) -->
         <dependency>
             <groupId>org.testcontainers</groupId>
