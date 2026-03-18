@@ -5,11 +5,48 @@ Defines data structures for:
 - Export requests from Java queue
 - Export responses to Java API
 - Message entity formatting
+- Error code enumeration
 """
 
 from typing import List, Optional, Dict, Any
 from datetime import datetime
+from enum import Enum
 from pydantic import BaseModel, Field
+
+
+class ErrorCode(str, Enum):
+    """Export error codes for job failure categorization.
+
+    Error codes help identify failure types and determine appropriate handling:
+
+    Permanent Failures (don't retry):
+    - CHAT_NOT_ACCESSIBLE: Chat was deleted or user was kicked
+    - CHAT_PRIVATE: Chat is private or user has no access
+    - CHAT_ADMIN_REQUIRED: Exporting chat requires admin rights
+    - INVALID_CHAT_ID: Invalid chat ID format or syntax error
+
+    Temporary Failures (may retry):
+    - EXPORT_ERROR: Unexpected error during export (partial results sent)
+    - NETWORK_ERROR: Network connectivity issue
+    - TIMEOUT: Job exceeded maximum time limit
+
+    Rate Limiting (auto-retry with backoff):
+    - RATE_LIMIT: Telegram FloodWait (auto-retried with exponential backoff)
+    """
+
+    # Non-retryable errors
+    CHAT_NOT_ACCESSIBLE = "CHAT_NOT_ACCESSIBLE"
+    CHAT_PRIVATE = "CHAT_PRIVATE"
+    CHAT_ADMIN_REQUIRED = "CHAT_ADMIN_REQUIRED"
+    INVALID_CHAT_ID = "INVALID_CHAT_ID"
+
+    # Retryable errors
+    EXPORT_ERROR = "EXPORT_ERROR"
+    NETWORK_ERROR = "NETWORK_ERROR"
+    TIMEOUT = "TIMEOUT"
+
+    # Rate limiting
+    RATE_LIMIT = "RATE_LIMIT"
 
 
 class ExportRequest(BaseModel):
