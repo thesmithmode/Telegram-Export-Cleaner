@@ -191,9 +191,11 @@ class MessageConverter:
                 if media_type:
                     exported.media_type = media_type
 
-                    # Store filename
-                    if hasattr(message.media, 'file_name') and message.media.file_name:
-                        setattr(exported, media_type, message.media.file_name)
+                    # Store filename only for known model fields
+                    known_media_fields = {"photo", "video", "audio", "voice", "document", "animation", "sticker"}
+                    if media_type in known_media_fields:
+                        if hasattr(message.media, 'file_name') and message.media.file_name:
+                            setattr(exported, media_type, message.media.file_name)
 
                     # Media dimensions
                     if hasattr(message.media, 'width'):
