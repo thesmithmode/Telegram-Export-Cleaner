@@ -11,7 +11,7 @@ Defines data structures for:
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class ErrorCode(str, Enum):
@@ -52,16 +52,8 @@ class ErrorCode(str, Enum):
 class ExportRequest(BaseModel):
     """Request to export chat messages."""
 
-    task_id: str = Field(..., description="Unique task ID from Java")
-    user_id: int = Field(..., description="Telegram user ID requesting export")
-    chat_id: int = Field(..., description="Telegram chat ID to export")
-    limit: int = Field(default=0, description="Max messages (0=all)")
-    offset_id: int = Field(default=0, description="Start from message ID")
-    from_date: Optional[str] = Field(None, description="ISO date filter")
-    to_date: Optional[str] = Field(None, description="ISO date filter")
-
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "task_id": "export_12345",
                 "user_id": 123456789,
@@ -72,19 +64,22 @@ class ExportRequest(BaseModel):
                 "to_date": "2025-12-31T23:59:59"
             }
         }
+    )
+
+    task_id: str = Field(..., description="Unique task ID from Java")
+    user_id: int = Field(..., description="Telegram user ID requesting export")
+    chat_id: int = Field(..., description="Telegram chat ID to export")
+    limit: int = Field(default=0, description="Max messages (0=all)")
+    offset_id: int = Field(default=0, description="Start from message ID")
+    from_date: Optional[str] = Field(None, description="ISO date filter")
+    to_date: Optional[str] = Field(None, description="ISO date filter")
 
 
 class MessageEntity(BaseModel):
     """Text entity (formatting, links, mentions)."""
 
-    type: str = Field(..., description="Entity type: bold, italic, code, url, etc")
-    offset: int = Field(..., description="Start offset in UTF-8 characters")
-    length: int = Field(..., description="Length in UTF-8 characters")
-    url: Optional[str] = Field(None, description="URL for text_url/custom_emoji")
-    user_id: Optional[int] = Field(None, description="User ID for text_mention")
-
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "examples": [
                 {"type": "bold", "offset": 0, "length": 4},
                 {"type": "url", "offset": 5, "length": 10},
@@ -96,10 +91,33 @@ class MessageEntity(BaseModel):
                 }
             ]
         }
+    )
+
+    type: str = Field(..., description="Entity type: bold, italic, code, url, etc")
+    offset: int = Field(..., description="Start offset in UTF-8 characters")
+    length: int = Field(..., description="Length in UTF-8 characters")
+    url: Optional[str] = Field(None, description="URL for text_url/custom_emoji")
+    user_id: Optional[int] = Field(None, description="User ID for text_mention")
 
 
 class ExportedMessage(BaseModel):
     """Single exported message in result.json format."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "id": 123,
+                "type": "message",
+                "date": "2025-06-24T15:29:46",
+                "text": "Hello, world!",
+                "from_user": "John Doe",
+                "from_id": {"peer_type": "user", "peer_id": 456},
+                "text_entities": [
+                    {"type": "bold", "offset": 0, "length": 5}
+                ]
+            }
+        }
+    )
 
     id: int = Field(..., description="Message ID")
     type: str = Field(default="message", description="Always 'message'")
@@ -129,39 +147,12 @@ class ExportedMessage(BaseModel):
     height: Optional[int] = Field(None, description="Media height")
     duration: Optional[int] = Field(None, description="Media duration (seconds)")
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "id": 123,
-                "type": "message",
-                "date": "2025-06-24T15:29:46",
-                "text": "Hello, world!",
-                "from_user": "John Doe",
-                "from_id": {"peer_type": "user", "peer_id": 456},
-                "text_entities": [
-                    {"type": "bold", "offset": 0, "length": 5}
-                ]
-            }
-        }
-
 
 class ExportResponse(BaseModel):
     """Response from export worker to Java API."""
 
-    task_id: str = Field(..., description="Original task ID")
-    status: str = Field(
-        ...,
-        description="completed, failed, in_progress",
-        pattern="^(completed|failed|in_progress)$"
-    )
-    message_count: int = Field(default=0, description="Number of messages exported")
-    messages: List[ExportedMessage] = Field(default_factory=list, description="Exported messages")
-    error: Optional[str] = Field(None, description="Error message if failed")
-    error_code: Optional[str] = Field(None, description="Error code for retries")
-    exported_at: Optional[str] = Field(None, description="Export timestamp")
-
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "examples": [
                 {
                     "task_id": "export_12345",
@@ -185,16 +176,28 @@ class ExportResponse(BaseModel):
                 }
             ]
         }
+    )
+
+    task_id: str = Field(..., description="Original task ID")
+    status: str = Field(
+        ...,
+        description="completed, failed, in_progress",
+        pattern="^(completed|failed|in_progress)$"
+    )
+    message_count: int = Field(default=0, description="Number of messages exported")
+    messages: List[ExportedMessage] = Field(default_factory=list, description="Exported messages")
+    error: Optional[str] = Field(None, description="Error message if failed")
+    error_code: Optional[str] = Field(None, description="Error code for retries")
+    exported_at: Optional[str] = Field(None, description="Export timestamp")
 
 
 class QueueJob(BaseModel):
     """Job from Redis queue."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     id: str = Field(..., description="Job ID")
     func: str = Field(..., description="Function to call")
     args: tuple = Field(default_factory=tuple)
     kwargs: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.now)
-
-    class Config:
-        arbitrary_types_allowed = True
