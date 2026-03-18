@@ -33,7 +33,34 @@ nano .env
 docker-compose up -d
 ```
 
-### 4. Run Locally (Python Worker)
+The system will start with:
+- **Java Spring Boot API** on `localhost:8080` (REST endpoints)
+- **Telegram Bot** via long polling (Spring Boot starter)
+- **Python Worker** processing export jobs
+- **Redis** message queue
+
+### 4. Using the Telegram Bot
+
+Once running, message your bot on Telegram:
+
+```
+/start          - Welcome message & instructions
+/export <id>    - Export chat (use: /export -100123456789)
+/help           - Show available commands
+```
+
+Example usage:
+```
+User: /export -100123456789
+Bot: Task accepted! ID: export_abc123...
+      Chat: -100123456789
+
+[Worker processes export...]
+
+Bot: ✅ Export complete! [sends .txt file]
+```
+
+### 5. Run Locally (Python Worker)
 
 ```bash
 # Install dependencies
@@ -58,20 +85,32 @@ See [GITHUB_SECRETS.md](GITHUB_SECRETS.md) for detailed security setup.
 ## Architecture
 
 ```
-┌─────────────────┐
-│   Java Bot      │  (Spring Boot 3.x)
-│   API Server    │
-└────────┬────────┘
-         │ REST API
-┌────────▼────────┐
-│     Redis       │  (Message Queue)
-│   Job Queue     │
-└────────┬────────┘
-         │ Queue Jobs
-┌────────▼────────┐
-│  Export Worker  │  (Python 3.11+)
-│  (Pyrogram)     │  Parallel Processing
-└─────────────────┘
+┌──────────────────────┐
+│   Telegram User      │
+└──────────┬───────────┘
+           │ /export <chat_id>
+┌──────────▼───────────┐
+│   Java Bot           │  (Spring Boot 3.x)
+│ (telegrambots 6.9.7) │  Long Polling
+└──────────┬───────────┘
+           │ RPUSH telegram_export
+┌──────────▼───────────┐
+│     Redis           │  (Message Queue)
+│   Job Queue         │
+└──────────┬───────────┘
+           │ BLPOP telegram_export
+┌──────────▼───────────┐
+│  Export Worker       │  (Python 3.11+)
+│  (Pyrogram)         │  Parallel Processing
+└──────────┬───────────┘
+           │ POST /api/convert
+┌──────────▼───────────┐
+│   Java REST API      │  (Spring Boot)
+│   File Processing    │  Cleaning & Converting
+└──────────┬───────────┘
+           │ Send file
+           ▼
+        Telegram User
 ```
 
 ## Documentation
@@ -149,18 +188,24 @@ See [.env.example](.env.example) for full reference.
 ### Critical Credentials
 
 ```env
-# Telegram API (from my.telegram.org)
+# Telegram API credentials (from my.telegram.org)
 TELEGRAM_API_ID=your_api_id
 TELEGRAM_API_HASH=your_api_hash
 
-# Your phone number
+# Phone number for Pyrogram client authentication
 TELEGRAM_PHONE_NUMBER=+1234567890
 
 # Bot token (from @BotFather)
+# Used by Java bot for long polling and sending results to users
 TELEGRAM_BOT_TOKEN=your_bot_token
 
-# Java API secret
+# Java REST API secret key (for python worker authentication)
 JAVA_API_KEY=your_secret_key
+
+# Redis configuration
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_QUEUE_NAME=telegram_export
 ```
 
 ## Troubleshooting
@@ -209,4 +254,4 @@ Proprietary - See LICENSE file
 ---
 
 **Status**: ✅ Production Ready
-**Last Updated**: 2025-06-24
+**Last Updated**: 2026-03-18

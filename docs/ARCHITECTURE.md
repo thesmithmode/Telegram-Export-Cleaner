@@ -30,21 +30,16 @@
     ├─────────────────────────────────────────────────────────────┤
     │                                                             │
     │  ┌──────────────────────────────────────────────────────┐  │
-    │  │          TelegramBotService                          │  │
-    │  │  ├─ TelegramBotController (Webhook/Polling)        │  │
-    │  │  ├─ TelegramUpdateHandler (Parse messages)         │  │
-    │  │  ├─ TelegramMenuBuilder (InlineKeyboard)           │  │
-    │  │  ├─ UserSessionManager (State management)          │  │
-    │  │  └─ TelegramClientProxy (API calls)                │  │
+    │  │          Telegram Bot (telegrambots 6.9.7)          │  │
+    │  │  ├─ ExportBot (long polling)                        │  │
+    │  │  │  ├─ /start — instructions                        │  │
+    │  │  │  ├─ /export <chat_id> — submit task             │  │
+    │  │  │  └─ /help — help message                         │  │
+    │  │  └─ ExportJobProducer                               │  │
+    │  │     └─ RPUSH task_id JSON to redis queue            │  │
     │  └──────────────────────────────────────────────────────┘  │
     │                     │                                        │
-    │                     ▼                                        │
-    │  ┌──────────────────────────────────────────────────────┐  │
-    │  │          Redis Queue Handler                         │  │
-    │  │  ├─ ExportTaskQueue (publish tasks)                 │  │
-    │  │  ├─ ExportResultListener (listen results)           │  │
-    │  │  └─ SessionStateManager (user state)                │  │
-    │  └──────────────────────────────────────────────────────┘  │
+    │                     ▼ RPUSH telegram_export                 │
     │                     │                                        │
     │                     ▼                                        │
     │  ┌──────────────────────────────────────────────────────┐  │
@@ -119,44 +114,34 @@
 
 ## 📦 Компоненты
 
-### 1. Java Layer - Telegram Bot Service
+### 1. Java Layer - Telegram Bot
 
-#### TelegramBotService
-- **责任:** Основной сервис для управления Telegram Bot
+#### ExportBot (com.tcleaner.bot.ExportBot)
+- **责任:** Spring Boot компонент для Telegram Bot (telegrambots-spring-boot-starter 6.9.7)
 - **Функции:**
-  - Инициализация бота
-  - Управление webhook/polling
-  - Маршрутизация обновлений
-- **Dependencies:** java-telegram-bot-api, Spring, Redis
+  - Long polling для получения обновлений от Telegram
+  - Обработка команд `/start`, `/help`, `/export <chat_id>`
+  - Отправка сообщений пользователю
+- **Аннотации:** `@Component`, `@ConditionalOnExpression("'${telegram.bot.token:}' != ''")`
+- **Dependencies:** TelegramLongPollingBot, Spring Boot, ExportJobProducer
 
-#### TelegramUpdateHandler
-- **责任:** Обработка входящих сообщений/нажатий кнопок
+#### ExportJobProducer (com.tcleaner.bot.ExportJobProducer)
+- **責任:** Добавление задач в Redis очередь
 - **Функции:**
-  - Парсинг типа обновления (message, callback_query)
-  - Определение текущего состояния пользователя
-  - Маршрутизация к нужному handler'у
-
-#### TelegramMenuBuilder
-- **责任:** Создание интерактивных меню
-- **Функции:**
-  - Построение InlineKeyboardMarkup (кнопки)
-  - Кеширование списков чатов
-  - Форматирование сообщений с markdown
-
-#### UserSessionManager
-- **责任:** Управление состоянием пользователя
-- **Функции:**
-  - Хранение состояния (выбран ли чат, период, и т.д.)
-  - Валидация переходов между состояниями
-  - Очистка старых сессий
-- **Storage:** Redis Hashes
-
-#### ExportTaskQueue
-- **责任:** Взаимодействие с Redis очередью
-- **Функции:**
-  - Добавление задач в export-tasks
-  - Чтение результатов из export-results
-  - Управление TTL задач
+  - Создание JSON-задачи с уникальным task_id
+  - RPUSH в Redis queue `telegram_export`
+  - Логирование добавленных задач
+- **Формат JSON:**
+  ```json
+  {
+    "task_id": "export_abc123...",
+    "user_id": 12345,
+    "user_chat_id": 12345,
+    "chat_id": -100123456789,
+    "limit": 0,
+    "offset_id": 0
+  }
+  ```
 
 ---
 
@@ -206,43 +191,31 @@
 
 ### 3. Data Layer - Redis
 
-#### Streams (Queues)
+#### List Queue (Jobs)
 ```
-export-tasks
-├─ Структура:
-│  ├─ user_id: "123456789"
-│  ├─ chat_id: "-1001234567890"
-│  ├─ date_from: "2024-01-01"
-│  ├─ date_to: "2024-12-31"
-│  └─ filter_keywords: "keyword1,keyword2" (опционально)
-└─ TTL: 24 часа
-
-export-results
-├─ Структура:
-│  ├─ task_id: "123-abc"
-│  ├─ file_id: "uuid-of-file"
-│  ├─ status: "COMPLETED" | "FAILED"
-│  └─ error: "Error message if failed"
-└─ TTL: 1 час (для результатов)
+telegram_export (Redis List)
+├─ Structure (JSON per element):
+│  ├─ task_id:      "export_abc123..."
+│  ├─ user_id:      12345
+│  ├─ user_chat_id: 12345 (where to send result)
+│  ├─ chat_id:      -100123456789 (which chat to export)
+│  ├─ limit:        0
+│  └─ offset_id:    0
+├─ Operations:
+│  ├─ RPUSH — add job (by ExportJobProducer)
+│  ├─ BLPOP — get job (by Python Worker)
+│  └─ No TTL (jobs deleted after processing)
 ```
 
-#### Hashes (User Sessions)
+#### Other Keys
 ```
-user-sessions:{user_id}
-├─ current_state: "SELECT_CHAT" | "SELECT_DATE" | "PROCESSING"
-├─ selected_chat_id: "-1001234567890"
-├─ selected_chat_title: "My Channel"
-├─ date_from: "2024-01-01"
-├─ date_to: "2024-12-31"
-└─ created_at: "timestamp"
+status:{fileId}
+├─ Value: PENDING | PROCESSING | COMPLETED | FAILED
+├─ Used by: ProcessingStatusService
+└─ TTL: app.storage.export-ttl-minutes (10 min default)
 ```
 
-#### Keys
-```
-task-result:{task_id}
-├─ Хранит file_id для быстрого доступа
-└─ TTL: 1 час
-```
+**Note:** The old Stream-based architecture (`export-tasks`, `export-results`) is not implemented yet. Current implementation uses simple List queue.
 
 ---
 
@@ -275,58 +248,36 @@ task-result:{task_id}
 
 ## 🔄 Data Flow
 
-### 1. User initiates export
+### 1. User requests export via Telegram Bot
 
 ```
-User: "/start" или "Начать экспорт"
+User: /export -100123456789
   ↓
-TelegramUpdateHandler.onMessage()
+ExportBot.onUpdateReceived(Update)
   ↓
-UserSessionManager.createSession(user_id)
+ExportBot.handleExport(chatId, userId, text)
   ↓
-TelegramMenuBuilder.buildChatSelectionMenu()
+Validate chat_id format (must be number)
   ↓
-sendMessage с InlineKeyboard (список чатов)
+ExportJobProducer.enqueue(userId, userChatId, targetChatId)
+  ↓
+Create JSON with task_id, user_id, user_chat_id, chat_id
+  ↓
+RPUSH telegram_export <JSON>
+  ↓
+Bot: "Task accepted! ID: export_abc123..."
 ```
 
-### 2. User selects chat
-
-```
-User: нажимает на чат из списка
-  ↓
-TelegramUpdateHandler.onCallbackQuery()
-  ↓
-UserSessionManager.setState(CHAT_SELECTED, chat_id)
-  ↓
-TelegramMenuBuilder.buildDateRangeMenu()
-  ↓
-sendMessage с кнопками выбора даты (или по умолчанию)
-```
-
-### 3. User confirms parameters
-
-```
-User: выбирает дату или нажимает "Продолжить"
-  ↓
-UserSessionManager.setState(PROCESSING)
-  ↓
-ExportTaskQueue.addTask(user_id, chat_id, params)
-  ↓
-task_id = redis.xadd('export-tasks', task_data)
-  ↓
-sendMessage "⏳ Обрабатываю... Номер в очереди: 42"
-```
-
-### 4. Python Worker processes task
+### 2. Python Worker processes task
 
 ```
 python main.py (listening to Redis)
   ↓
-redis.xread('export-tasks')
+BLPOP telegram_export (blocking read)
   ↓
-Task received: {user_id, chat_id, date_from, date_to}
+Task received: {user_id, user_chat_id, chat_id, task_id}
   ↓
-pyrogram.get_chat_history(chat_id, offset_date=date_from, limit=100000)
+Pyrogram client: authenticate → get_chat_history(chat_id)
   ↓
 Convert messages to result.json format
   ↓
@@ -334,17 +285,15 @@ POST /api/files/upload (multipart/form-data)
   ↓
 Java returns: {fileId: 'uuid'}
   ↓
-redis.xadd('export-results', {task_id, file_id, status})
-  ↓
-redis.xdel('export-tasks', task_id)
+Save result to Redis (task_id → fileId mapping) [optional]
 ```
 
-### 5. Java processes file
+### 3. Java receives and processes export
 
 ```
 FileController.uploadFile(MultipartFile)
   ↓
-FileStorageService.uploadFile() → saved to Import/{uuid}.json
+FileStorageService.uploadFile() → Import/{uuid}.json
   ↓
 FileStorageService.processFileAsync(fileId)
   ↓
@@ -352,26 +301,26 @@ TelegramExporter.processFile() → MessageProcessor
   ↓
 File saved to Export/{uuid}.md
   ↓
-ProcessingStatusService.setStatus(COMPLETED)
+ProcessingStatusService.setStatus(fileId, COMPLETED)
 ```
 
-### 6. Bot retrieves result and sends to user
+### 4. Java Bot sends result to user [Future]
 
 ```
-ExportResultListener (background task)
+Background polling thread (future enhancement)
   ↓
-redis.xread('export-results') → получить результат
-  ↓
-UserSessionManager.getSession(user_id)
+Check export result status
   ↓
 FileStorageService.getFile(fileId)
   ↓
-Download file → cleaned_export.md
+Download file → cleaned_export.txt
   ↓
-TelegramBotService.sendDocument(user_id, file)
+ExportBot.sendDocument(user_chat_id, file)
   ↓
-User receives file: "✅ Вот ваш экспорт!"
+User receives: "✅ Export complete! [sends file]"
 ```
+
+**Note:** Step 4 is a future enhancement. Currently, users must poll the Java API status manually.
 
 ---
 
