@@ -28,7 +28,7 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --appendfsync always
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -71,10 +71,10 @@ services:
       - JAVA_API_BASE_URL=${JAVA_API_BASE_URL:-http://java-bot:8080}
       - JAVA_API_KEY=${JAVA_API_KEY}
 
-      # Worker
+      # Worker (optimized for weak server: 1 core, 3-4GB RAM)
       - WORKER_NAME=${WORKER_NAME:-export-worker-docker}
-      - MAX_WORKERS=${MAX_WORKERS:-4}
-      - JOB_TIMEOUT=${JOB_TIMEOUT:-3600}
+      - MAX_WORKERS=${MAX_WORKERS:-1}
+      - JOB_TIMEOUT=${JOB_TIMEOUT:-1800}
       - MAX_RETRIES=${MAX_RETRIES:-3}
       - RETRY_BASE_DELAY=${RETRY_BASE_DELAY:-1.0}
       - RETRY_MAX_DELAY=${RETRY_MAX_DELAY:-32.0}
