@@ -94,3 +94,5 @@ env/
 # Credentials
 .env
 *.env
+# Pyrogram session files
+export-worker/session/
