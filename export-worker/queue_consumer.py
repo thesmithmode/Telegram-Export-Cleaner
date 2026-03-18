@@ -90,8 +90,8 @@ class QueueConsumer:
             raise RuntimeError("Not connected to Redis")
 
         try:
-            # BLPOP: blocks until data available (timeout 0 = forever)
-            result = await self.redis_client.blpop(self.queue_name, timeout=0)
+            # BLPOP: blocks with timeout so SIGTERM can be handled
+            result = await self.redis_client.blpop(self.queue_name, timeout=5)
 
             if not result:
                 return None

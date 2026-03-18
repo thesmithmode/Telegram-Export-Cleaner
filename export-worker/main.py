@@ -160,7 +160,7 @@ class ExportWorker:
                 await self.java_client.send_response(
                     task_id=job.task_id,
                     status="failed",
-                    messages=messages[:100],  # Send partial results
+                    messages=messages,  # Send all messages exported so far
                     error=error,
                     error_code="EXPORT_ERROR"
                 )
