@@ -29,10 +29,13 @@ class Settings(BaseSettings):
     JAVA_API_BASE_URL: str = "http://java-bot:8080"
     JAVA_API_KEY: str = ""
 
-    # Telegram API
+    # Telegram API (MTProto - for Pyrogram export)
     TELEGRAM_API_ID: int = 0
     TELEGRAM_API_HASH: str = ""
     TELEGRAM_PHONE: str = ""
+
+    # Telegram Bot API (for sending results back to users)
+    TELEGRAM_BOT_TOKEN: Optional[str] = None
 
     # Pyrogram
     SESSION_NAME: str = "export_worker"  # Will be saved in session/ folder

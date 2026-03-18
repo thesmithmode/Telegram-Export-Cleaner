@@ -130,7 +130,8 @@ class ExportWorker:
                     status="failed",
                     messages=[],
                     error=error,
-                    error_code="CHAT_NOT_ACCESSIBLE"
+                    error_code="CHAT_NOT_ACCESSIBLE",
+                    user_chat_id=job.user_chat_id,
                 )
                 await self.queue_consumer.mark_job_failed(job.task_id, error)
                 return True
@@ -162,16 +163,18 @@ class ExportWorker:
                     status="failed",
                     messages=messages,  # Send all messages exported so far
                     error=error,
-                    error_code="EXPORT_ERROR"
+                    error_code="EXPORT_ERROR",
+                    user_chat_id=job.user_chat_id,
                 )
                 await self.queue_consumer.mark_job_failed(job.task_id, error)
                 return True
 
-            # Send results to Java Bot
+            # Send results to Java API, deliver cleaned text to user
             success = await self.java_client.send_response(
                 task_id=job.task_id,
                 status="completed",
                 messages=messages,
+                user_chat_id=job.user_chat_id,
             )
 
             if success:
