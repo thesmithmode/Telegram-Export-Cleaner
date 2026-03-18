@@ -57,8 +57,6 @@ class QueueConsumer:
             self.redis_client = await redis.from_url(
                 self.redis_url,
                 decode_responses=True,
-                socket_keepalive=True,
-                socket_keepalive_interval=60,
             )
 
             # Test connection
