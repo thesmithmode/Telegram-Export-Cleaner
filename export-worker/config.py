@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     # Worker
     WORKER_NAME: str = os.getenv("WORKER_NAME", "export-worker-1")
     MAX_WORKERS: int = int(os.getenv("MAX_WORKERS", "1"))
-    JOB_TIMEOUT: int = int(os.getenv("JOB_TIMEOUT", "3600"))  # 1 hour
+    JOB_TIMEOUT: int = int(os.getenv("JOB_TIMEOUT", "1800"))  # 30 minutes (optimized for weak server)
 
     # Retry policy
     MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "3"))
