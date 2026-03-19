@@ -183,7 +183,7 @@ class TestConcurrency:
 
         # Convert all concurrently
         async def convert_message(msg):
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             return await loop.run_in_executor(None, MessageConverter.convert_message, msg)
 
         start = time.time()
