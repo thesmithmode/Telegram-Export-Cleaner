@@ -314,4 +314,46 @@ public class FileStorageService implements FileStorageServiceInterface {
         log.info("Асинхронная обработка файла: {}", fileId);
         return CompletableFuture.completedFuture(processFile(fileId));
     }
+
+    // === Alias-методы для реализации FileStorageServiceInterface ===
+
+    @Override
+    public String storeFile(Path sourcePath) {
+        try {
+            return uploadFile(sourcePath);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to store file: " + sourcePath, e);
+        }
+    }
+
+    @Override
+    public String storeFile(Object file) {
+        if (!(file instanceof MultipartFile)) {
+            throw new IllegalArgumentException("Expected MultipartFile, got: " + file.getClass().getName());
+        }
+        try {
+            return uploadFile((MultipartFile) file);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to store file", e);
+        }
+    }
+
+    @Override
+    public Path getFile(String fileId) {
+        try {
+            return getExportFile(fileId);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to get file: " + fileId, e);
+        }
+    }
+
+    @Override
+    public boolean fileExists(String fileId) {
+        return exportFileExists(fileId);
+    }
+
+    @Override
+    public void cleanupOldFiles() {
+        cleanupExportDirectory();
+    }
 }
