@@ -93,7 +93,7 @@ public class ExportBot extends TelegramLongPollingBot {
     }
 
     /**
-     * Обрабатывает команду /export <chat_id>.
+     * Обрабатывает команду /export &lt;chat_id&gt;.
      *
      * @param chatId Telegram chat ID пользователя (куда отвечать)
      * @param userId Telegram user ID пользователя

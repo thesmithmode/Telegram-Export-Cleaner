@@ -47,7 +47,9 @@ public class TelegramController {
 
     private static final Logger log = LoggerFactory.getLogger(TelegramController.class);
 
-    /** Максимальный размер JSON-тела для {@code /api/convert/json} (символы, не байты). */
+    /**
+     * Максимальный размер JSON-тела для {@code /api/convert/json} (символы, не байты).
+     */
     private static final int MAX_JSON_BODY_CHARS = 10 * 1024 * 1024; // 10 MB
 
     private final TelegramExporterInterface exporter;

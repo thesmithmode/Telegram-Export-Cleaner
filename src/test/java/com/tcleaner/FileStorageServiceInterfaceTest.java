@@ -32,7 +32,7 @@ class FileStorageServiceInterfaceTest {
      * Interface contract: storeFile returns unique identifier
      */
     @Test
-    void uploadFile_shouldReturnNonNullFileId() {
+    void uploadFile_shouldReturnNonNullFileId() throws NoSuchMethodException {
         // Given
         FileStorageService service = new FileStorageService(
             mockConfig, mockExporter, mockStatusService
@@ -48,7 +48,7 @@ class FileStorageServiceInterfaceTest {
      * Interface contract: processFile is synchronous operation
      */
     @Test
-    void processFile_shouldBeSynchronous() {
+    void processFile_shouldBeSynchronous() throws NoSuchMethodException {
         // Given
         FileStorageService service = new FileStorageService(
             mockConfig, mockExporter, mockStatusService
@@ -63,7 +63,7 @@ class FileStorageServiceInterfaceTest {
      * Interface contract: processAsync returns Future for non-blocking execution
      */
     @Test
-    void processFileAsync_shouldReturnCompletableFuture() {
+    void processFileAsync_shouldReturnCompletableFuture() throws NoSuchMethodException {
         // Given
         FileStorageService service = new FileStorageService(
             mockConfig, mockExporter, mockStatusService
@@ -78,7 +78,7 @@ class FileStorageServiceInterfaceTest {
      * Interface contract: cleanupOldFiles performs TTL-based cleanup
      */
     @Test
-    void cleanupExportDirectory_shouldExist() {
+    void cleanupExportDirectory_shouldExist() throws NoSuchMethodException {
         // Given
         FileStorageService service = new FileStorageService(
             mockConfig, mockExporter, mockStatusService
@@ -93,7 +93,7 @@ class FileStorageServiceInterfaceTest {
      * Interface contract: getFile returns file by identifier
      */
     @Test
-    void getExportFile_shouldReturnPath() {
+    void getExportFile_shouldReturnPath() throws NoSuchMethodException {
         // Given
         FileStorageService service = new FileStorageService(
             mockConfig, mockExporter, mockStatusService
