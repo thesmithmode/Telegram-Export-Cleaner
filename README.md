@@ -93,7 +93,7 @@ Use GitHub Secrets for all sensitive values in CI/CD pipelines.
            │ /export <chat_id>
 ┌──────────▼───────────┐
 │   Java Bot           │  (Spring Boot 3.x)
-│ (telegrambots 6.9.7) │  Long Polling
+│ (telegrambots 6.9.0) │  Long Polling
 └──────────┬───────────┘
            │ RPUSH telegram_export
 ┌──────────▼───────────┐
