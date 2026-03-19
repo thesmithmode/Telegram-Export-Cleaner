@@ -104,12 +104,14 @@ class JavaBotClient:
         {
           "type": "personal_chat",
           "name": "Export",
+          "message_count": 123,
           "messages": [ { "id": ..., "type": "message", "date": ..., "text": ... }, ... ]
         }
         """
         return {
             "type": "personal_chat",
             "name": "Telegram Export",
+            "message_count": len(messages),
             "messages": [
                 msg.model_dump(exclude_none=True) for msg in messages
             ],
