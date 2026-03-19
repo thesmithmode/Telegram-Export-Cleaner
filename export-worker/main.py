@@ -253,6 +253,9 @@ class ExportWorker:
         if self.queue_consumer:
             await self.queue_consumer.disconnect()
 
+        if self.java_client:
+            await self.java_client.aclose()
+
         logger.info(
             f"📊 Final stats: {self.jobs_processed} processed, "
             f"{self.jobs_failed} failed"
