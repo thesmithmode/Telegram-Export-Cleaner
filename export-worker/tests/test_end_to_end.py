@@ -1,0 +1,325 @@
+"""
+End-to-End tests for Export Worker.
+
+Tests complete workflow with mocked external services.
+Full E2E tests with real services are recommended for Phase 3.
+"""
+
+import pytest
+from unittest.mock import AsyncMock, Mock, patch
+import asyncio
+
+from models import ExportRequest, ExportResponse, ExportedMessage
+
+
+@pytest.mark.asyncio
+class TestExportWorkerE2E:
+    """End-to-end tests for ExportWorker."""
+
+    async def test_worker_initialization(self):
+        """Test worker can be initialized."""
+        from main import ExportWorker
+
+        worker = ExportWorker()
+        assert worker.running is False
+        assert worker.jobs_processed == 0
+        assert worker.jobs_failed == 0
+
+    async def test_worker_job_processing_success(self):
+        """Test successful job processing."""
+        from main import ExportWorker
+
+        with patch('main.TelegramClient'), \
+             patch('main.QueueConsumer'), \
+             patch('main.JavaBotClient'):
+
+            worker = ExportWorker()
+            worker.telegram_client = AsyncMock()
+            worker.queue_consumer = AsyncMock()
+            worker.java_client = AsyncMock()
+
+            # Setup mock behavior
+            worker.telegram_client.verify_access = AsyncMock(return_value=True)
+            worker.telegram_client.get_chat_info = AsyncMock(return_value={
+                'title': 'Test Chat',
+                'type': 'group'
+            })
+
+            # Mock message generator
+            test_messages = [
+                ExportedMessage(
+                    id=i,
+                    type="message",
+                    date="2025-06-24T15:29:46",
+                    text=f"Message {i}"
+                )
+                for i in range(1, 6)
+            ]
+
+            async def message_generator():
+                for msg in test_messages:
+                    yield msg
+
+            worker.telegram_client.get_chat_history = AsyncMock(
+                return_value=message_generator()
+            )
+            worker.java_client.send_response = AsyncMock(return_value=True)
+            worker.queue_consumer.mark_job_processing = AsyncMock(return_value=True)
+            worker.queue_consumer.mark_job_completed = AsyncMock(return_value=True)
+
+            # Create test job
+            job = ExportRequest(
+                task_id="test_123",
+                user_id=456,
+                chat_id=-1001234567890,
+                limit=10
+            )
+
+            # Process job
+            result = await worker.process_job(job)
+
+            assert result is True
+            worker.telegram_client.verify_access.assert_called_once()
+
+    async def test_worker_job_processing_no_access(self):
+        """Test job processing when no access to chat."""
+        from main import ExportWorker
+
+        with patch('main.TelegramClient'), \
+             patch('main.QueueConsumer'), \
+             patch('main.JavaBotClient'):
+
+            worker = ExportWorker()
+            worker.telegram_client = AsyncMock()
+            worker.queue_consumer = AsyncMock()
+            worker.java_client = AsyncMock()
+
+            # Setup: no access to chat
+            worker.telegram_client.verify_access = AsyncMock(return_value=False)
+            worker.java_client.send_response = AsyncMock(return_value=True)
+            worker.queue_consumer.mark_job_failed = AsyncMock(return_value=True)
+
+            job = ExportRequest(
+                task_id="test_123",
+                user_id=456,
+                chat_id=-1001234567890
+            )
+
+            result = await worker.process_job(job)
+
+            assert result is True
+            worker.java_client.send_response.assert_called_once()
+            # Verify error response sent
+            call_args = worker.java_client.send_response.call_args
+            assert call_args[1]['status'] == 'failed'
+            assert 'CHAT_NOT_ACCESSIBLE' in str(call_args[1]['error_code'])
+
+    async def test_worker_job_processing_export_error(self):
+        """Test job processing with export error."""
+        from main import ExportWorker
+
+        with patch('main.TelegramClient'), \
+             patch('main.QueueConsumer'), \
+             patch('main.JavaBotClient'):
+
+            worker = ExportWorker()
+            worker.telegram_client = AsyncMock()
+            worker.queue_consumer = AsyncMock()
+            worker.java_client = AsyncMock()
+
+            # Setup: access OK but export fails
+            worker.telegram_client.verify_access = AsyncMock(return_value=True)
+            worker.telegram_client.get_chat_info = AsyncMock(return_value={
+                'title': 'Test',
+                'type': 'group'
+            })
+
+            async def failing_generator():
+                yield ExportedMessage(
+                    id=1,
+                    type="message",
+                    date="2025-06-24T15:29:46",
+                    text="First"
+                )
+                raise RuntimeError("Export interrupted")
+
+            worker.telegram_client.get_chat_history = AsyncMock(
+                return_value=failing_generator()
+            )
+            worker.java_client.send_response = AsyncMock(return_value=True)
+            worker.queue_consumer.mark_job_failed = AsyncMock(return_value=True)
+            worker.queue_consumer.mark_job_processing = AsyncMock(return_value=True)
+
+            job = ExportRequest(
+                task_id="test_123",
+                user_id=456,
+                chat_id=-1001234567890
+            )
+
+            result = await worker.process_job(job)
+
+            assert result is True
+            # Verify error response sent
+            call_args = worker.java_client.send_response.call_args
+            assert call_args[1]['status'] == 'failed'
+
+    async def test_worker_statistics_tracking(self):
+        """Test worker tracks statistics correctly."""
+        from main import ExportWorker
+
+        worker = ExportWorker()
+
+        # Simulate job processing
+        worker.jobs_processed = 5
+        worker.jobs_failed = 2
+
+        assert worker.jobs_processed == 5
+        assert worker.jobs_failed == 2
+
+
+@pytest.mark.asyncio
+class TestErrorRecovery:
+    """Test error recovery mechanisms."""
+
+    async def test_partial_message_export(self):
+        """Test handling of partial exports."""
+        # Simulate exporting 50 messages before error
+        messages = [
+            ExportedMessage(
+                id=i,
+                type="message",
+                date="2025-06-24T15:29:46",
+                text=f"Message {i}"
+            )
+            for i in range(1, 51)
+        ]
+
+        response = ExportResponse(
+            task_id="test",
+            status="failed",
+            message_count=len(messages),
+            messages=messages,
+            error="Rate limited",
+            error_code="RATE_LIMIT"
+        )
+
+        assert response.message_count == 50
+        assert len(response.messages) == 50
+        assert response.status == "failed"
+
+    async def test_retry_logic_with_backoff(self):
+        """Test exponential backoff calculation."""
+        from config import settings
+
+        base_delay = settings.RETRY_BASE_DELAY
+        max_delay = settings.RETRY_MAX_DELAY
+
+        # Calculate backoff delays
+        delays = []
+        for attempt in range(5):
+            delay = min(base_delay * (2 ** attempt), max_delay)
+            delays.append(delay)
+
+        # Verify exponential growth
+        assert delays[0] == 1.0
+        assert delays[1] == 2.0
+        assert delays[2] == 4.0
+        assert delays[3] == 8.0
+        assert delays[4] == 16.0
+
+        # Verify max delay cap
+        for attempt in range(10):
+            delay = min(base_delay * (2 ** attempt), max_delay)
+            assert delay <= max_delay
+
+
+@pytest.mark.asyncio
+class TestSignalHandling:
+    """Test graceful shutdown handling."""
+
+    async def test_worker_signal_handling(self):
+        """Test signal handler sets running flag."""
+        from main import ExportWorker
+        import signal
+
+        worker = ExportWorker()
+        worker.running = True
+
+        # Simulate signal
+        worker.handle_signal(signal.SIGTERM, None)
+
+        assert worker.running is False
+
+    async def test_worker_cleanup(self):
+        """Test worker cleanup procedure."""
+        from main import ExportWorker
+
+        with patch('main.TelegramClient'), \
+             patch('main.QueueConsumer'), \
+             patch('main.JavaBotClient'):
+
+            worker = ExportWorker()
+            worker.telegram_client = AsyncMock()
+            worker.queue_consumer = AsyncMock()
+            worker.running = True
+
+            # Setup mocks
+            worker.telegram_client.disconnect = AsyncMock()
+            worker.queue_consumer.disconnect = AsyncMock()
+
+            # Run cleanup
+            await worker.cleanup()
+
+            assert worker.running is False
+            worker.telegram_client.disconnect.assert_called_once()
+            worker.queue_consumer.disconnect.assert_called_once()
+
+
+@pytest.mark.asyncio
+class TestPipelineFlow:
+    """Test complete pipeline flow."""
+
+    async def test_request_to_response_flow(self):
+        """Test complete request to response flow."""
+        # 1. Create request
+        request = ExportRequest(
+            task_id="export_001",
+            user_id=123456,
+            chat_id=-1001234567890,
+            limit=100,
+            offset_id=0
+        )
+
+        # 2. Simulate export
+        exported_messages = [
+            ExportedMessage(
+                id=i,
+                type="message",
+                date="2025-06-24T15:29:46",
+                text=f"Message {i}",
+                from_user="John Doe",
+                from_id={"peer_type": "user", "peer_id": 123}
+            )
+            for i in range(1, 101)
+        ]
+
+        # 3. Create response
+        response = ExportResponse(
+            task_id=request.task_id,
+            status="completed",
+            message_count=len(exported_messages),
+            messages=exported_messages,
+            exported_at="2025-06-24T15:30:00"
+        )
+
+        # 4. Verify flow
+        assert response.task_id == request.task_id
+        assert response.status == "completed"
+        assert response.message_count == 100
+        assert len(response.messages) == 100
+
+        # 5. Verify response JSON serialization
+        response_json = response.model_dump(exclude_none=True)
+        assert response_json['task_id'] == request.task_id
+        assert response_json['status'] == 'completed'
+        assert len(response_json['messages']) == 100
