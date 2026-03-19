@@ -23,9 +23,6 @@ from models import ExportedMessage
 
 logger = logging.getLogger(__name__)
 
-# Telegram Bot API base URL
-_TG_API = "https://api.telegram.org/bot{token}"
-
 
 class JavaBotClient:
     """Uploads exported messages to Java API and delivers result to user."""
