@@ -122,55 +122,67 @@ class TelegramClient:
             logger.info(f"Fetching history for chat {chat_id} (limit: {limit})")
 
             message_count = 0
-            retry_count = 0
+            last_offset_id = offset_id
             max_retries = settings.MAX_RETRIES
 
-            async for message in self.client.get_chat_history(
-                chat_id=chat_id,
-                limit=limit,
-                offset_id=offset_id,
-            ):
+            while True:
+                retry_count = 0
+
                 try:
-                    # Date filtering
-                    if from_date and message.date < from_date:
-                        continue
-                    if to_date and message.date > to_date:
-                        continue
+                    async for message in self.client.get_chat_history(
+                        chat_id=chat_id,
+                        limit=limit,
+                        offset_id=last_offset_id,
+                    ):
+                        try:
+                            # Date filtering
+                            if from_date and message.date < from_date:
+                                continue
+                            if to_date and message.date > to_date:
+                                continue
 
-                    # Convert to export format
-                    exported = MessageConverter.convert_message(message)
-                    yield exported
+                            # Update last offset for restart-on-FloodWait
+                            last_offset_id = message.id
 
-                    message_count += 1
-                    retry_count = 0  # Reset retry count on success
+                            # Convert to export format
+                            exported = MessageConverter.convert_message(message)
+                            yield exported
 
-                    if message_count % 100 == 0:
-                        logger.debug(f"Exported {message_count} messages...")
+                            message_count += 1
+
+                            if message_count % 100 == 0:
+                                logger.debug(f"Exported {message_count} messages...")
+
+                        except Exception as e:
+                            logger.error(f"Error processing message {message.id}: {e}")
+                            # Skip problematic message and continue
+                            continue
+
+                    # Iterator exhausted successfully
+                    break
 
                 except FloodWait as e:
-                    # Rate limited - exponential backoff
+                    # Rate limited by Telegram API - respect their wait time
                     if retry_count >= max_retries:
-                        logger.error(f"Max retries exceeded for message {message.id}")
+                        logger.error(
+                            f"Max retries ({max_retries}) exceeded due to rate limiting"
+                        )
                         raise
 
+                    # Use Telegram's suggested wait as minimum
                     wait_time = min(
-                        settings.RETRY_BASE_DELAY * (2 ** retry_count),
+                        max(e.value, settings.RETRY_BASE_DELAY * (2 ** retry_count)),
                         settings.RETRY_MAX_DELAY
                     )
 
                     retry_count += 1
                     logger.warning(
-                        f"Rate limited (flood wait). Retry {retry_count}/{max_retries} "
-                        f"after {wait_time}s"
+                        f"Rate limited (FloodWait {e.value}s). "
+                        f"Retry {retry_count}/{max_retries} after {wait_time}s"
                     )
 
                     await asyncio.sleep(wait_time)
-                    # Continue with same message after delay
-
-                except Exception as e:
-                    logger.error(f"Error processing message {message.id}: {e}")
-                    # Skip problematic message and continue
-                    continue
+                    # Restart get_chat_history from last_offset_id
 
             logger.info(f"✅ Exported {message_count} messages from chat {chat_id}")
 

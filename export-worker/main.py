@@ -269,9 +269,21 @@ async def main():
     """Main entry point."""
     worker = ExportWorker()
 
-    # Setup signal handlers
-    signal.signal(signal.SIGTERM, worker.handle_signal)
-    signal.signal(signal.SIGINT, worker.handle_signal)
+    # Setup asyncio-compatible signal handlers
+    try:
+        loop = asyncio.get_running_loop()
+
+        def _on_signal():
+            logger.info("Shutdown signal received")
+            worker.running = False
+
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, _on_signal)
+    except NotImplementedError:
+        # Windows doesn't support add_signal_handler
+        # Fall back to synchronous handler
+        signal.signal(signal.SIGTERM, worker.handle_signal)
+        signal.signal(signal.SIGINT, worker.handle_signal)
 
     try:
         await worker.run()
