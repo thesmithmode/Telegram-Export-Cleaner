@@ -16,7 +16,7 @@ import java.util.Optional;
  * статус живёт столько же, сколько сам файл в Export.</p>
  */
 @Service
-public class ProcessingStatusService {
+public class ProcessingStatusService implements StatusRepository {
 
     private static final Logger log = LoggerFactory.getLogger(ProcessingStatusService.class);
     private static final String KEY_PREFIX = "status:";

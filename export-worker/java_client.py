@@ -104,15 +104,62 @@ class JavaBotClient:
           "message_count": 123,
           "messages": [ { "id": ..., "type": "message", "date": ..., "text": ... }, ... ]
         }
+
+        Entity conversion: Python uses offset/length, Java expects type/text.
+        This adapter extracts text using offset/length and creates type/text format.
         """
+        converted_messages = []
+        for msg in messages:
+            msg_dict = msg.model_dump(exclude_none=True)
+
+            if msg_dict.get("text_entities"):
+                msg_dict["text_entities"] = self._convert_entities_for_java(
+                    msg_dict["text"],
+                    msg_dict["text_entities"]
+                )
+
+            converted_messages.append(msg_dict)
+
         return {
             "type": "personal_chat",
             "name": "Telegram Export",
             "message_count": len(messages),
-            "messages": [
-                msg.model_dump(exclude_none=True) for msg in messages
-            ],
+            "messages": converted_messages,
         }
+
+    def _convert_entities_for_java(self, text: str, entities: list[dict]) -> list[dict]:
+        """
+        Convert entities from Python format (offset, length) to Java format (type, text).
+
+        Java MarkdownParser expects: {"type": "bold", "text": "hello"}
+        Python provides: {"type": "bold", "offset": 0, "length": 5}
+        """
+        if not text or not entities:
+            return entities
+
+        converted = []
+        for entity in entities:
+            offset = entity.get("offset", 0)
+            length = entity.get("length", 0)
+
+            try:
+                entity_text = text[offset:offset + length]
+            except (IndexError, TypeError):
+                entity_text = ""
+
+            converted_entity = {
+                "type": entity.get("type", "plain"),
+                "text": entity_text
+            }
+
+            if entity.get("url"):
+                converted_entity["href"] = entity["url"]
+            if entity.get("user_id"):
+                converted_entity["user_id"] = entity["user_id"]
+
+            converted.append(converted_entity)
+
+        return converted
 
     async def _upload_to_java(self, result_json_bytes: bytes) -> Optional[str]:
         """

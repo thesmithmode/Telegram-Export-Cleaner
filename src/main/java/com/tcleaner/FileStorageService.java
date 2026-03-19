@@ -38,7 +38,7 @@ import java.util.stream.Stream;
  * устаревшие файлы из папки Export по TTL, заданному в {@link StorageConfig}.</p>
  */
 @Service
-public class FileStorageService {
+public class FileStorageService implements FileStorageServiceInterface {
 
     private static final Logger log = LoggerFactory.getLogger(FileStorageService.class);
     private static final String JSON_EXTENSION = ".json";
