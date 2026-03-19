@@ -25,7 +25,7 @@ cp .env.example .env
 nano .env
 ```
 
-**IMPORTANT**: See [GITHUB_SECRETS.md](GITHUB_SECRETS.md) for security best practices!
+**IMPORTANT**: Keep your `.env` file secure and never commit credentials to git!
 
 ### 3. Run with Docker
 
@@ -82,7 +82,7 @@ python main.py
 - ✅ Use GitHub Secrets for CI/CD deployments
 - ✅ Keep local `.env` file with `chmod 600 .env`
 
-See [GITHUB_SECRETS.md](GITHUB_SECRETS.md) for detailed security setup.
+Use GitHub Secrets for all sensitive values in CI/CD pipelines.
 
 ## Architecture
 
@@ -115,13 +115,6 @@ See [GITHUB_SECRETS.md](GITHUB_SECRETS.md) for detailed security setup.
         Telegram User
 ```
 
-## Documentation
-
-- [API Documentation](docs/API.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [Setup Guide](docs/SETUP_REQUIREMENTS.md)
-- [Security Guide](GITHUB_SECRETS.md) ⚠️
-- [Performance Benchmarks](docs/PERFORMANCE.md)
 
 ## Key Features
 
@@ -233,8 +226,6 @@ REDIS_QUEUE_NAME=telegram_export
 - **Concurrency**: Tested with 4-8 parallel workers
 - **Reliability**: 99.9% uptime with auto-recovery
 
-See [PERFORMANCE.md](docs/PERFORMANCE.md) for detailed benchmarks.
-
 ## Contributing
 
 1. Create feature branch: `git checkout -b feature/xyz`
@@ -249,8 +240,6 @@ Proprietary - See LICENSE file
 
 ## Support
 
-- 📖 [Documentation](docs/)
-- 🔐 [Security Guide](GITHUB_SECRETS.md)
 - 🐛 [Issues](../../issues)
 
 ---
