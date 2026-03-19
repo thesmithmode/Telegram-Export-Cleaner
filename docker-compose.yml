@@ -25,10 +25,12 @@ services:
     image: redis:7-alpine
     container_name: telegram-export-redis
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes --appendfsync always
+    command: redis-server --appendonly yes --appendfsync everysec
+    mem_limit: 256m
+    cpus: '0.25'
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -54,6 +56,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    mem_limit: 1536m
+    cpus: '0.75'
     environment:
       # Telegram API
       - TELEGRAM_API_ID=${TELEGRAM_API_ID}
