@@ -190,15 +190,3 @@ class ExportResponse(BaseModel):
     error: Optional[str] = Field(None, description="Error message if failed")
     error_code: Optional[str] = Field(None, description="Error code for retries")
     exported_at: Optional[str] = Field(None, description="Export timestamp")
-
-
-class QueueJob(BaseModel):
-    """Job from Redis queue."""
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    id: str = Field(..., description="Job ID")
-    func: str = Field(..., description="Function to call")
-    args: tuple = Field(default_factory=tuple)
-    kwargs: dict = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=datetime.now)

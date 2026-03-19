@@ -11,10 +11,14 @@ import java.time.format.DateTimeParseException;
  * <p>Формат входных данных: ISO 8601 datetime (например, "2025-06-24T15:29:46")</p>
  * <p>Формат выходных данных: YYYYMMDD или YYYYMMDDHHmm</p>
  *
+ * <p><b>Важно:</b> методы требуют полного ISO 8601 datetime с разделителем T.
+ * Строки в формате date-only (например, "2025-06-24" без времени) вызовут
+ * {@link java.time.format.DateTimeParseException} → вернут null или пустую строку.</p>
+ *
  * <p>Поведение при невалидных данных:</p>
  * <ul>
- *   <li>null / пустая строка → пустая строка</li>
- *   <li>невалидный формат → пустая строка</li>
+ *   <li>null / пустая строка → пустая строка (или null для parseDateToLocalDate)</li>
+ *   <li>невалидный формат (в т.ч. date-only) → пустая строка (или null для parseDateToLocalDate)</li>
  * </ul>
  */
 public class DateFormatter {

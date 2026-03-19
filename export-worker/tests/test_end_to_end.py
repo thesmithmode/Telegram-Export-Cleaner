@@ -8,6 +8,8 @@ Full E2E tests with real services are recommended for Phase 3.
 import pytest
 from unittest.mock import AsyncMock, Mock, patch
 import asyncio
+import tempfile
+import os
 
 from models import ExportRequest, ExportResponse, ExportedMessage
 
@@ -167,14 +169,49 @@ class TestExportWorkerE2E:
         """Test worker tracks statistics correctly."""
         from main import ExportWorker
 
-        worker = ExportWorker()
+        with patch('main.TelegramClient'), \
+             patch('main.QueueConsumer'), \
+             patch('main.JavaBotClient'):
 
-        # Simulate job processing
-        worker.jobs_processed = 5
-        worker.jobs_failed = 2
+            worker = ExportWorker()
+            initial_processed = worker.jobs_processed
+            initial_failed = worker.jobs_failed
 
-        assert worker.jobs_processed == 5
-        assert worker.jobs_failed == 2
+            # Setup mocks for successful job
+            worker.telegram_client = AsyncMock()
+            worker.queue_consumer = AsyncMock()
+            worker.java_client = AsyncMock()
+
+            worker.telegram_client.verify_access = AsyncMock(return_value=True)
+            worker.telegram_client.get_chat_info = AsyncMock(return_value={
+                'title': 'Test', 'type': 'group'
+            })
+
+            async def message_generator():
+                yield ExportedMessage(
+                    id=1, type="message",
+                    date="2025-06-24T15:29:46",
+                    text="Test"
+                )
+
+            worker.telegram_client.get_chat_history = AsyncMock(
+                return_value=message_generator()
+            )
+            worker.java_client.send_response = AsyncMock(return_value=True)
+            worker.queue_consumer.mark_job_processing = AsyncMock(return_value=True)
+            worker.queue_consumer.mark_job_completed = AsyncMock(return_value=True)
+
+            # Process successful job
+            job = ExportRequest(
+                task_id="test_1",
+                user_id=456,
+                chat_id=-1001234567890
+            )
+            await worker.process_job(job)
+
+            # Verify statistics incremented
+            assert worker.jobs_processed == initial_processed + 1
+            assert worker.jobs_failed == initial_failed
 
 
 @pytest.mark.asyncio
@@ -203,9 +240,20 @@ class TestErrorRecovery:
             error_code="RATE_LIMIT"
         )
 
+        # Verify response structure
         assert response.message_count == 50
         assert len(response.messages) == 50
         assert response.status == "failed"
+
+        # Verify error information is present
+        assert response.error == "Rate limited"
+        assert response.error_code == "RATE_LIMIT"
+
+        # Verify serialization includes all data
+        response_json = response.model_dump(exclude_none=True)
+        assert response_json['status'] == 'failed'
+        assert response_json['error_code'] == 'RATE_LIMIT'
+        assert len(response_json['messages']) == 50
 
     async def test_retry_logic_with_backoff(self):
         """Test exponential backoff calculation."""
@@ -323,3 +371,44 @@ class TestPipelineFlow:
         assert response_json['task_id'] == request.task_id
         assert response_json['status'] == 'completed'
         assert len(response_json['messages']) == 100
+
+
+@pytest.mark.asyncio
+class TestTempFileCleanup:
+    """Test temporary file cleanup."""
+
+    async def test_cleanup_temp_files_deletes_directory(self):
+        """Test cleanup_temp_files removes a directory."""
+        from main import cleanup_temp_files
+
+        # Create temporary directory with test files
+        temp_dir = tempfile.mkdtemp(prefix="test_cleanup_")
+        test_file = os.path.join(temp_dir, "test.json")
+        with open(test_file, "w") as f:
+            f.write('{"test": "data"}')
+
+        # Verify directory exists
+        assert os.path.isdir(temp_dir)
+        assert os.path.isfile(test_file)
+
+        # Clean up
+        cleanup_temp_files(temp_dir)
+
+        # Verify directory is deleted
+        assert not os.path.exists(temp_dir)
+
+    async def test_cleanup_temp_files_nonexistent_is_safe(self):
+        """Test cleanup_temp_files handles nonexistent directories."""
+        from main import cleanup_temp_files
+
+        # Call cleanup on nonexistent directory
+        nonexistent = "/tmp/nonexistent_directory_xyz_abc_123"
+
+        # Should not raise exception
+        try:
+            cleanup_temp_files(nonexistent)
+            success = True
+        except Exception:
+            success = False
+
+        assert success

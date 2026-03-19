@@ -265,6 +265,10 @@ class TestMemoryUsage:
     def test_large_message_list_memory(self):
         """Test memory usage with large message list."""
         import sys
+        import tracemalloc
+
+        # Start memory tracking
+        tracemalloc.start()
 
         messages = [
             ExportedMessage(
@@ -276,13 +280,21 @@ class TestMemoryUsage:
             for i in range(1000)
         ]
 
-        # Get size estimate
-        size = sys.getsizeof(messages)
-        avg_per_message = size / len(messages)
+        # Get current memory usage
+        current, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+        # Verify memory is used
+        assert current > 0
+
+        # Calculate actual size of all messages
+        total_size = sum(sys.getsizeof(msg) for msg in messages)
+        avg_per_message = total_size / len(messages)
 
         # Each message should be relatively small
-        # (exact size depends on text content)
+        # (exact size depends on text content, but should be < 10KB)
         assert avg_per_message < 10000  # < 10KB per message
+        assert total_size < 10_000_000  # < 10MB for 1000 messages
 
 
 class TestExportRateBenchmark:

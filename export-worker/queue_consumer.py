@@ -68,6 +68,11 @@ class QueueConsumer:
             logger.error(f"❌ Failed to connect to Redis: {e}")
             return False
 
+    @property
+    def is_connected(self) -> bool:
+        """Check if client is connected to Redis."""
+        return self.redis_client is not None
+
     async def disconnect(self):
         """Disconnect from Redis."""
         try:

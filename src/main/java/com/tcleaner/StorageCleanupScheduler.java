@@ -26,7 +26,8 @@ public class StorageCleanupScheduler {
 
     /**
      * Очищает папку Export от файлов старше TTL.
-     * Запускается каждую минуту.
+     * Запускается с интервалом, указанным в конфиге
+     * {@code app.storage.cleanup-interval-ms} (по умолчанию 60000 мс = 1 минута).
      */
     @Scheduled(fixedRateString = "${app.storage.cleanup-interval-ms:60000}")
     public void cleanup() {

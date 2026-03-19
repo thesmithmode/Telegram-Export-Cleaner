@@ -6,7 +6,7 @@ import java.util.List;
 
 /**
  * Парсер text_entities из Telegram export в Markdown.
- * 
+ *
  * Поддерживаемые типы сущностей:
  * - plain → text
  * - bold → **text**
@@ -17,7 +17,9 @@ import java.util.List;
  * - link → text
  * - text_link → [text](href)
  * - mention → @username (если text уже начинается с @, не дублирует символ)
+ * - mention_name → text (именованное упоминание)
  * - hashtag → #hashtag
+ * - cashtag → $symbol (если text не начинается с $, добавляет символ)
  * - email → email
  * - phone → phone
  * - spoiler → ||text||
@@ -25,6 +27,7 @@ import java.util.List;
  * - blockquote → > text
  * - custom_emoji → [emoji_ID]
  * - bot_command → /command
+ * - bank_card → [CARD] (карточные номера маскируются)
  */
 public class MarkdownParser {
 
