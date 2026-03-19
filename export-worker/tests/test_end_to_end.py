@@ -41,11 +41,10 @@ class TestExportWorkerE2E:
             worker.java_client = AsyncMock()
 
             # Setup mock behavior
-            worker.telegram_client.verify_access = AsyncMock(return_value=True)
-            worker.telegram_client.get_chat_info = AsyncMock(return_value={
-                'title': 'Test Chat',
-                'type': 'group'
-            })
+            worker.telegram_client.verify_and_get_info = AsyncMock(return_value=(
+                True,
+                {'title': 'Test Chat', 'type': 'group'}
+            ))
 
             # Mock message generator
             test_messages = [
@@ -81,7 +80,7 @@ class TestExportWorkerE2E:
             result = await worker.process_job(job)
 
             assert result is True
-            worker.telegram_client.verify_access.assert_called_once()
+            worker.telegram_client.verify_and_get_info.assert_called_once()
 
     async def test_worker_job_processing_no_access(self):
         """Test job processing when no access to chat."""
@@ -97,7 +96,7 @@ class TestExportWorkerE2E:
             worker.java_client = AsyncMock()
 
             # Setup: no access to chat
-            worker.telegram_client.verify_access = AsyncMock(return_value=False)
+            worker.telegram_client.verify_and_get_info = AsyncMock(return_value=(False, None))
             worker.java_client.send_response = AsyncMock(return_value=True)
             worker.queue_consumer.mark_job_failed = AsyncMock(return_value=True)
 
@@ -130,11 +129,10 @@ class TestExportWorkerE2E:
             worker.java_client = AsyncMock()
 
             # Setup: access OK but export fails
-            worker.telegram_client.verify_access = AsyncMock(return_value=True)
-            worker.telegram_client.get_chat_info = AsyncMock(return_value={
-                'title': 'Test',
-                'type': 'group'
-            })
+            worker.telegram_client.verify_and_get_info = AsyncMock(return_value=(
+                True,
+                {'title': 'Test', 'type': 'group'}
+            ))
 
             async def failing_generator():
                 yield ExportedMessage(
@@ -182,10 +180,10 @@ class TestExportWorkerE2E:
             worker.queue_consumer = AsyncMock()
             worker.java_client = AsyncMock()
 
-            worker.telegram_client.verify_access = AsyncMock(return_value=True)
-            worker.telegram_client.get_chat_info = AsyncMock(return_value={
-                'title': 'Test', 'type': 'group'
-            })
+            worker.telegram_client.verify_and_get_info = AsyncMock(return_value=(
+                True,
+                {'title': 'Test', 'type': 'group'}
+            ))
 
             # Create async generator wrapper for get_chat_history
             class AsyncMessageGenerator:
