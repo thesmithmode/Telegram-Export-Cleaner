@@ -34,11 +34,13 @@ class TestPyrogramClientIntegration:
         """Test client error categorization."""
         from pyrogram_client import TelegramClient
 
-        client = TelegramClient()
+        with patch.object(TelegramClient, 'verify_and_get_info', new_callable=AsyncMock) as mock_verify:
+            # Simulate ChannelPrivate error
+            mock_verify.side_effect = RuntimeError("Channel is private")
 
-        # Simulate ChannelPrivate error
-        with pytest.raises(RuntimeError):
-            await client.get_chat_info(123)  # Will fail without real connection
+            client = TelegramClient()
+            with pytest.raises(RuntimeError):
+                await client.get_chat_info(123)
 
     def test_message_conversion_integration(self):
         """Test message conversion in pipeline."""
