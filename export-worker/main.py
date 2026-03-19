@@ -121,8 +121,9 @@ class ExportWorker:
             # Mark job as processing
             await self.queue_consumer.mark_job_processing(job.task_id)
 
-            # Verify access to chat
-            if not await self.telegram_client.verify_access(job.chat_id):
+            # Verify access and get chat info in single call
+            accessible, chat_info = await self.telegram_client.verify_and_get_info(job.chat_id)
+            if not accessible:
                 error = f"No access to chat {job.chat_id}"
                 logger.error(f"❌ {error}")
                 await self.java_client.send_response(
@@ -136,8 +137,6 @@ class ExportWorker:
                 await self.queue_consumer.mark_job_failed(job.task_id, error)
                 return True
 
-            # Get chat info
-            chat_info = await self.telegram_client.get_chat_info(job.chat_id)
             if chat_info:
                 logger.info(f"  Chat: {chat_info.get('title')} (type: {chat_info.get('type')})")
 

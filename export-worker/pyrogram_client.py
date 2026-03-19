@@ -202,23 +202,23 @@ class TelegramClient:
             logger.error(f"❌ Error fetching history for chat {chat_id}: {e}", exc_info=True)
             raise
 
-    async def get_chat_info(self, chat_id: int) -> Optional[dict]:
+    async def verify_and_get_info(self, chat_id: int) -> tuple[bool, Optional[dict]]:
         """
-        Get chat metadata (name, type, members, etc).
+        Check access and get chat info in single API call.
 
         Args:
             chat_id: Telegram chat ID
 
         Returns:
-            Dict with chat info or None if error
+            Tuple of (is_accessible, chat_info_dict_or_None)
         """
         if not self.is_connected:
-            raise RuntimeError("Not connected to Telegram")
+            return (False, None)
 
         try:
             chat = await self.client.get_chat(chat_id)
 
-            return {
+            info = {
                 "id": chat.id,
                 "title": chat.title or "",
                 "username": chat.username or "",
@@ -229,18 +229,28 @@ class TelegramClient:
                 "members_count": chat.members_count or 0,
                 "description": chat.description or "",
             }
+            return (True, info)
 
-        except ChannelPrivate:
-            logger.error(f"Channel {chat_id} is private")
-            return None
-
-        except BadRequest as e:
-            logger.error(f"Invalid chat {chat_id}: {e}")
-            return None
+        except (ChannelPrivate, ChatAdminRequired, BadRequest):
+            logger.error(f"Cannot access chat {chat_id}")
+            return (False, None)
 
         except Exception as e:
-            logger.error(f"Error getting chat info for {chat_id}: {e}")
-            return None
+            logger.error(f"Error accessing chat {chat_id}: {e}")
+            return (False, None)
+
+    async def get_chat_info(self, chat_id: int) -> Optional[dict]:
+        """
+        Get chat metadata (name, type, members, etc).
+
+        Args:
+            chat_id: Telegram chat ID
+
+        Returns:
+            Dict with chat info or None if error
+        """
+        _, info = await self.verify_and_get_info(chat_id)
+        return info
 
     async def verify_access(self, chat_id: int) -> bool:
         """
@@ -252,19 +262,8 @@ class TelegramClient:
         Returns:
             True if accessible, False otherwise
         """
-        if not self.is_connected:
-            return False
-
-        try:
-            await self.client.get_chat(chat_id)
-            return True
-
-        except (ChannelPrivate, ChatAdminRequired, BadRequest):
-            return False
-
-        except Exception as e:
-            logger.error(f"Error verifying access to {chat_id}: {e}")
-            return False
+        accessible, _ = await self.verify_and_get_info(chat_id)
+        return accessible
 
     async def __aenter__(self):
         """Async context manager entry."""
