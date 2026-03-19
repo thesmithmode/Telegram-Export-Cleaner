@@ -187,18 +187,31 @@ class TestExportWorkerE2E:
                 'title': 'Test', 'type': 'group'
             })
 
-            # Create async generator for get_chat_history
-            async def message_generator():
-                yield ExportedMessage(
+            # Create async generator wrapper for get_chat_history
+            class AsyncMessageGenerator:
+                def __aiter__(self):
+                    return self
+
+                async def __anext__(self):
+                    raise StopAsyncIteration
+
+                async def __call__(self, **kwargs):
+                    return self
+
+            # Mock get_chat_history to return async iterator
+            messages = [
+                ExportedMessage(
                     id=1, type="message",
                     date="2025-06-24T15:29:46",
                     text="Test"
                 )
+            ]
 
-            # Mock get_chat_history to return an async generator
-            worker.telegram_client.get_chat_history = AsyncMock(
-                side_effect=message_generator
-            )
+            async def async_gen(**kwargs):
+                for msg in messages:
+                    yield msg
+
+            worker.telegram_client.get_chat_history = async_gen
             worker.java_client.send_response = AsyncMock(return_value=True)
             worker.queue_consumer.mark_job_processing = AsyncMock(return_value=True)
             worker.queue_consumer.mark_job_completed = AsyncMock(return_value=True)
