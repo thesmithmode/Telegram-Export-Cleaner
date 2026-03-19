@@ -62,6 +62,8 @@ Bot: ✅ Export complete! [sends .txt file]
 
 ### 5. Run Locally (Python Worker)
 
+> В отличие от `POST /api/convert`, ответ возвращается без заголовка `Content-Disposition` — текст передаётся inline, браузер не инициирует скачивание.
+
 ```bash
 # Install dependencies
 cd export-worker
