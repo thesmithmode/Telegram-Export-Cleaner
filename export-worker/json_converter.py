@@ -92,14 +92,13 @@ class MessageConverter:
 
     @staticmethod
     def convert_entities(
-        entities: Optional[List[pyrogram_types.MessageEntity]],
-        text: str = ""
+        entities: Optional[List[pyrogram_types.MessageEntity]]
     ) -> Optional[List[MessageEntityModel]]:
         """
         Convert MessageEntity list to result.json format.
 
-        MessageEntity has: type, offset (position), length (count)
-        result.json needs: type, offset (from), length (to)
+        MessageEntity has: type, offset (character position), length (character count)
+        result.json format uses the same: offset and length directly
         """
         if not entities:
             return None
@@ -181,8 +180,7 @@ class MessageConverter:
             # Text entities (formatting)
             if message.entities:
                 exported.text_entities = MessageConverter.convert_entities(
-                    message.entities,
-                    message.text or ""
+                    message.entities
                 )
 
             # Media

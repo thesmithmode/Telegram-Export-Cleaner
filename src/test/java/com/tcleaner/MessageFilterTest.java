@@ -1,4 +1,5 @@
 package com.tcleaner;
+import com.tcleaner.core.MessageFilter;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;

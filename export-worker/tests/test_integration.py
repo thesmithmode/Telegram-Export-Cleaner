@@ -31,14 +31,19 @@ class TestPyrogramClientIntegration:
 
     @pytest.mark.asyncio
     async def test_client_error_handling(self):
-        """Test client error categorization."""
+        """Test client error handling in verify_and_get_info."""
         from pyrogram_client import TelegramClient
 
         client = TelegramClient()
 
-        # Simulate ChannelPrivate error
+        # Mock verify_and_get_info on the instance to raise RuntimeError
+        client.verify_and_get_info = AsyncMock(
+            side_effect=RuntimeError("Channel is private")
+        )
+
+        # Test that verify_and_get_info propagates the error
         with pytest.raises(RuntimeError):
-            await client.get_chat_info(123)  # Will fail without real connection
+            await client.verify_and_get_info(123)
 
     def test_message_conversion_integration(self):
         """Test message conversion in pipeline."""

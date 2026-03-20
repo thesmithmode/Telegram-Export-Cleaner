@@ -1,4 +1,5 @@
 package com.tcleaner;
+import com.tcleaner.core.TelegramExporterException;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
