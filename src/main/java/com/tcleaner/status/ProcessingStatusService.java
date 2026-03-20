@@ -1,5 +1,6 @@
-package com.tcleaner;
+package com.tcleaner.status;
 
+import com.tcleaner.storage.StorageConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -16,7 +17,7 @@ import java.util.Optional;
  * статус живёт столько же, сколько сам файл в Export.</p>
  */
 @Service
-public class ProcessingStatusService {
+public class ProcessingStatusService implements StatusRepository {
 
     private static final Logger log = LoggerFactory.getLogger(ProcessingStatusService.class);
     private static final String KEY_PREFIX = "status:";

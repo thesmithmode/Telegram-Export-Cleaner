@@ -46,6 +46,10 @@ jacoco/
 dependency-reduced-pom.xml
 
 ### Project specific ###
+# Контекст и документация (локальные, не для репо)
+Контекст/
+.claude/
+
 # Выходные файлы CLI
 tcleaner_output.txt
 *_output.txt

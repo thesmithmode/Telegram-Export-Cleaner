@@ -1,5 +1,7 @@
 package com.tcleaner;
 
+import com.tcleaner.cli.Main;
+import com.tcleaner.storage.StorageConfig;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration;

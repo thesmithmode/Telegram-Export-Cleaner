@@ -1,5 +1,6 @@
-package com.tcleaner;
+package com.tcleaner.core;
 
+import com.tcleaner.format.StringUtils;
 import java.time.LocalDate;
 
 /**
@@ -61,20 +62,14 @@ public final class MessageFilterFactory {
         }
 
         if (isPresent(keywords)) {
-            for (String kw : keywords.split(",")) {
-                String trimmed = kw.trim();
-                if (!trimmed.isEmpty()) {
-                    filter.withKeyword(trimmed);
-                }
+            for (String kw : StringUtils.splitCsv(keywords)) {
+                filter.withKeyword(kw);
             }
         }
 
         if (isPresent(excludeKeywords)) {
-            for (String kw : excludeKeywords.split(",")) {
-                String trimmed = kw.trim();
-                if (!trimmed.isEmpty()) {
-                    filter.withExcludeKeyword(trimmed);
-                }
+            for (String kw : StringUtils.splitCsv(excludeKeywords)) {
+                filter.withExcludeKeyword(kw);
             }
         }
 
