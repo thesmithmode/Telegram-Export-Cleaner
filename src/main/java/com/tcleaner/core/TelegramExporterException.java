@@ -1,4 +1,4 @@
-package com.tcleaner;
+package com.tcleaner.core;
 
 /**
  * Исключение для ошибок при обработке Telegram экспорта.

@@ -1,4 +1,4 @@
-package com.tcleaner;
+package com.tcleaner.status;
 
 import java.time.Instant;
 
@@ -76,7 +76,11 @@ public class ProcessingResult {
     /**
      * Возвращает время начала обработки.
      *
-     * @return момент создания объекта результата
+     * <p><b>Замечание:</b> это поле устанавливается в {@code Instant.now()} в момент создания
+     * объекта результата, а не в момент фактического начала обработки.
+     * Оба поля {@code startedAt} и {@code completedAt} содержат одинаковое значение.</p>
+     *
+     * @return момент создания объекта результата (условный "старт")
      */
     public Instant getStartedAt() {
         return startedAt;
@@ -85,7 +89,11 @@ public class ProcessingResult {
     /**
      * Возвращает время завершения обработки.
      *
-     * @return момент завершения (успех или ошибка)
+     * <p><b>Замечание:</b> это поле устанавливается в {@code Instant.now()} в момент создания
+     * объекта результата, а не в момент фактического завершения обработки.
+     * Оба поля {@code startedAt} и {@code completedAt} содержат одинаковое значение.</p>
+     *
+     * @return момент создания объекта результата (условный "конец")
      */
     public Instant getCompletedAt() {
         return completedAt;

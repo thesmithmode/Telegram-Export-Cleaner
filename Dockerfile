@@ -1,0 +1,21 @@
+# Stage 1: Build
+FROM maven:3.9-eclipse-temurin-21 AS build
+WORKDIR /app
+COPY pom.xml .
+# Dependencies in separate layer (cached on rebuild)
+RUN mvn dependency:go-offline -q
+COPY src/ ./src/
+RUN mvn clean package -DskipTests -q
+
+# Stage 2: Runtime
+FROM eclipse-temurin:21-jre-alpine
+WORKDIR /app
+RUN mkdir -p /data/import /data/export
+COPY --from=build /app/target/telegram-cleaner-*.jar app.jar
+
+# Explicitly limit JVM heap — without -Xmx JVM takes 25% of host RAM,
+# not the container mem_limit. On a 4GB host JVM would take ~1GB → OOM kill
+ENV JAVA_OPTS="-Xms256m -Xmx768m -XX:+UseG1GC"
+
+EXPOSE 8080
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]

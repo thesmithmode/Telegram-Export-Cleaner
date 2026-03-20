@@ -1,5 +1,9 @@
-package com.tcleaner;
+package com.tcleaner.cli;
 
+import com.tcleaner.core.MessageFilter;
+import com.tcleaner.core.MessageFilterFactory;
+import com.tcleaner.core.TelegramExporter;
+import com.tcleaner.format.StringListConverter;
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.ParameterException;

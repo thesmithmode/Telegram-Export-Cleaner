@@ -1,5 +1,6 @@
-package com.tcleaner;
+package com.tcleaner.core;
 
+import com.tcleaner.TelegramFileExporterInterface;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -76,7 +77,7 @@ public class TelegramExporter implements TelegramFileExporterInterface {
      *
      * @return сконфигурированный ObjectMapper
      */
-    static ObjectMapper createDefaultObjectMapper() {
+    public static ObjectMapper createDefaultObjectMapper() {
         ObjectMapper mapper = new ObjectMapper();
         mapper.registerModule(new JavaTimeModule());
         return mapper;

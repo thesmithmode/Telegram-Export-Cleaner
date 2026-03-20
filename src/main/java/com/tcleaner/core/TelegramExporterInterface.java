@@ -1,4 +1,4 @@
-package com.tcleaner;
+package com.tcleaner.core;
 
 import java.io.IOException;
 import java.nio.file.Path;

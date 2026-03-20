@@ -1,5 +1,8 @@
-package com.tcleaner;
+package com.tcleaner.api;
 
+import com.tcleaner.status.ProcessingStatus;
+import com.tcleaner.status.ProcessingStatusService;
+import com.tcleaner.storage.FileStorageServiceInterface;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.io.Resource;
@@ -46,7 +49,7 @@ public class FileController {
     private static final long RATE_LIMIT_MS = 15_000L;
     private final AtomicLong lastUploadTime = new AtomicLong(0);
 
-    private final FileStorageService fileStorageService;
+    private final FileStorageServiceInterface fileStorageService;
     private final ProcessingStatusService statusService;
 
     /**
@@ -55,7 +58,7 @@ public class FileController {
      * @param fileStorageService сервис для работы с файлами
      * @param statusService      сервис статусов из Redis
      */
-    public FileController(FileStorageService fileStorageService,
+    public FileController(FileStorageServiceInterface fileStorageService,
             ProcessingStatusService statusService) {
         this.fileStorageService = fileStorageService;
         this.statusService = statusService;
