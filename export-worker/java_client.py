@@ -135,6 +135,14 @@ class JavaBotClient:
         Transform text_entities from Telegram Bot API format (offset/length)
         to Telegram Desktop export format (type/text).
 
+        CRITICAL: Telegram Bot API offsets are in UTF-16 code units, but Python
+        strings use Unicode code points (UTF-32). For messages with emoji or
+        characters outside the Basic Multilingual Plane (U+FFFF), direct slicing
+        text[offset:offset+length] produces misaligned text.
+
+        Solution: Encode text to UTF-16-LE, extract by byte offsets (offset*2 to
+        (offset+length)*2), decode back to Unicode.
+
         Args:
             text: Full message text
             entities: List of entities with {type, offset, length, ...}
@@ -147,12 +155,17 @@ class JavaBotClient:
 
         transformed = []
         try:
+            # Pre-encode text to UTF-16-LE for all entity extractions
+            text_utf16 = text.encode('utf-16-le')
+
             for entity in entities:
                 offset = entity.get("offset", 0)
                 length = entity.get("length", 0)
 
-                # Extract the text for this entity
-                entity_text = text[offset : offset + length]
+                # Extract entity text using UTF-16 byte offsets
+                # Telegram offset/length are in UTF-16 code units, not bytes
+                entity_bytes = text_utf16[offset * 2 : (offset + length) * 2]
+                entity_text = entity_bytes.decode('utf-16-le')
 
                 # Create new entity dict with type + text instead of offset + length
                 new_entity = {
@@ -280,6 +293,49 @@ class JavaBotClient:
         except Exception as e:
             logger.error(f"Error sending file to user: {e}", exc_info=True)
             return False
+
+    async def send_progress_update(
+        self,
+        user_chat_id: int,
+        task_id: str,
+        message_count: int,
+        percentage: Optional[int] = None,
+    ) -> bool:
+        """
+        Send progress update to user during long export.
+
+        Args:
+            user_chat_id: User's Telegram chat ID
+            task_id: Export task ID for reference
+            message_count: Number of messages exported so far
+            percentage: Progress as percentage (0-100), or None for indeterminate
+
+        Returns:
+            True if message sent, False otherwise
+        """
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+
+        if percentage is not None:
+            progress_bar = self._build_progress_bar(percentage)
+            text = f"📊 Export progress: {message_count} messages\n{progress_bar} {percentage}%"
+        else:
+            text = f"📊 Exporting... {message_count} messages processed"
+
+        try:
+            response = await self._http_client.post(
+                url, data={"chat_id": user_chat_id, "text": text}
+            )
+            return response.status_code == 200
+        except Exception as e:
+            logger.warning(f"Could not send progress update to user: {e}")
+            return False
+
+    @staticmethod
+    def _build_progress_bar(percentage: int, width: int = 10) -> str:
+        """Build a text progress bar for display."""
+        filled = int(width * percentage / 100)
+        empty = width - filled
+        return "▓" * filled + "░" * empty
 
     async def _notify_user_failure(
         self, user_chat_id: int, task_id: str, error: str

@@ -92,11 +92,14 @@ public class MarkdownParser {
     }
 
     /**
-     * Парсит сущность text_link.
+     * Парсит сущность text_link с валидацией URL.
+     * SECURITY: Блокирует javascript:, data:, и другие опасные схемы для защиты от XSS.
      */
     private static String parseTextLink(JsonNode entity, String text) {
         String href = entity.has("href") ? entity.get("href").asText() : "#";
-        return "[" + text + "](" + href + ")";
+        // Валидируем URL перед вставкой в markdown
+        String safeHref = UrlValidator.sanitizeUrl(href, "#");
+        return "[" + text + "](" + safeHref + ")";
     }
 
     /**

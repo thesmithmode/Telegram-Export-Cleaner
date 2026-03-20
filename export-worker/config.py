@@ -32,13 +32,14 @@ class Settings(BaseSettings):
     # Telegram API (MTProto - for Pyrogram export)
     TELEGRAM_API_ID: int = 0
     TELEGRAM_API_HASH: str = ""
-    TELEGRAM_PHONE: str = ""
+    TELEGRAM_PHONE_NUMBER: str = ""
 
     # Telegram Bot API (for sending results back to users)
     TELEGRAM_BOT_TOKEN: Optional[str] = None
 
     # Pyrogram
     SESSION_NAME: str = "export_worker"  # Will be saved in session/ folder
+    TELEGRAM_SESSION_STRING: Optional[str] = None  # Production: string session for stateless auth
     PYROGRAM_LOG_LEVEL: str = "ERROR"
 
     # Worker
