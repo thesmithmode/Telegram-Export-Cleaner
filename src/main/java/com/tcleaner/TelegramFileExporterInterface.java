@@ -1,5 +1,7 @@
 package com.tcleaner;
 
+import com.tcleaner.core.MessageFilter;
+import com.tcleaner.core.TelegramExporterInterface;
 import java.io.IOException;
 import java.nio.file.Path;
 

@@ -1,5 +1,9 @@
-package com.tcleaner;
+package com.tcleaner.api;
 
+import com.tcleaner.core.MessageFilter;
+import com.tcleaner.core.MessageFilterFactory;
+import com.tcleaner.core.TelegramExporterException;
+import com.tcleaner.core.TelegramExporterInterface;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;

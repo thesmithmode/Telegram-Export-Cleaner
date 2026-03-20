@@ -1,4 +1,4 @@
-package com.tcleaner;
+package com.tcleaner.status;
 
 /**
  * Статус обработки файла в асинхронном pipeline.
