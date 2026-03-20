@@ -1,4 +1,6 @@
 package com.tcleaner;
+import com.tcleaner.status.ProcessingStatus;
+import com.tcleaner.status.ProcessingResult;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

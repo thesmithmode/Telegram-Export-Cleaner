@@ -1,4 +1,6 @@
 package com.tcleaner;
+import com.tcleaner.status.ProcessingStatusService;
+import com.tcleaner.status.ProcessingStatus;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;

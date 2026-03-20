@@ -23,9 +23,6 @@ from models import ExportedMessage
 
 logger = logging.getLogger(__name__)
 
-# Telegram Bot API base URL
-_TG_API = "https://api.telegram.org/bot{token}"
-
 
 class JavaBotClient:
     """Uploads exported messages to Java API and delivers result to user."""
@@ -35,6 +32,7 @@ class JavaBotClient:
         self.timeout = timeout
         self.max_retries = max_retries
         self.bot_token = settings.TELEGRAM_BOT_TOKEN
+        self._http_client = httpx.AsyncClient(timeout=self.timeout)
         logger.info(f"Java API Client initialized (URL: {self.base_url})")
 
     async def send_response(
@@ -103,16 +101,78 @@ class JavaBotClient:
         {
           "type": "personal_chat",
           "name": "Export",
+          "message_count": 123,
           "messages": [ { "id": ..., "type": "message", "date": ..., "text": ... }, ... ]
         }
+
+        Transforms text_entities from Telegram Bot API format (offset/length)
+        to Telegram Desktop export format (type/text) so Java MarkdownParser can render them.
         """
+        transformed_messages = []
+
+        for msg in messages:
+            msg_dict = msg.model_dump(exclude_none=True)
+
+            # Transform text_entities from Bot API format to Desktop export format
+            if msg_dict.get("text_entities"):
+                msg_dict["text_entities"] = self._transform_entities(
+                    msg_dict["text"],
+                    msg_dict["text_entities"]
+                )
+
+            transformed_messages.append(msg_dict)
+
         return {
             "type": "personal_chat",
             "name": "Telegram Export",
-            "messages": [
-                msg.model_dump(exclude_none=True) for msg in messages
-            ],
+            "message_count": len(messages),
+            "messages": transformed_messages,
         }
+
+    @staticmethod
+    def _transform_entities(text: str, entities: list[dict]) -> list[dict]:
+        """
+        Transform text_entities from Telegram Bot API format (offset/length)
+        to Telegram Desktop export format (type/text).
+
+        Args:
+            text: Full message text
+            entities: List of entities with {type, offset, length, ...}
+
+        Returns:
+            List of entities with {type, text, ...} suitable for Java MarkdownParser
+        """
+        if not entities or not text:
+            return entities
+
+        transformed = []
+        try:
+            for entity in entities:
+                offset = entity.get("offset", 0)
+                length = entity.get("length", 0)
+
+                # Extract the text for this entity
+                entity_text = text[offset : offset + length]
+
+                # Create new entity dict with type + text instead of offset + length
+                new_entity = {
+                    "type": entity.get("type", "plain"),
+                    "text": entity_text
+                }
+
+                # Preserve additional fields (url, user_id, etc)
+                if "url" in entity:
+                    new_entity["href"] = entity["url"]  # Desktop format uses "href"
+                if "user_id" in entity:
+                    new_entity["user_id"] = entity["user_id"]
+
+                transformed.append(new_entity)
+
+        except Exception as e:
+            logger.warning(f"Error transforming entities: {e}. Falling back to original format.")
+            return entities
+
+        return transformed if transformed else entities
 
     async def _upload_to_java(self, result_json_bytes: bytes) -> Optional[str]:
         """
@@ -126,37 +186,36 @@ class JavaBotClient:
 
         while retry_count <= self.max_retries:
             try:
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    response = await client.post(
-                        url,
-                        files={"file": ("result.json", result_json_bytes, "application/json")},
+                response = await self._http_client.post(
+                    url,
+                    files={"file": ("result.json", result_json_bytes, "application/json")},
+                )
+
+                if response.status_code == 200:
+                    return response.text
+
+                elif response.status_code == 400:
+                    logger.error(
+                        f"❌ Java API rejected payload (400): {response.text[:200]}"
+                    )
+                    return None  # Bad data — no point retrying
+
+                elif response.status_code == 401:
+                    logger.error("❌ Java API authentication failed (401)")
+                    return None
+
+                elif response.status_code >= 500:
+                    logger.warning(
+                        f"Java API server error ({response.status_code}). "
+                        f"Retry {retry_count + 1}/{self.max_retries}"
                     )
 
-                    if response.status_code == 200:
-                        return response.text
-
-                    elif response.status_code == 400:
-                        logger.error(
-                            f"❌ Java API rejected payload (400): {response.text[:200]}"
-                        )
-                        return None  # Bad data — no point retrying
-
-                    elif response.status_code == 401:
-                        logger.error("❌ Java API authentication failed (401)")
-                        return None
-
-                    elif response.status_code >= 500:
-                        logger.warning(
-                            f"Java API server error ({response.status_code}). "
-                            f"Retry {retry_count + 1}/{self.max_retries}"
-                        )
-
-                    else:
-                        logger.error(
-                            f"❌ Java API unexpected response ({response.status_code}): "
-                            f"{response.text[:200]}"
-                        )
-                        return None
+                else:
+                    logger.error(
+                        f"❌ Java API unexpected response ({response.status_code}): "
+                        f"{response.text[:200]}"
+                    )
+                    return None
 
             except httpx.TimeoutException:
                 logger.warning(
@@ -195,29 +254,28 @@ class JavaBotClient:
         filename = f"export_{task_id}.txt"
 
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.post(
-                    url,
-                    data={
-                        "chat_id": user_chat_id,
-                        "caption": f"✅ Export complete ({task_id})",
-                    },
-                    files={
-                        "document": (filename, cleaned_text.encode("utf-8"), "text/plain")
-                    },
-                )
+            response = await self._http_client.post(
+                url,
+                data={
+                    "chat_id": user_chat_id,
+                    "caption": f"✅ Export complete ({task_id})",
+                },
+                files={
+                    "document": (filename, cleaned_text.encode("utf-8"), "text/plain")
+                },
+            )
 
-                if response.status_code == 200:
-                    logger.info(
-                        f"✅ Sent export file to user {user_chat_id} (task {task_id})"
-                    )
-                    return True
-                else:
-                    logger.error(
-                        f"❌ Telegram sendDocument failed ({response.status_code}): "
-                        f"{response.text[:200]}"
-                    )
-                    return False
+            if response.status_code == 200:
+                logger.info(
+                    f"✅ Sent export file to user {user_chat_id} (task {task_id})"
+                )
+                return True
+            else:
+                logger.error(
+                    f"❌ Telegram sendDocument failed ({response.status_code}): "
+                    f"{response.text[:200]}"
+                )
+                return False
 
         except Exception as e:
             logger.error(f"Error sending file to user: {e}", exc_info=True)
@@ -231,18 +289,23 @@ class JavaBotClient:
         text = f"❌ Export failed (task {task_id})\n\nReason: {error}"
 
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                await client.post(url, data={"chat_id": user_chat_id, "text": text})
+            await self._http_client.post(url, data={"chat_id": user_chat_id, "text": text})
         except Exception as e:
             logger.warning(f"Could not notify user of failure: {e}")
+
+    async def aclose(self):
+        """Close HTTP client connection."""
+        try:
+            await self._http_client.aclose()
+        except Exception as e:
+            logger.warning(f"Error closing HTTP client: {e}")
 
     async def verify_connectivity(self) -> bool:
         """Check if Java API is accessible."""
         url = f"{self.base_url}/api/health"
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                response = await client.get(url)
-                return response.status_code == 200
+            response = await self._http_client.get(url)
+            return response.status_code == 200
         except Exception as e:
             logger.error(f"Failed to connect to Java API: {e}")
             return False

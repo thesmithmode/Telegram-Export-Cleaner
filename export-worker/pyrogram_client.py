@@ -122,55 +122,67 @@ class TelegramClient:
             logger.info(f"Fetching history for chat {chat_id} (limit: {limit})")
 
             message_count = 0
-            retry_count = 0
+            last_offset_id = offset_id
             max_retries = settings.MAX_RETRIES
 
-            async for message in self.client.get_chat_history(
-                chat_id=chat_id,
-                limit=limit,
-                offset_id=offset_id,
-            ):
+            while True:
+                retry_count = 0
+
                 try:
-                    # Date filtering
-                    if from_date and message.date < from_date:
-                        continue
-                    if to_date and message.date > to_date:
-                        continue
+                    async for message in self.client.get_chat_history(
+                        chat_id=chat_id,
+                        limit=limit,
+                        offset_id=last_offset_id,
+                    ):
+                        try:
+                            # Date filtering
+                            if from_date and message.date < from_date:
+                                continue
+                            if to_date and message.date > to_date:
+                                continue
 
-                    # Convert to export format
-                    exported = MessageConverter.convert_message(message)
-                    yield exported
+                            # Update last offset for restart-on-FloodWait
+                            last_offset_id = message.id
 
-                    message_count += 1
-                    retry_count = 0  # Reset retry count on success
+                            # Convert to export format
+                            exported = MessageConverter.convert_message(message)
+                            yield exported
 
-                    if message_count % 100 == 0:
-                        logger.debug(f"Exported {message_count} messages...")
+                            message_count += 1
+
+                            if message_count % 100 == 0:
+                                logger.debug(f"Exported {message_count} messages...")
+
+                        except Exception as e:
+                            logger.error(f"Error processing message {message.id}: {e}")
+                            # Skip problematic message and continue
+                            continue
+
+                    # Iterator exhausted successfully
+                    break
 
                 except FloodWait as e:
-                    # Rate limited - exponential backoff
+                    # Rate limited by Telegram API - respect their wait time
                     if retry_count >= max_retries:
-                        logger.error(f"Max retries exceeded for message {message.id}")
+                        logger.error(
+                            f"Max retries ({max_retries}) exceeded due to rate limiting"
+                        )
                         raise
 
+                    # Use Telegram's suggested wait as minimum
                     wait_time = min(
-                        settings.RETRY_BASE_DELAY * (2 ** retry_count),
+                        max(e.value, settings.RETRY_BASE_DELAY * (2 ** retry_count)),
                         settings.RETRY_MAX_DELAY
                     )
 
                     retry_count += 1
                     logger.warning(
-                        f"Rate limited (flood wait). Retry {retry_count}/{max_retries} "
-                        f"after {wait_time}s"
+                        f"Rate limited (FloodWait {e.value}s). "
+                        f"Retry {retry_count}/{max_retries} after {wait_time}s"
                     )
 
                     await asyncio.sleep(wait_time)
-                    # Continue with same message after delay
-
-                except Exception as e:
-                    logger.error(f"Error processing message {message.id}: {e}")
-                    # Skip problematic message and continue
-                    continue
+                    # Restart get_chat_history from last_offset_id
 
             logger.info(f"✅ Exported {message_count} messages from chat {chat_id}")
 
@@ -190,23 +202,23 @@ class TelegramClient:
             logger.error(f"❌ Error fetching history for chat {chat_id}: {e}", exc_info=True)
             raise
 
-    async def get_chat_info(self, chat_id: int) -> Optional[dict]:
+    async def verify_and_get_info(self, chat_id: int) -> tuple[bool, Optional[dict]]:
         """
-        Get chat metadata (name, type, members, etc).
+        Check access and get chat info in single API call.
 
         Args:
             chat_id: Telegram chat ID
 
         Returns:
-            Dict with chat info or None if error
+            Tuple of (is_accessible, chat_info_dict_or_None)
         """
         if not self.is_connected:
-            raise RuntimeError("Not connected to Telegram")
+            return (False, None)
 
         try:
             chat = await self.client.get_chat(chat_id)
 
-            return {
+            info = {
                 "id": chat.id,
                 "title": chat.title or "",
                 "username": chat.username or "",
@@ -217,42 +229,15 @@ class TelegramClient:
                 "members_count": chat.members_count or 0,
                 "description": chat.description or "",
             }
-
-        except ChannelPrivate:
-            logger.error(f"Channel {chat_id} is private")
-            return None
-
-        except BadRequest as e:
-            logger.error(f"Invalid chat {chat_id}: {e}")
-            return None
-
-        except Exception as e:
-            logger.error(f"Error getting chat info for {chat_id}: {e}")
-            return None
-
-    async def verify_access(self, chat_id: int) -> bool:
-        """
-        Check if we have access to chat (can read messages).
-
-        Args:
-            chat_id: Telegram chat ID
-
-        Returns:
-            True if accessible, False otherwise
-        """
-        if not self.is_connected:
-            return False
-
-        try:
-            await self.client.get_chat(chat_id)
-            return True
+            return (True, info)
 
         except (ChannelPrivate, ChatAdminRequired, BadRequest):
-            return False
+            logger.error(f"Cannot access chat {chat_id}")
+            return (False, None)
 
         except Exception as e:
-            logger.error(f"Error verifying access to {chat_id}: {e}")
-            return False
+            logger.error(f"Error accessing chat {chat_id}: {e}")
+            return (False, None)
 
     async def __aenter__(self):
         """Async context manager entry."""
