@@ -23,6 +23,11 @@ from config import settings
 from json_converter import MessageConverter
 from models import ExportedMessage
 
+try:
+    import redis.asyncio as redis
+except ImportError:
+    redis = None  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,16 +40,30 @@ class TelegramClient:
         self.session_path.mkdir(exist_ok=True)
 
         # Create Pyrogram client
-        self.client = Client(
-            name=settings.SESSION_NAME,
-            api_id=settings.TELEGRAM_API_ID,
-            api_hash=settings.TELEGRAM_API_HASH,
-            workdir=str(self.session_path),
-            phone_number=settings.TELEGRAM_PHONE,
-            workers=settings.MAX_WORKERS,
-        )
+        # Production: use string session from env for stateless auth
+        # Development: use file-based session with phone number
+        if settings.TELEGRAM_SESSION_STRING:
+            logger.info("Using Pyrogram string session (stateless auth)")
+            self.client = Client(
+                name="export_worker",
+                session_string=settings.TELEGRAM_SESSION_STRING,
+                api_id=settings.TELEGRAM_API_ID,
+                api_hash=settings.TELEGRAM_API_HASH,
+                workers=settings.MAX_WORKERS,
+            )
+        else:
+            logger.info("Using Pyrogram file-based session (requires first-time auth)")
+            self.client = Client(
+                name=settings.SESSION_NAME,
+                api_id=settings.TELEGRAM_API_ID,
+                api_hash=settings.TELEGRAM_API_HASH,
+                workdir=str(self.session_path),
+                phone_number=settings.TELEGRAM_PHONE_NUMBER,
+                workers=settings.MAX_WORKERS,
+            )
 
         self.is_connected = False
+        self.redis_client: Optional[redis.Redis] = None  # type: ignore
         logger.info(f"Pyrogram client initialized (session: {settings.SESSION_NAME})")
 
     async def connect(self) -> bool:
@@ -100,6 +119,11 @@ class TelegramClient:
         """
         Get chat message history with exponential backoff for rate limiting.
 
+        DEDUPLICATION NOTE: When FloodWait occurs, we restart the iterator from
+        last_offset_id. Since Pyrogram iterates newest-to-oldest and we update
+        last_offset_id on every message, restarting can re-yield previously seen
+        messages. We track seen_message_ids to deduplicate.
+
         Args:
             chat_id: Telegram chat ID
             limit: Max messages (0 = all)
@@ -108,7 +132,7 @@ class TelegramClient:
             to_date: Filter messages to date
 
         Yields:
-            ExportedMessage objects
+            ExportedMessage objects (no duplicates guaranteed)
 
         Raises:
             BadRequest: Invalid chat ID or access denied
@@ -124,6 +148,7 @@ class TelegramClient:
             message_count = 0
             last_offset_id = offset_id
             max_retries = settings.MAX_RETRIES
+            seen_message_ids: set[int] = set()  # Track seen messages to avoid FloodWait dups
 
             while True:
                 retry_count = 0
@@ -135,13 +160,19 @@ class TelegramClient:
                         offset_id=last_offset_id,
                     ):
                         try:
+                            # Skip duplicates from FloodWait retry
+                            if message.id in seen_message_ids:
+                                logger.debug(f"Skipping duplicate message {message.id}")
+                                continue
+
                             # Date filtering
                             if from_date and message.date < from_date:
                                 continue
                             if to_date and message.date > to_date:
                                 continue
 
-                            # Update last offset for restart-on-FloodWait
+                            # Track this message ID and update last offset for restart-on-FloodWait
+                            seen_message_ids.add(message.id)
                             last_offset_id = message.id
 
                             # Convert to export format
@@ -178,11 +209,13 @@ class TelegramClient:
                     retry_count += 1
                     logger.warning(
                         f"Rate limited (FloodWait {e.value}s). "
-                        f"Retry {retry_count}/{max_retries} after {wait_time}s"
+                        f"Retry {retry_count}/{max_retries} after {wait_time}s. "
+                        f"Will resume from message {last_offset_id} "
+                        f"(have seen {len(seen_message_ids)} unique messages)"
                     )
 
                     await asyncio.sleep(wait_time)
-                    # Restart get_chat_history from last_offset_id
+                    # Restart get_chat_history from last_offset_id with deduplication active
 
             logger.info(f"✅ Exported {message_count} messages from chat {chat_id}")
 
@@ -205,6 +238,12 @@ class TelegramClient:
     async def verify_and_get_info(self, chat_id: int) -> tuple[bool, Optional[dict]]:
         """
         Check access and get chat info in single API call.
+
+        FALLBACK CACHE SYNC: Pyrogram caches entity access_hash locally. If you
+        pass a raw numeric ID that isn't cached, get_chat() fails with
+        PeerIdInvalidError. This is the most common production error when users
+        copy-paste chat IDs. Solution: call get_dialogs() to sync the cache,
+        then retry get_chat().
 
         Args:
             chat_id: Telegram chat ID
@@ -231,13 +270,106 @@ class TelegramClient:
             }
             return (True, info)
 
-        except (ChannelPrivate, ChatAdminRequired, BadRequest):
+        except BadRequest as e:
+            # Common case: numeric ID not in cache. Sync dialogs and retry.
+            if "Could not find the input entity" in str(e) or "PeerIdInvalid" in str(e):
+                logger.warning(
+                    f"Chat {chat_id} not in cache. Syncing dialog list and retrying..."
+                )
+                try:
+                    # Sync user's full dialog list to populate access_hash cache
+                    await self.client.get_dialogs()
+
+                    # Retry get_chat
+                    chat = await self.client.get_chat(chat_id)
+                    info = {
+                        "id": chat.id,
+                        "title": chat.title or "",
+                        "username": chat.username or "",
+                        "type": str(chat.type),
+                        "is_bot": chat.is_bot,
+                        "is_self": chat.is_self,
+                        "is_contact": chat.is_contact,
+                        "members_count": chat.members_count or 0,
+                        "description": chat.description or "",
+                    }
+                    logger.info(f"✅ Successfully resolved chat {chat_id} after cache sync")
+                    return (True, info)
+
+                except Exception as retry_error:
+                    logger.error(f"Cache sync retry failed for chat {chat_id}: {retry_error}")
+                    return (False, None)
+            else:
+                logger.error(f"Cannot access chat {chat_id}: {e}")
+                return (False, None)
+
+        except (ChannelPrivate, ChatAdminRequired):
             logger.error(f"Cannot access chat {chat_id}")
             return (False, None)
 
         except Exception as e:
             logger.error(f"Error accessing chat {chat_id}: {e}")
             return (False, None)
+
+    async def set_incremental_state(self, chat_id: int, last_message_id: int) -> None:
+        """
+        Save incremental export state to Redis for resumption on re-export.
+
+        Args:
+            chat_id: Telegram chat ID
+            last_message_id: ID of last exported message (to resume from)
+        """
+        if not redis:
+            logger.debug("Redis not available, skipping state persistence")
+            return
+
+        try:
+            if not self.redis_client:
+                self.redis_client = redis.Redis(
+                    host=settings.REDIS_HOST,
+                    port=settings.REDIS_PORT,
+                    decode_responses=True,
+                )
+
+            key = f"state:export:{chat_id}:last_message_id"
+            await self.redis_client.set(key, last_message_id, ex=30 * 24 * 3600)  # 30 days
+            logger.debug(f"Saved incremental state for chat {chat_id}: message_id={last_message_id}")
+
+        except Exception as e:
+            logger.warning(f"Could not save incremental state to Redis: {e}")
+
+    async def get_incremental_state(self, chat_id: int) -> Optional[int]:
+        """
+        Get last exported message ID for incremental export resume.
+
+        Args:
+            chat_id: Telegram chat ID
+
+        Returns:
+            Last message ID if available, None otherwise
+        """
+        if not redis:
+            return None
+
+        try:
+            if not self.redis_client:
+                self.redis_client = redis.Redis(
+                    host=settings.REDIS_HOST,
+                    port=settings.REDIS_PORT,
+                    decode_responses=True,
+                )
+
+            key = f"state:export:{chat_id}:last_message_id"
+            value = await self.redis_client.get(key)
+            if value:
+                message_id = int(value)
+                logger.info(f"Resuming chat {chat_id} from message_id={message_id}")
+                return message_id
+            return None
+
+        except Exception as e:
+            logger.warning(f"Could not read incremental state from Redis: {e}")
+            return None
 
     async def __aenter__(self):
         """Async context manager entry."""

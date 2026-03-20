@@ -13,7 +13,6 @@ public class ProcessingResult {
     private final String fileId;
     private final ProcessingStatus status;
     private final String errorMessage;
-    private final Instant startedAt;
     private final Instant completedAt;
 
     private ProcessingResult(String fileId, ProcessingStatus status,
@@ -21,7 +20,6 @@ public class ProcessingResult {
         this.fileId = fileId;
         this.status = status;
         this.errorMessage = errorMessage;
-        this.startedAt = Instant.now();
         this.completedAt = completedAt;
     }
 
@@ -74,26 +72,12 @@ public class ProcessingResult {
     }
 
     /**
-     * Возвращает время начала обработки.
-     *
-     * <p><b>Замечание:</b> это поле устанавливается в {@code Instant.now()} в момент создания
-     * объекта результата, а не в момент фактического начала обработки.
-     * Оба поля {@code startedAt} и {@code completedAt} содержат одинаковое значение.</p>
-     *
-     * @return момент создания объекта результата (условный "старт")
-     */
-    public Instant getStartedAt() {
-        return startedAt;
-    }
-
-    /**
      * Возвращает время завершения обработки.
      *
-     * <p><b>Замечание:</b> это поле устанавливается в {@code Instant.now()} в момент создания
-     * объекта результата, а не в момент фактического завершения обработки.
-     * Оба поля {@code startedAt} и {@code completedAt} содержат одинаковое значение.</p>
+     * <p>Устанавливается в {@code Instant.now()} в момент создания объекта результата
+     * через фабричные методы {@link #success(String)} или {@link #error(String, String)}.</p>
      *
-     * @return момент создания объекта результата (условный "конец")
+     * @return момент создания объекта результата
      */
     public Instant getCompletedAt() {
         return completedAt;
