@@ -68,6 +68,43 @@ class QueueConsumer:
             logger.error(f"❌ Failed to connect to Redis: {e}")
             return False
 
+    async def _reconnect(self, max_retries: int = 3) -> bool:
+        """
+        Reconnect to Redis with exponential backoff.
+
+        Args:
+            max_retries: Max reconnection attempts
+
+        Returns:
+            True if reconnected successfully, False otherwise
+        """
+        for attempt in range(max_retries):
+            try:
+                if self.redis_client:
+                    await self.redis_client.close()
+                    self.redis_client = None
+
+                # Exponential backoff: 1s, 2s, 4s
+                wait_time = 2 ** attempt
+                logger.warning(
+                    f"Reconnecting to Redis (attempt {attempt + 1}/{max_retries}) "
+                    f"after {wait_time}s..."
+                )
+                await asyncio.sleep(wait_time)
+
+                if await self.connect():
+                    return True
+
+            except Exception as e:
+                logger.error(f"Reconnection attempt {attempt + 1} failed: {e}")
+
+        return False
+
+    @property
+    def is_connected(self) -> bool:
+        """Check if client is connected to Redis."""
+        return self.redis_client is not None
+
     async def disconnect(self):
         """Disconnect from Redis."""
         try:
@@ -82,6 +119,7 @@ class QueueConsumer:
         Get next job from queue (blocking).
 
         Uses BLPOP to block until job available.
+        Handles reconnection on connection errors.
 
         Returns:
             ExportRequest object or None if error
@@ -111,6 +149,16 @@ class QueueConsumer:
             except Exception as e:
                 logger.error(f"Failed to create ExportRequest: {e}")
                 return None
+
+        except redis.ConnectionError as e:
+            logger.warning(f"Redis connection lost: {e}")
+            # Attempt to reconnect
+            if await self._reconnect(max_retries=3):
+                logger.info("Redis reconnected successfully")
+                return None  # Signal main loop to retry
+            else:
+                logger.error("Failed to reconnect to Redis after 3 attempts")
+                raise RuntimeError("Redis connection lost and reconnection failed")
 
         except Exception as e:
             logger.error(f"Error getting job from queue: {e}", exc_info=True)

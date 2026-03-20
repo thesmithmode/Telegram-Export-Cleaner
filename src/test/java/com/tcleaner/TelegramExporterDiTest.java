@@ -1,4 +1,6 @@
 package com.tcleaner;
+import com.tcleaner.core.TelegramExporter;
+import com.tcleaner.core.MessageProcessor;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;

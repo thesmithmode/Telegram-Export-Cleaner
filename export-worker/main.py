@@ -121,8 +121,9 @@ class ExportWorker:
             # Mark job as processing
             await self.queue_consumer.mark_job_processing(job.task_id)
 
-            # Verify access to chat
-            if not await self.telegram_client.verify_access(job.chat_id):
+            # Verify access and get chat info in single call
+            accessible, chat_info = await self.telegram_client.verify_and_get_info(job.chat_id)
+            if not accessible:
                 error = f"No access to chat {job.chat_id}"
                 logger.error(f"❌ {error}")
                 await self.java_client.send_response(
@@ -136,8 +137,6 @@ class ExportWorker:
                 await self.queue_consumer.mark_job_failed(job.task_id, error)
                 return True
 
-            # Get chat info
-            chat_info = await self.telegram_client.get_chat_info(job.chat_id)
             if chat_info:
                 logger.info(f"  Chat: {chat_info.get('title')} (type: {chat_info.get('type')})")
 
@@ -253,6 +252,9 @@ class ExportWorker:
         if self.queue_consumer:
             await self.queue_consumer.disconnect()
 
+        if self.java_client:
+            await self.java_client.aclose()
+
         logger.info(
             f"📊 Final stats: {self.jobs_processed} processed, "
             f"{self.jobs_failed} failed"
@@ -269,9 +271,21 @@ async def main():
     """Main entry point."""
     worker = ExportWorker()
 
-    # Setup signal handlers
-    signal.signal(signal.SIGTERM, worker.handle_signal)
-    signal.signal(signal.SIGINT, worker.handle_signal)
+    # Setup asyncio-compatible signal handlers
+    try:
+        loop = asyncio.get_running_loop()
+
+        def _on_signal():
+            logger.info("Shutdown signal received")
+            worker.running = False
+
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, _on_signal)
+    except NotImplementedError:
+        # Windows doesn't support add_signal_handler
+        # Fall back to synchronous handler
+        signal.signal(signal.SIGTERM, worker.handle_signal)
+        signal.signal(signal.SIGINT, worker.handle_signal)
 
     try:
         await worker.run()

@@ -1,5 +1,9 @@
 package com.tcleaner;
+import com.tcleaner.core.TelegramExporter;
+import com.tcleaner.core.MessageProcessor;
+import com.tcleaner.core.MessageFilter;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -13,19 +17,16 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Тесты для интеграции {@link TelegramExporter} с {@link MessageFilter}.
- *
- * <p>Покрывает все виды фильтрации (ключевые слова, даты, типы, null-фильтр),
- * а также работу с DI-конструктором.</p>
+ * Тесты для TelegramExporter с фильтрацией через MessageFilter.
  */
-@DisplayName("TelegramExporter — фильтрация сообщений")
+@DisplayName("TelegramExporter - Filter Integration")
 class TelegramExporterFilterTest {
 
     @TempDir
     Path tempDir;
 
     @Test
-    @DisplayName("Фильтр по ключевому слову — оставляет только совпадающие")
+    @DisplayName("processFile с MessageFilter фильтрует по ключевым словам")
     void processFileWithKeywordFilter() throws IOException {
         String json = """
             {
@@ -37,21 +38,21 @@ class TelegramExporterFilterTest {
                 ]
             }
             """;
-
+        
         Path inputFile = tempDir.resolve("result.json");
         Files.writeString(inputFile, json);
-
+        
         TelegramExporter exporter = new TelegramExporter();
         MessageFilter filter = new MessageFilter().withKeyword("hello");
-
+        
         List<String> result = exporter.processFile(inputFile, filter);
-
+        
         assertThat(result).hasSize(1);
         assertThat(result.get(0)).contains("Hello world");
     }
 
     @Test
-    @DisplayName("Фильтр по диапазону дат — оставляет только в диапазоне")
+    @DisplayName("processFile с MessageFilter фильтрует по диапазону дат")
     void processFileWithDateRangeFilter() throws IOException {
         String json = """
             {
@@ -63,23 +64,23 @@ class TelegramExporterFilterTest {
                 ]
             }
             """;
-
+        
         Path inputFile = tempDir.resolve("result.json");
         Files.writeString(inputFile, json);
-
+        
         TelegramExporter exporter = new TelegramExporter();
         MessageFilter filter = new MessageFilter()
                 .withStartDate(LocalDate.of(2025, 6, 22))
                 .withEndDate(LocalDate.of(2025, 6, 26));
-
+        
         List<String> result = exporter.processFile(inputFile, filter);
-
+        
         assertThat(result).hasSize(1);
         assertThat(result.get(0)).contains("June 24");
     }
 
     @Test
-    @DisplayName("Фильтр null — возвращает все сообщения")
+    @DisplayName("processFile без MessageFilter возвращает все сообщения")
     void processFileWithoutFilterReturnsAll() throws IOException {
         String json = """
             {
@@ -90,19 +91,19 @@ class TelegramExporterFilterTest {
                 ]
             }
             """;
-
+        
         Path inputFile = tempDir.resolve("result.json");
         Files.writeString(inputFile, json);
-
+        
         TelegramExporter exporter = new TelegramExporter();
-
+        
         List<String> result = exporter.processFile(inputFile, null);
-
+        
         assertThat(result).hasSize(2);
     }
 
     @Test
-    @DisplayName("processFile(path) и processFile(path, null) дают одинаковый результат")
+    @DisplayName("processFile с null MessageFilter эквивалентен отсутствию фильтра")
     void processFileWithNullFilterIsSameAsNoFilter() throws IOException {
         String json = """
             {
@@ -112,20 +113,20 @@ class TelegramExporterFilterTest {
                 ]
             }
             """;
-
+        
         Path inputFile = tempDir.resolve("result.json");
         Files.writeString(inputFile, json);
-
+        
         TelegramExporter exporter = new TelegramExporter();
-
+        
         List<String> resultNoFilter = exporter.processFile(inputFile);
         List<String> resultNullFilter = exporter.processFile(inputFile, null);
-
+        
         assertThat(resultNullFilter).isEqualTo(resultNoFilter);
     }
 
     @Test
-    @DisplayName("Фильтр по includeType — оставляет только тип 'message'")
+    @DisplayName("processFile с MessageFilter фильтрует по типу сообщения")
     void processFileWithTypeFilter() throws IOException {
         String json = """
             {
@@ -137,21 +138,21 @@ class TelegramExporterFilterTest {
                 ]
             }
             """;
-
+        
         Path inputFile = tempDir.resolve("result.json");
         Files.writeString(inputFile, json);
-
+        
         TelegramExporter exporter = new TelegramExporter();
         MessageFilter filter = new MessageFilter().withIncludeType("message");
-
+        
         List<String> result = exporter.processFile(inputFile, filter);
-
+        
         assertThat(result).hasSize(2);
         assertThat(result).allMatch(line -> line.contains("Regular") || line.contains("Another"));
     }
 
     @Test
-    @DisplayName("Фильтр по excludeType — исключает тип 'service'")
+    @DisplayName("processFile с MessageFilter исключает типы сообщений")
     void processFileExcludesTypes() throws IOException {
         String json = """
             {
@@ -163,20 +164,20 @@ class TelegramExporterFilterTest {
                 ]
             }
             """;
-
+        
         Path inputFile = tempDir.resolve("result.json");
         Files.writeString(inputFile, json);
-
+        
         TelegramExporter exporter = new TelegramExporter();
         MessageFilter filter = new MessageFilter().withExcludeType("service");
-
+        
         List<String> result = exporter.processFile(inputFile, filter);
-
+        
         assertThat(result).hasSize(2);
     }
 
     @Test
-    @DisplayName("DI-конструктор корректно работает с фильтром")
+    @DisplayName("processFile с MessageFilter работает с DI-конструктором")
     void processFileWithFilterUsesDiConstructor() throws IOException {
         String json = """
             {
@@ -186,18 +187,17 @@ class TelegramExporterFilterTest {
                 ]
             }
             """;
-
+        
         Path inputFile = tempDir.resolve("result.json");
         Files.writeString(inputFile, json);
-
-        com.fasterxml.jackson.databind.ObjectMapper mapper =
-                new com.fasterxml.jackson.databind.ObjectMapper();
+        
+        ObjectMapper mapper = new ObjectMapper();
         MessageProcessor processor = new MessageProcessor();
         TelegramExporter exporter = new TelegramExporter(mapper, processor);
-
+        
         MessageFilter filter = new MessageFilter();
         List<String> result = exporter.processFile(inputFile, filter);
-
+        
         assertThat(result).hasSize(1);
     }
 }

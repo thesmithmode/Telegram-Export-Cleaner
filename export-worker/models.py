@@ -150,7 +150,13 @@ class ExportedMessage(BaseModel):
 
 
 class ExportResponse(BaseModel):
-    """Response from export worker to Java API."""
+    """
+    Response from export worker to Java API.
+
+    NOTE: This is a contract model used in tests and documentation.
+    The actual response flow uses individual ExportedMessage objects sent through JavaBotClient,
+    not this model. Kept for reference and potential future API contracts.
+    """
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -190,15 +196,3 @@ class ExportResponse(BaseModel):
     error: Optional[str] = Field(None, description="Error message if failed")
     error_code: Optional[str] = Field(None, description="Error code for retries")
     exported_at: Optional[str] = Field(None, description="Export timestamp")
-
-
-class QueueJob(BaseModel):
-    """Job from Redis queue."""
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    id: str = Field(..., description="Job ID")
-    func: str = Field(..., description="Function to call")
-    args: tuple = Field(default_factory=tuple)
-    kwargs: dict = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=datetime.now)
