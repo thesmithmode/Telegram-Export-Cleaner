@@ -1,4 +1,4 @@
-package com.tcleaner;
+package com.tcleaner.format;
 
 /**
  * Утилита форматирования одного сообщения в строку вывода.

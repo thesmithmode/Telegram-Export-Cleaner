@@ -24,11 +24,11 @@ services:
   redis:
     image: redis:7-alpine
     container_name: telegram-export-redis
-    ports:
-      - "6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes --appendfsync always
+    command: redis-server --appendonly yes --appendfsync everysec
+    mem_limit: 256m
+    cpus: '0.25'
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -37,6 +37,43 @@ services:
     networks:
       - telegram-export
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # =========================================================================
+  # Java Bot: Spring Boot API + Telegram Bot
+  # =========================================================================
+  java-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: telegram-export-java-bot
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_QUEUE_NAME=${REDIS_QUEUE_NAME:-telegram_export}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_BOT_USERNAME=${TELEGRAM_BOT_USERNAME:-ExportCleanerBot}
+    volumes:
+      - java_import:/data/import
+      - java_export:/data/export
+    mem_limit: 1024m
+    cpus: '0.75'
+    networks:
+      - telegram-export
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     logging:
       driver: "json-file"
       options:
@@ -54,6 +91,10 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      java-bot:
+        condition: service_healthy
+    mem_limit: 512m
+    cpus: '0.5'
     environment:
       # Telegram API
       - TELEGRAM_API_ID=${TELEGRAM_API_ID}
@@ -104,4 +145,8 @@ networks:
 
 volumes:
   redis_data:
+    driver: local
+  java_import:
+    driver: local
+  java_export:
     driver: local
