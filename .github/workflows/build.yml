@@ -31,6 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
     permissions:
+      contents: read
       packages: write
     outputs:
       image_tag: ${{ steps.meta.outputs.version }}
@@ -55,13 +56,32 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build and push Java API
         uses: docker/build-push-action@v5
         with:
           context: .
+          dockerfile: Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Extract python-worker metadata
+        id: python_meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/telegram-export-python-worker
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=,format=short
+
+      - name: Build and push Python worker
+        uses: docker/build-push-action@v5
+        with:
+          context: ./export-worker
+          dockerfile: export-worker/Dockerfile
+          push: true
+          tags: ${{ steps.python_meta.outputs.tags }}
+          labels: ${{ steps.python_meta.outputs.labels }}
 
   # ─── 3. Деплой на сервер ─────────────────────────────────────────────────────
   deploy:
@@ -81,23 +101,61 @@ jobs:
             mkdir -p /root/telegram-cleaner && cd /root/telegram-cleaner
             cat <<EOF > docker-compose.yml
             services:
-              telegram-cleaner:
+              java-bot:
                 image: ghcr.io/${{ github.repository_owner }}/telegram-export-cleaner:latest
                 ports: ["127.0.0.1:8081:8080"]
                 environment:
                   - REDIS_HOST=redis
                   - REDIS_PORT=6379
+                  - TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+                  - TELEGRAM_BOT_USERNAME=ExportCleanerBot
+                volumes:
+                  - export-data:/data/export
                 depends_on: { redis: { condition: service_healthy } }
                 restart: unless-stopped
+                healthcheck:
+                  test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/health || exit 1"]
+                  interval: 10s
+                  timeout: 5s
+                  retries: 5
+                  start_period: 30s
+              python-worker:
+                image: ghcr.io/${{ github.repository_owner }}/telegram-export-python-worker:latest
+                environment:
+                  - TELEGRAM_API_ID=${{ secrets.TELEGRAM_API_ID }}
+                  - TELEGRAM_API_HASH=${{ secrets.TELEGRAM_API_HASH }}
+                  - TELEGRAM_SESSION_STRING=${{ secrets.TELEGRAM_SESSION_STRING }}
+                  - TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+                  - JAVA_API_BASE_URL=http://java-bot:8080
+                  - REDIS_HOST=redis
+                  - REDIS_PORT=6379
+                  - LOG_LEVEL=INFO
+                  - PYTHONUNBUFFERED=1
+                depends_on: { java-bot: { condition: service_healthy } }
+                restart: unless-stopped
+                healthcheck:
+                  test: ["CMD-SHELL", "python -c 'import redis; r=redis.Redis(host=\"redis\"); r.ping()' || exit 1"]
+                  interval: 15s
+                  timeout: 5s
+                  retries: 3
+                  start_period: 10s
               redis:
                 image: redis:7-alpine
+                command: redis-server --appendonly yes --appendfsync everysec
+                mem_limit: 256m
+                volumes:
+                  - redis-data:/data
                 healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 10s }
                 restart: unless-stopped
+            volumes:
+              redis-data:
+              export-data:
             EOF
             echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
             docker compose pull
-            docker compose up -d
+            docker compose up -d --remove-orphans
             docker image prune -f
+            docker container prune -f
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_ACTOR: ${{ github.actor }}
