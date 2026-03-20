@@ -1,5 +1,8 @@
-package com.tcleaner;
+package com.tcleaner.core;
 
+import com.tcleaner.format.DateFormatter;
+import com.tcleaner.format.MarkdownParser;
+import com.tcleaner.format.MessageFormatter;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
