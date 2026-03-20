@@ -10,7 +10,7 @@ RUN mvn clean package -DskipTests -q
 # Stage 2: Runtime
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
-RUN mkdir -p /data/import /data/export
+RUN apk add --no-cache wget && mkdir -p /data/import /data/export
 COPY --from=build /app/target/telegram-cleaner-*.jar app.jar
 
 # Explicitly limit JVM heap — without -Xmx JVM takes 25% of host RAM,

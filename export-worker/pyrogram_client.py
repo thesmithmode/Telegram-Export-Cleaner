@@ -35,14 +35,27 @@ class TelegramClient:
         self.session_path.mkdir(exist_ok=True)
 
         # Create Pyrogram client
-        self.client = Client(
-            name=settings.SESSION_NAME,
-            api_id=settings.TELEGRAM_API_ID,
-            api_hash=settings.TELEGRAM_API_HASH,
-            workdir=str(self.session_path),
-            phone_number=settings.TELEGRAM_PHONE,
-            workers=settings.MAX_WORKERS,
-        )
+        # Production: use string session from env for stateless auth
+        # Development: use file-based session with phone number
+        if settings.TELEGRAM_SESSION_STRING:
+            logger.info("Using Pyrogram string session (stateless auth)")
+            self.client = Client(
+                name="export_worker",
+                session_string=settings.TELEGRAM_SESSION_STRING,
+                api_id=settings.TELEGRAM_API_ID,
+                api_hash=settings.TELEGRAM_API_HASH,
+                workers=settings.MAX_WORKERS,
+            )
+        else:
+            logger.info("Using Pyrogram file-based session (requires first-time auth)")
+            self.client = Client(
+                name=settings.SESSION_NAME,
+                api_id=settings.TELEGRAM_API_ID,
+                api_hash=settings.TELEGRAM_API_HASH,
+                workdir=str(self.session_path),
+                phone_number=settings.TELEGRAM_PHONE_NUMBER,
+                workers=settings.MAX_WORKERS,
+            )
 
         self.is_connected = False
         logger.info(f"Pyrogram client initialized (session: {settings.SESSION_NAME})")
