@@ -119,6 +119,155 @@ class TestQueueConsumer:
 
 
 @pytest.mark.asyncio
+class TestQueueConsumerJobManagement:
+    """Test job management methods (push, mark processing, etc)."""
+
+    async def test_push_job_serializes_and_rpush(self):
+        """Test push_job serializes and pushes to Redis."""
+        with patch('queue_consumer.settings') as mock_settings:
+            mock_settings.REDIS_HOST = "redis"
+            mock_settings.REDIS_PORT = 6379
+            mock_settings.REDIS_DB = 0
+            mock_settings.REDIS_PASSWORD = None
+            mock_settings.REDIS_QUEUE_NAME = "telegram_export"
+
+            with patch('queue_consumer.redis.from_url', new_callable=AsyncMock) as mock_redis:
+                mock_client = AsyncMock()
+                mock_client.rpush = AsyncMock(return_value=1)
+                mock_redis.return_value = mock_client
+
+                consumer = QueueConsumer()
+                consumer.redis_client = mock_client
+
+                job = ExportRequest(
+                    task_id="test_123",
+                    user_id=456,
+                    chat_id=-1001234567890,
+                    limit=100
+                )
+
+                result = await consumer.push_job(job)
+
+                assert result is True
+                mock_client.rpush.assert_called_once()
+                # Verify job was serialized to JSON
+                call_args = mock_client.rpush.call_args
+                assert "telegram_export" in call_args[0]
+                # Check JSON contains task_id
+                json_data = json.loads(call_args[0][1])
+                assert json_data['task_id'] == "test_123"
+
+    async def test_mark_job_processing_sets_key_with_ttl(self):
+        """Test mark_job_processing sets Redis key with TTL."""
+        with patch('queue_consumer.settings') as mock_settings:
+            mock_settings.REDIS_HOST = "redis"
+            mock_settings.REDIS_PORT = 6379
+            mock_settings.REDIS_DB = 0
+            mock_settings.REDIS_PASSWORD = None
+            mock_settings.REDIS_QUEUE_NAME = "telegram_export"
+            mock_settings.JOB_TIMEOUT = 3600
+
+            with patch('queue_consumer.redis.from_url', new_callable=AsyncMock) as mock_redis:
+                mock_client = AsyncMock()
+                mock_client.setex = AsyncMock(return_value=True)
+                mock_redis.return_value = mock_client
+
+                consumer = QueueConsumer()
+                consumer.redis_client = mock_client
+
+                result = await consumer.mark_job_processing("test_123")
+
+                assert result is True
+                mock_client.setex.assert_called_once()
+                # Verify key format and TTL
+                call_args = mock_client.setex.call_args
+                assert "job:processing:test_123" in call_args[0]
+                assert call_args[0][1] == 3600  # TTL
+
+    async def test_mark_job_completed_deletes_and_sets(self):
+        """Test mark_job_completed removes processing key and sets completed."""
+        with patch('queue_consumer.settings') as mock_settings:
+            mock_settings.REDIS_HOST = "redis"
+            mock_settings.REDIS_PORT = 6379
+            mock_settings.REDIS_DB = 0
+            mock_settings.REDIS_PASSWORD = None
+            mock_settings.REDIS_QUEUE_NAME = "telegram_export"
+
+            with patch('queue_consumer.redis.from_url', new_callable=AsyncMock) as mock_redis:
+                mock_client = AsyncMock()
+                mock_client.delete = AsyncMock(return_value=1)
+                mock_client.setex = AsyncMock(return_value=True)
+                mock_redis.return_value = mock_client
+
+                consumer = QueueConsumer()
+                consumer.redis_client = mock_client
+
+                result = await consumer.mark_job_completed("test_123")
+
+                assert result is True
+                # Verify delete was called first
+                mock_client.delete.assert_called_once_with("job:processing:test_123")
+                # Verify setex was called for completed key
+                mock_client.setex.assert_called_once()
+                call_args = mock_client.setex.call_args
+                assert "job:completed:test_123" in call_args[0]
+
+    async def test_mark_job_failed_stores_error_json(self):
+        """Test mark_job_failed stores error information."""
+        with patch('queue_consumer.settings') as mock_settings:
+            mock_settings.REDIS_HOST = "redis"
+            mock_settings.REDIS_PORT = 6379
+            mock_settings.REDIS_DB = 0
+            mock_settings.REDIS_PASSWORD = None
+            mock_settings.REDIS_QUEUE_NAME = "telegram_export"
+
+            with patch('queue_consumer.redis.from_url', new_callable=AsyncMock) as mock_redis:
+                mock_client = AsyncMock()
+                mock_client.delete = AsyncMock(return_value=1)
+                mock_client.setex = AsyncMock(return_value=True)
+                mock_redis.return_value = mock_client
+
+                consumer = QueueConsumer()
+                consumer.redis_client = mock_client
+
+                result = await consumer.mark_job_failed("test_123", "Network timeout")
+
+                assert result is True
+                mock_client.delete.assert_called_once()
+                mock_client.setex.assert_called_once()
+                # Verify error is stored as JSON
+                call_args = mock_client.setex.call_args
+                json_value = json.loads(call_args[0][2])
+                assert json_value['error'] == "Network timeout"
+                assert 'timestamp' in json_value
+
+    async def test_get_queue_stats_returns_count(self):
+        """Test get_queue_stats returns queue information."""
+        with patch('queue_consumer.settings') as mock_settings:
+            mock_settings.REDIS_HOST = "redis"
+            mock_settings.REDIS_PORT = 6379
+            mock_settings.REDIS_DB = 0
+            mock_settings.REDIS_PASSWORD = None
+            mock_settings.REDIS_QUEUE_NAME = "telegram_export"
+
+            with patch('queue_consumer.redis.from_url', new_callable=AsyncMock) as mock_redis:
+                mock_client = AsyncMock()
+                mock_client.llen = AsyncMock(return_value=42)
+                mock_redis.return_value = mock_client
+
+                consumer = QueueConsumer()
+                consumer.redis_client = mock_client
+
+                result = await consumer.get_queue_stats()
+
+                assert result is not None
+                assert result['queue_name'] == "telegram_export"
+                assert result['pending_jobs'] == 42
+                assert 'timestamp' in result
+                mock_client.llen.assert_called_once_with("telegram_export")
+
+
+@pytest.mark.asyncio
 class TestQueueConsumerAsync:
     """Async tests for QueueConsumer (mocked Redis)"""
 

@@ -2,10 +2,9 @@ package com.tcleaner.bot;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
+import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
-import org.springframework.context.event.ContextRefreshedEvent;
+import org.springframework.context.ApplicationContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.GenericContainer;
@@ -16,6 +15,7 @@ import org.testcontainers.utility.DockerImageName;
 import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Тесты для BotInitializer.
@@ -44,11 +44,18 @@ class BotInitializerTest {
         // Don't set telegram.bot.token — bot won't be created (ConditionalOnExpression)
     }
 
+    private final ApplicationContext context;
+
+    BotInitializerTest(ApplicationContext context) {
+        this.context = context;
+    }
+
     @Test
     @DisplayName("BotInitializer не создаётся когда токен пуст")
     void botInitializerNotCreatedWhenTokenEmpty() {
         // ConditionalOnExpression предотвращает создание компонента
-        // При пустом токене компонент вообще не создаётся
-        assertThat(true).isTrue(); // Тест просто проверяет что контекст загружается
+        // При пустом токене ExportBot вообще не создаётся
+        assertThatThrownBy(() -> context.getBean("exportBot"))
+                .isInstanceOf(NoSuchBeanDefinitionException.class);
     }
 }
