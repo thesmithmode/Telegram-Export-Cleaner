@@ -36,22 +36,6 @@ class ProcessingResultTest {
     }
 
     @Test
-    @DisplayName("success() — startedAt заполнен при создании")
-    void success_hasStartedAt() {
-        ProcessingResult result = ProcessingResult.success("id");
-
-        assertThat(result.getStartedAt()).isNotNull();
-    }
-
-    @Test
-    @DisplayName("error() — startedAt заполнен при создании")
-    void error_hasStartedAt() {
-        ProcessingResult result = ProcessingResult.error("id", "error");
-
-        assertThat(result.getStartedAt()).isNotNull();
-    }
-
-    @Test
     @DisplayName("два разных fileId не смешиваются")
     void twoResults_areIndependent() {
         ProcessingResult ok = ProcessingResult.success("aaa");

@@ -140,19 +140,34 @@ class ExportWorker:
             if chat_info:
                 logger.info(f"  Chat: {chat_info.get('title')} (type: {chat_info.get('type')})")
 
-            # Export messages
+            # Export messages - try to resume from incremental state if available
             messages: list[ExportedMessage] = []
+            offset_id = job.offset_id
+
+            # Check if we can resume from previous export of same chat
+            if offset_id == 0:  # Only if user didn't specify explicit offset
+                last_message_id = await self.telegram_client.get_incremental_state(job.chat_id)
+                if last_message_id:
+                    offset_id = last_message_id
+                    logger.info(f"Resuming from message {offset_id} (incremental export)")
+
             try:
                 async for message in self.telegram_client.get_chat_history(
                     chat_id=job.chat_id,
                     limit=job.limit,
-                    offset_id=job.offset_id,
+                    offset_id=offset_id,
                 ):
                     messages.append(message)
 
-                    # Log progress every 500 messages
+                    # Report progress every 500 messages to user and logs
                     if len(messages) % 500 == 0:
                         logger.info(f"  Exported {len(messages)} messages...")
+                        if job.user_chat_id and self.java_client:
+                            await self.java_client.send_progress_update(
+                                user_chat_id=job.user_chat_id,
+                                task_id=job.task_id,
+                                message_count=len(messages),
+                            )
 
             except Exception as e:
                 error = f"Export failed: {str(e)}"
@@ -167,6 +182,11 @@ class ExportWorker:
                 )
                 await self.queue_consumer.mark_job_failed(job.task_id, error)
                 return True
+
+            # Save incremental state for next export of same chat
+            if messages:
+                last_message_id = messages[-1].id  # Last exported message
+                await self.telegram_client.set_incremental_state(job.chat_id, last_message_id)
 
             # Send results to Java API, deliver cleaned text to user
             success = await self.java_client.send_response(
