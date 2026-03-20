@@ -1,4 +1,8 @@
 package com.tcleaner;
+import com.tcleaner.core.TelegramExporter;
+import com.tcleaner.core.TelegramExporterException;
+import com.tcleaner.api.TelegramController;
+import com.tcleaner.core.TelegramExporterInterface;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;

@@ -1,5 +1,9 @@
 package com.tcleaner;
+import com.tcleaner.core.TelegramExporter;
+import com.tcleaner.core.TelegramExporterException;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -14,32 +18,27 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Тесты для {@link TelegramExporter}: обработка ошибок и граничные условия.
- *
- * <p>Покрывает:</p>
- * <ul>
- *   <li>отсутствующий файл → {@code FILE_NOT_FOUND}</li>
- *   <li>невалидный JSON → {@code INVALID_JSON}</li>
- *   <li>отсутствие/null поля {@code messages} → пустой список</li>
- *   <li>корректную запись в выходной файл</li>
- *   <li>перезапись существующего файла</li>
- *   <li>большие чаты и Unicode</li>
- * </ul>
+ * Тесты для TelegramExporter - обработка ошибок и граничные условия.
  */
-@DisplayName("TelegramExporter — обработка ошибок")
+@DisplayName("TelegramExporter - Error Handling")
 class TelegramExporterErrorHandlingTest {
+
+    private ObjectMapper objectMapper;
+
+    @BeforeEach
+    void setUp() {
+        objectMapper = new ObjectMapper();
+    }
 
     @TempDir
     Path tempDir;
 
-    // ─── Ошибки файлового ввода/вывода ───────────────────────────────────────
-
     @Nested
-    @DisplayName("Ошибки файлового ввода/вывода")
+    @DisplayName("Обработка ошибок файлового ввода/вывода")
     class FileIOErrors {
 
         @Test
-        @DisplayName("Несуществующий файл → TelegramExporterException FILE_NOT_FOUND")
+        @DisplayName("Выбрасывает IOException для несуществующего файла")
         void throwsExceptionForNonExistentFile() {
             Path nonExistent = tempDir.resolve("nonexistent.json");
             TelegramExporter exporter = new TelegramExporter();
@@ -50,7 +49,7 @@ class TelegramExporterErrorHandlingTest {
         }
 
         @Test
-        @DisplayName("Невалидный JSON → TelegramExporterException INVALID_JSON")
+        @DisplayName("Выбрасывает IOException для невалидного JSON")
         void throwsExceptionForInvalidJson() throws IOException {
             Path invalidJson = tempDir.resolve("invalid.json");
             Files.writeString(invalidJson, "{ invalid json }");
@@ -63,7 +62,7 @@ class TelegramExporterErrorHandlingTest {
         }
 
         @Test
-        @DisplayName("Пустой JSON-объект {} → пустой список (поле messages отсутствует)")
+        @DisplayName("Возвращает пустой список для пустого JSON объекта")
         void returnsEmptyListForEmptyJson() throws IOException {
             Path emptyJson = tempDir.resolve("empty.json");
             Files.writeString(emptyJson, "{}");
@@ -75,7 +74,7 @@ class TelegramExporterErrorHandlingTest {
         }
 
         @Test
-        @DisplayName("JSON без поля messages → пустой список")
+        @DisplayName("Возвращает пустой список для JSON без массива messages")
         void returnsEmptyListForNoMessagesArray() throws IOException {
             Path noMessages = tempDir.resolve("no_messages.json");
             Files.writeString(noMessages, """
@@ -89,7 +88,7 @@ class TelegramExporterErrorHandlingTest {
         }
 
         @Test
-        @DisplayName("messages: null → пустой список")
+        @DisplayName("Возвращает пустой список для null messages")
         void returnsEmptyListForNullMessages() throws IOException {
             Path nullMessages = tempDir.resolve("null_messages.json");
             Files.writeString(nullMessages, """
@@ -103,14 +102,12 @@ class TelegramExporterErrorHandlingTest {
         }
     }
 
-    // ─── Запись в выходной файл ───────────────────────────────────────────────
-
     @Nested
-    @DisplayName("Запись в выходной файл")
+    @DisplayName("Обработка вывода в файл")
     class FileOutputErrors {
 
         @Test
-        @DisplayName("Корректно записывает одно сообщение в файл")
+        @DisplayName("Корректно записывает в файл")
         void writesToFile() throws IOException {
             String json = """
                 {
@@ -128,8 +125,8 @@ class TelegramExporterErrorHandlingTest {
             exporter.processFileToFile(inputFile, outputFile);
 
             assertThat(outputFile).exists();
-            List<String> lines = Files.readAllLines(outputFile);
-            assertThat(lines).containsExactly("20250624 Test");
+            String content = Files.readString(outputFile);
+            assertThat(content).isEqualTo("20250624 Test\n");
         }
 
         @Test
@@ -170,14 +167,12 @@ class TelegramExporterErrorHandlingTest {
         }
     }
 
-    // ─── Интеграционные сценарии ──────────────────────────────────────────────
-
     @Nested
     @DisplayName("Интеграционные сценарии")
     class IntegrationScenarios {
 
         @Test
-        @DisplayName("Чат с 100 сообщениями — все обрабатываются")
+        @DisplayName("Обрабатывает чат с большим количеством сообщений")
         void handlesLargeChat() throws IOException {
             StringBuilder sb = new StringBuilder("{\"messages\": [");
             for (int i = 0; i < 100; i++) {
@@ -198,7 +193,7 @@ class TelegramExporterErrorHandlingTest {
         }
 
         @Test
-        @DisplayName("Сообщения с кириллицей и emoji обрабатываются корректно")
+        @DisplayName("Обрабатывает чат с русскими символами")
         void handlesRussianText() throws IOException {
             String json = """
                 {

@@ -1,4 +1,6 @@
 package com.tcleaner;
+import com.tcleaner.core.MessageFilter;
+import com.tcleaner.core.MessageFilterFactory;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
