@@ -38,7 +38,7 @@ class MessageProcessorNullHandlingTest {
         }
 
         @Test
-        @DisplayName("Возвращает null для сообщения без type")
+        @DisplayName("Обрабатывает сообщение без type (дефолт 'message')")
         void handlesMessageWithoutType() throws Exception {
             JsonNode message = objectMapper.readTree("""
                 {
@@ -48,7 +48,8 @@ class MessageProcessorNullHandlingTest {
                 }
                 """);
             String result = processor.processMessage(message);
-            assertThat(result).isNull();
+            // Без type используется дефолт "message", поэтому обрабатывается
+            assertThat(result).isEqualTo("20250624 Hello");
         }
 
         @Test

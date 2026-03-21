@@ -80,7 +80,7 @@ class SecurityConfigTest {
     @Test
     @DisplayName("Разрешает GET запрос с CORS headers")
     void allowsSimpleGetRequest() throws Exception {
-        mockMvc.perform(get("/api/files/status/test-id")
+        mockMvc.perform(get("/api/files/test-id/status")
                 .header("Origin", "http://localhost:3000"))
                 .andExpect(status().isOk())
                 .andExpect(header().exists("Access-Control-Allow-Origin"));
