@@ -23,6 +23,11 @@ from config import settings
 from json_converter import MessageConverter
 from models import ExportedMessage
 
+try:
+    import redis.asyncio as redis
+except ImportError:
+    redis = None  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 
@@ -58,6 +63,7 @@ class TelegramClient:
             )
 
         self.is_connected = False
+        self.redis_client: Optional[redis.Redis] = None  # type: ignore
         logger.info(f"Pyrogram client initialized (session: {settings.SESSION_NAME})")
 
     async def connect(self) -> bool:
@@ -304,6 +310,66 @@ class TelegramClient:
         except Exception as e:
             logger.error(f"Error accessing chat {chat_id}: {e}")
             return (False, None)
+
+    async def set_incremental_state(self, chat_id: int, last_message_id: int) -> None:
+        """
+        Save incremental export state to Redis for resumption on re-export.
+
+        Args:
+            chat_id: Telegram chat ID
+            last_message_id: ID of last exported message (to resume from)
+        """
+        if not redis:
+            logger.debug("Redis not available, skipping state persistence")
+            return
+
+        try:
+            if not self.redis_client:
+                self.redis_client = redis.Redis(
+                    host=settings.REDIS_HOST,
+                    port=settings.REDIS_PORT,
+                    decode_responses=True,
+                )
+
+            key = f"state:export:{chat_id}:last_message_id"
+            await self.redis_client.set(key, last_message_id, ex=30 * 24 * 3600)  # 30 days
+            logger.debug(f"Saved incremental state for chat {chat_id}: message_id={last_message_id}")
+
+        except Exception as e:
+            logger.warning(f"Could not save incremental state to Redis: {e}")
+
+    async def get_incremental_state(self, chat_id: int) -> Optional[int]:
+        """
+        Get last exported message ID for incremental export resume.
+
+        Args:
+            chat_id: Telegram chat ID
+
+        Returns:
+            Last message ID if available, None otherwise
+        """
+        if not redis:
+            return None
+
+        try:
+            if not self.redis_client:
+                self.redis_client = redis.Redis(
+                    host=settings.REDIS_HOST,
+                    port=settings.REDIS_PORT,
+                    decode_responses=True,
+                )
+
+            key = f"state:export:{chat_id}:last_message_id"
+            value = await self.redis_client.get(key)
+            if value:
+                message_id = int(value)
+                logger.info(f"Resuming chat {chat_id} from message_id={message_id}")
+                return message_id
+            return None
+
+        except Exception as e:
+            logger.warning(f"Could not read incremental state from Redis: {e}")
+            return None
 
     async def __aenter__(self):
         """Async context manager entry."""
