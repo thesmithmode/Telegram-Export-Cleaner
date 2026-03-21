@@ -135,6 +135,14 @@ class JavaBotClient:
         Transform text_entities from Telegram Bot API format (offset/length)
         to Telegram Desktop export format (type/text).
 
+        CRITICAL: Telegram Bot API offsets are in UTF-16 code units, but Python
+        strings use Unicode code points (UTF-32). For messages with emoji or
+        characters outside the Basic Multilingual Plane (U+FFFF), direct slicing
+        text[offset:offset+length] produces misaligned text.
+
+        Solution: Encode text to UTF-16-LE, extract by byte offsets (offset*2 to
+        (offset+length)*2), decode back to Unicode.
+
         Args:
             text: Full message text
             entities: List of entities with {type, offset, length, ...}
@@ -147,12 +155,17 @@ class JavaBotClient:
 
         transformed = []
         try:
+            # Pre-encode text to UTF-16-LE for all entity extractions
+            text_utf16 = text.encode('utf-16-le')
+
             for entity in entities:
                 offset = entity.get("offset", 0)
                 length = entity.get("length", 0)
 
-                # Extract the text for this entity
-                entity_text = text[offset : offset + length]
+                # Extract entity text using UTF-16 byte offsets
+                # Telegram offset/length are in UTF-16 code units, not bytes
+                entity_bytes = text_utf16[offset * 2 : (offset + length) * 2]
+                entity_text = entity_bytes.decode('utf-16-le')
 
                 # Create new entity dict with type + text instead of offset + length
                 new_entity = {
