@@ -5,7 +5,7 @@ Protocols define duck-typing interfaces for worker components.
 Allows replacing implementations without changing caller code.
 """
 
-from typing import Protocol, AsyncGenerator, Optional, Tuple, Any
+from typing import Protocol, AsyncGenerator, Optional, Tuple, Any, Union
 from datetime import datetime
 
 from models import ExportedMessage, ExportRequest
@@ -27,25 +27,28 @@ class TelegramClientProtocol(Protocol):
         """Disconnect from Telegram API."""
         ...
 
-    async def verify_and_get_info(self, chat_id: int) -> Tuple[bool, Optional[dict]]:
+    async def verify_and_get_info(self, chat_id: Union[int, str]) -> Tuple[bool, Optional[dict], Optional[str]]:
         """
         Verify access to chat and get chat metadata.
 
         Args:
-            chat_id: Target chat ID
+            chat_id: Target chat ID or username
 
         Returns:
-            (is_accessible, chat_info) where:
+            (is_accessible, chat_info, error_reason) where:
             - is_accessible: bool indicating if chat is accessible
             - chat_info: dict with title, type, etc. or None if not accessible
+            - error_reason: CHANNEL_PRIVATE, USERNAME_NOT_FOUND,
+              ADMIN_REQUIRED, CHAT_NOT_ACCESSIBLE, UNKNOWN, or None if accessible
         """
         ...
 
     async def get_chat_history(
         self,
-        chat_id: int,
+        chat_id: Union[int, str],
         limit: int = 0,
         offset_id: int = 0,
+        min_id: int = 0,
         from_date: Optional[datetime] = None,
         to_date: Optional[datetime] = None,
     ) -> AsyncGenerator[ExportedMessage, None]:
@@ -55,7 +58,8 @@ class TelegramClientProtocol(Protocol):
         Args:
             chat_id: Target chat ID
             limit: Max messages (0 = all)
-            offset_id: Start from message ID
+            offset_id: Start from message ID (fetches messages OLDER than this)
+            min_id: Stop when message.id <= min_id (incremental: fetch only new messages)
             from_date: Filter from date (optional)
             to_date: Filter to date (optional)
 

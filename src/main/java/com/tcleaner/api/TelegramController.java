@@ -17,11 +17,12 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.BufferedWriter;
 import java.io.IOException;
+import java.io.StringWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -40,10 +41,9 @@ import java.util.Map;
  * </ul>
  *
  * <h2>Память</h2>
- * <p>Список обработанных строк формируется один раз в {@link TelegramExporter} и
- * напрямую объединяется через {@code String.join} без промежуточной записи на диск
- * и повторного чтения. Для синхронного endpoint'а, где результат сразу отдаётся
- * клиенту, это оптимально.</p>
+ * <p>Обработка выполняется через Jackson Streaming API: сообщения читаются по одному
+ * и пишутся в {@link StringWriter}. Пиковое потребление памяти пропорционально
+ * размеру результата (а не входного файла).</p>
  */
 @RestController
 @RequestMapping("/api")
@@ -99,7 +99,7 @@ public class TelegramController {
 
         try {
             MessageFilter filter = MessageFilterFactory.build(startDate, endDate, keywords, excludeKeywords);
-            return processWithTempDir(file, filter);
+            return streamWithTempDir(file, filter);
         } catch (Exception ex) {
             return handleConvertException(ex);
         }
@@ -156,40 +156,38 @@ public class TelegramController {
     }
 
     /**
-     * Обрабатывает multipart-файл во временной директории и возвращает результат.
+     * Обрабатывает multipart-файл и возвращает результат как строку.
      *
-     * <p>Файл сохраняется во временную директорию для передачи в {@link TelegramExporter}.
-     * Результат возвращается клиенту напрямую из памяти — без дополнительных I/O-операций.</p>
+     * <p>Файл сохраняется во временную директорию, затем читается через Jackson Streaming API.
+     * Результат накапливается в {@link StringWriter} и возвращается как {@code text/plain}.</p>
      *
      * @param file   загруженный multipart-файл
      * @param filter фильтр сообщений, или {@code null}
      * @return текстовый ответ с обработанными сообщениями
      * @throws IOException при ошибках ввода-вывода
      */
-    private ResponseEntity<?> processWithTempDir(
+    private ResponseEntity<?> streamWithTempDir(
             MultipartFile file, MessageFilter filter) throws IOException {
         try (TempDirectory tempDir = new TempDirectory()) {
             Path inputFile = tempDir.resolve("result.json");
             file.transferTo(inputFile.toFile());
 
-            List<String> processed = exporter.processFile(inputFile, filter);
-            String result = String.join("\n", processed);
-            if (!result.isEmpty()) {
-                result += "\n";
+            StringWriter sw = new StringWriter();
+            try (BufferedWriter writer = new BufferedWriter(sw)) {
+                exporter.processFileStreaming(inputFile, filter, writer);
             }
 
             return ResponseEntity.ok()
                     .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=output.txt")
                     .contentType(MediaType.TEXT_PLAIN)
-                    .body(result);
+                    .body(sw.toString());
         }
     }
 
     /**
-     * Обрабатывает JSON-строку во временной директории и возвращает результат.
+     * Обрабатывает JSON-строку и возвращает результат как строку.
      *
-     * <p>JSON сохраняется во временный файл для передачи в {@link TelegramExporter}.
-     * Результат возвращается клиенту напрямую из памяти.</p>
+     * <p>JSON сохраняется во временный файл, затем читается через Jackson Streaming API.</p>
      *
      * @param jsonContent содержимое {@code result.json}
      * @param filter      фильтр сообщений, или {@code null}
@@ -202,15 +200,14 @@ public class TelegramController {
             Path inputFile = tempDir.resolve("result.json");
             Files.writeString(inputFile, jsonContent);
 
-            List<String> processed = exporter.processFile(inputFile, filter);
-            String result = String.join("\n", processed);
-            if (!result.isEmpty()) {
-                result += "\n";
+            StringWriter sw = new StringWriter();
+            try (BufferedWriter writer = new BufferedWriter(sw)) {
+                exporter.processFileStreaming(inputFile, filter, writer);
             }
 
             return ResponseEntity.ok()
                     .contentType(MediaType.TEXT_PLAIN)
-                    .body(result);
+                    .body(sw.toString());
         }
     }
 
