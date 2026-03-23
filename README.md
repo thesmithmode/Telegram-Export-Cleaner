@@ -4,6 +4,8 @@
 
 Exports chat history via Telegram API, applies filters (date ranges, keywords), formats to clean text, and sends back to user — all automated via Redis queue.
 
+**Try it now**: [@Export_Cleaner_bot](https://t.me/Export_Cleaner_bot) (доступ по запросу)
+
 **Status**: ✅ Production Ready (Full CI/CD automation, Docker, 450+ tests)
 
 ---
@@ -118,23 +120,27 @@ docker-compose down
 
 ### 5. Use the Bot
 
-Open Telegram and message your bot:
+Open Telegram and message [@Export_Cleaner_bot](https://t.me/Export_Cleaner_bot):
 
 ```
-/start             → Welcome & instructions
-/export <chat_id>  → Start exporting
-/help              → Show commands
+/start                              → Welcome & instructions
+/export https://t.me/durov          → Export by link
+/export @durov                      → Export by username
+/export durov                       → Export by username
+/export -1001234567890              → Export by numeric ID
+/help                               → Show commands
 ```
 
 **Example:**
 
 ```
-You:    /export -1001234567890
+You:    /export https://t.me/strbypass
 
-Bot:    ✅ Задача принята!
+Bot:    Задача принята!
         ID: export_abc123xyz
-        Чат: -1001234567890
-        Экспорт запущен...
+        Чат: @strbypass
+
+        Экспорт запущен. Когда воркер обработает — вы получите файл здесь.
 
 [30 seconds - 10 minutes later, depending on chat size]
 
@@ -161,8 +167,8 @@ You:    [receives .txt file with formatted history]
          ║  ┌────────────────────────────────────────────────┐   ║
          ║  │  ExportBot (TelegramLongPollingBot)            │   ║
          ║  │  • Polls Telegram Bot API for messages         │   ║
-         ║  │  • Parses /export <chat_id> commands           │   ║
-         ║  │  • Validates chat_id format (positive or neg)  │   ║
+         ║  │  • Parses /export <link, @user, or ID>         │   ║
+         ║  │  • Extracts username from t.me links           │   ║
          ║  │  • Confirms receipt to user (immediate)        │   ║
          ║  └────────────────────┬─────────────────────────┘   ║
          ║                       │                               ║
@@ -174,7 +180,7 @@ You:    [receives .txt file with formatted history]
          ║  │      "task_id": "export_abc123xyz...",        │   ║
          ║  │      "user_id": 987654,                       │   ║
          ║  │      "user_chat_id": 987654,                  │   ║
-         ║  │      "chat_id": -1001234567890,               │   ║
+         ║  │      "chat_id": "username" or -100123...,      │   ║
          ║  │      "limit": 0,                              │   ║
          ║  │      "offset_id": 0                           │   ║
          ║  │    }                                           │   ║
@@ -345,7 +351,7 @@ You:    [receives .txt file with formatted history]
 
 | Class | Package | Responsibility |
 |-------|---------|---|
-| `ExportBot` | `com.tcleaner.bot` | Long-polls Telegram Bot API; parses `/export <chat_id>` commands; sends confirmation to user |
+| `ExportBot` | `com.tcleaner.bot` | Long-polls Telegram Bot API; parses `/export` with t.me links, @username, or numeric ID; sends confirmation |
 | `ExportJobProducer` | `com.tcleaner.bot` | Creates JSON tasks; RPUSH to Redis queue; generates unique task_id |
 | `BotInitializer` | `com.tcleaner.bot` | Registers bot with Telegram; starts long polling on app startup |
 | `TelegramController` | `com.tcleaner.api` | REST endpoint `/api/convert`; accepts multipart JSON; returns text |
@@ -385,20 +391,20 @@ You:    [receives .txt file with formatted history]
 
 ```python
 # What user types
-/export -1001234567890
+/export https://t.me/strbypass    # or @username, username, numeric ID
 
 # What happens
 ExportBot.onUpdateReceived(Update)
 ├─ Check: update.hasMessage() && message.hasText()
 ├─ Parse: text.startsWith("/export")
-├─ Extract: targetChatId = Long.parseLong(parts[1])
-├─ Validate: ID is numeric (positive or negative)
-└─ Call: jobProducer.enqueue(userId, userChatId, targetChatId)
+├─ Extract: extractUsername(input) → "strbypass" (from link, @, or plain)
+│           or Long.parseLong(input) → numeric chat ID
+└─ Call: jobProducer.enqueue(userId, userChatId, "strbypass")
 
 # Bot response (immediate, within 1 second)
 "Задача принята!
  ID: export_abc123xyz...
- Чат: -1001234567890
+ Чат: @strbypass
 
  Экспорт запущен. Когда воркер обработает — вы получите файл здесь."
 ```
@@ -416,9 +422,9 @@ Map<String, Object> job = {
   "task_id": "export_abc123xyz...",
   "user_id": 987654,
   "user_chat_id": 987654,
-  "chat_id": -1001234567890,
-  "limit": 0,              // 0 = export all messages
-  "offset_id": 0           // 0 = start from most recent
+  "chat_id": "strbypass",       // string username or numeric ID
+  "limit": 0,                   // 0 = export all messages
+  "offset_id": 0                // 0 = start from most recent
 };
 
 String json = objectMapper.writeValueAsString(job);
@@ -674,30 +680,31 @@ Response:
 Этот бот экспортирует историю Telegram-чата и отправляет очищенный текст.
 
 Команды:
-/export <chat_id> — экспортировать чат
+/export <chat_id или ссылка> — экспортировать чат
 /help — показать эту справку
 
-Как узнать chat_id чата:
-• Для личных чатов — ваш числовой Telegram ID (например: 123456789)
-• Для групп/каналов — отрицательный ID (например: -1001234567890)
-  Добавьте @userinfobot в группу, он покажет ID.
+Примеры:
+/export https://t.me/durov
+/export @durov
+/export durov
+/export -1001234567890
 ```
 
-#### `/export <chat_id>`
+#### `/export <ссылка, username или chat_id>`
 
 Starts an export job for the specified chat.
 
 **Parameters:**
-- `<chat_id>`: Numeric chat ID (positive for personal, negative for groups/channels)
+- `<target>`: t.me link, @username, username, or numeric chat ID
 
 **Examples:**
 
 ```
-/export 123456789                  # Personal chat with ID 123456789
-/export -1001234567890             # Group/channel with ID 1001234567890
-/export -100123456789              # Valid (may not exist)
-/export abc                         # Error: not a number
-/export                             # Error: missing chat_id
+/export https://t.me/strbypass     # By t.me link
+/export @durov                      # By @username
+/export durov                       # By username
+/export -1001234567890             # By numeric ID
+/export                             # Error: missing target
 ```
 
 **Response (immediate):**
@@ -706,7 +713,7 @@ Starts an export job for the specified chat.
 Задача принята!
 
 ID задачи: export_abc123xyz...
-Чат: -1001234567890
+Чат: @strbypass
 
 Экспорт запущен. Когда воркер обработает — вы получите файл здесь.
 ```
@@ -1036,7 +1043,7 @@ Open Telegram and message your bot:
 
 ```
 /start
-/export 123456789  # Your personal Telegram ID
+/export https://t.me/your_channel  # Or @username, or numeric ID
 ```
 
 Watch the logs:
@@ -1175,7 +1182,7 @@ Error: ChannelPrivate
 
 | Cause | Solution |
 |-------|----------|
-| Wrong chat_id | Use `@userinfobot` in the group to get correct ID |
+| Wrong chat_id | Use t.me link или @username вместо числового ID |
 | Bot not in group | Add bot to the group (for groups/channels) |
 | No access to chat | Ensure you (bot owner) have access |
 | Private channel | Add bot to the channel as member |
@@ -1333,14 +1340,16 @@ docker-compose up -d
 
 ## FAQ
 
-### Q: How do I export my personal Telegram chat with myself?
+### Q: How do I export a chat?
 
-**A:** Use your Telegram user ID (positive number):
+**A:** Use a link, username, or numeric ID:
 ```
-/export 123456789
+/export https://t.me/channel_name
+/export @username
+/export -1001234567890
 ```
 
-Find your ID: Add `@userinfobot` to any group, it will show your user ID.
+For your own Saved Messages, use your numeric Telegram ID (`@userinfobot` покажет его).
 
 ### Q: What's the difference between file-based and string sessions?
 
@@ -1614,13 +1623,11 @@ chmod 600 export-worker/session/export_worker.session
 ### Network Isolation
 
 ```
-Nginx (443, 80)  ← External
+Java API (localhost:8081)  ← Not exposed externally
   ↓
-Java API (localhost:8081)  ← Not exposed
+Python Worker (internal)   ← Not exposed
   ↓
-Python Worker (internal)  ← Not exposed
-  ↓
-Redis (internal)  ← Not exposed
+Redis (internal)           ← Not exposed
 ```
 
 Java API is **only accessible from localhost** (not exposed to internet).
@@ -1756,12 +1763,11 @@ Proprietary — See LICENSE file
 
 ## Support
 
-- 🐛 **Issues**: [GitHub Issues](../../issues)
-- 📧 **Email**: [Support](mailto:support@example.com)
-- 💬 **Chat**: [Telegram Support](https://t.me/support)
+- **Issues**: [GitHub Issues](../../issues)
+- **Bot**: [@Export_Cleaner_bot](https://t.me/Export_Cleaner_bot)
 
 ---
 
 **Status**: ✅ Production Ready
-**Last Updated**: 2026-03-20
-**Version**: 1.0.0
+**Last Updated**: 2026-03-23
+**Version**: 1.1.0

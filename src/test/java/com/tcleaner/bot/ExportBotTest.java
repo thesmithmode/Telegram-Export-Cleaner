@@ -11,6 +11,7 @@ import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.User;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
@@ -78,16 +79,20 @@ class ExportBotTest {
         bot.onUpdateReceived(update);
 
         verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyLong());
+        verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString());
     }
 
-    @DisplayName("Should handle /export with invalid chat ID")
+    @DisplayName("Should handle /export with username as chat identifier")
     @Test
-    void testExportCommandWithInvalidId() {
-        Update update = createUpdate("/export invalid_id");
+    void testExportCommandWithUsername() {
+        when(jobProducerMock.enqueue(123L, 123L, "some_channel"))
+                .thenReturn("export_task_123");
+
+        Update update = createUpdate("/export some_channel");
 
         bot.onUpdateReceived(update);
 
-        verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyLong());
+        verify(jobProducerMock).enqueue(123L, 123L, "some_channel");
     }
 
     @DisplayName("Should handle /export with whitespace")
@@ -111,6 +116,7 @@ class ExportBotTest {
         bot.onUpdateReceived(update);
 
         verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyLong());
+        verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString());
     }
 
     @DisplayName("Should handle message without text")
@@ -126,6 +132,7 @@ class ExportBotTest {
         bot.onUpdateReceived(update);
 
         verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyLong());
+        verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString());
     }
 
     @DisplayName("Should handle update without message")
@@ -137,6 +144,7 @@ class ExportBotTest {
         bot.onUpdateReceived(update);
 
         verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyLong());
+        verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString());
     }
 
     @DisplayName("Should propagate job producer errors")
@@ -149,6 +157,58 @@ class ExportBotTest {
 
         // Should handle exception gracefully
         bot.onUpdateReceived(update);
+    }
+
+    @DisplayName("Should handle /export with t.me link")
+    @Test
+    void testExportCommandWithTmeLink() {
+        when(jobProducerMock.enqueue(123L, 123L, "strbypass"))
+                .thenReturn("export_task_123");
+
+        Update update = createUpdate("/export https://t.me/strbypass");
+
+        bot.onUpdateReceived(update);
+
+        verify(jobProducerMock).enqueue(123L, 123L, "strbypass");
+    }
+
+    @DisplayName("Should handle /export with @username")
+    @Test
+    void testExportCommandWithAtUsername() {
+        when(jobProducerMock.enqueue(123L, 123L, "durov"))
+                .thenReturn("export_task_123");
+
+        Update update = createUpdate("/export @durov");
+
+        bot.onUpdateReceived(update);
+
+        verify(jobProducerMock).enqueue(123L, 123L, "durov");
+    }
+
+    @DisplayName("extractUsername — t.me link")
+    @Test
+    void testExtractUsernameFromLink() {
+        assertThat(ExportBot.extractUsername("https://t.me/strbypass")).isEqualTo("strbypass");
+        assertThat(ExportBot.extractUsername("http://t.me/durov")).isEqualTo("durov");
+    }
+
+    @DisplayName("extractUsername — @username")
+    @Test
+    void testExtractUsernameFromAt() {
+        assertThat(ExportBot.extractUsername("@durov")).isEqualTo("durov");
+    }
+
+    @DisplayName("extractUsername — числовой ID возвращает null")
+    @Test
+    void testExtractUsernameFromNumericId() {
+        assertThat(ExportBot.extractUsername("-1001234567890")).isNull();
+        assertThat(ExportBot.extractUsername("123456789")).isNull();
+    }
+
+    @DisplayName("extractUsername — простой username")
+    @Test
+    void testExtractUsernameFromPlainUsername() {
+        assertThat(ExportBot.extractUsername("strbypass")).isEqualTo("strbypass");
     }
 
     /**
