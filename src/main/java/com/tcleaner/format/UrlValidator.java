@@ -49,7 +49,7 @@ public class UrlValidator {
 
         String trimmed = url.trim();
 
-        if (trimmed.isEmpty() || trimmed.equals("#")) {
+        if (trimmed.equals("#")) {
             return true;
         }
 
