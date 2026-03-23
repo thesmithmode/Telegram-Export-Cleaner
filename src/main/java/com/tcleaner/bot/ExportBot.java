@@ -11,6 +11,9 @@ import org.telegram.telegrambots.meta.api.objects.Message;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 /**
  * Telegram-бот для запуска экспорта чатов.
  *
@@ -31,17 +34,21 @@ public class ExportBot extends TelegramLongPollingBot {
 
     private static final Logger log = LoggerFactory.getLogger(ExportBot.class);
 
+    private static final Pattern TME_LINK_PATTERN =
+            Pattern.compile("https?://t\\.me/([a-zA-Z][a-zA-Z0-9_]{3,})");
+
     private static final String HELP_TEXT = """
             Этот бот экспортирует историю Telegram-чата и отправляет очищенный текст.
 
             Команды:
-            /export <chat_id> — экспортировать чат
+            /export <chat_id или ссылка> — экспортировать чат
             /help — показать эту справку
 
-            Как узнать chat_id чата:
-            • Для личных чатов — ваш числовой Telegram ID (например: 123456789)
-            • Для групп/каналов — отрицательный ID (например: -1001234567890)
-              Добавьте @userinfobot в группу, он покажет ID.
+            Примеры:
+            /export https://t.me/durov
+            /export @durov
+            /export durov
+            /export -1001234567890
             """;
 
     private final String botUsername;
@@ -103,29 +110,62 @@ public class ExportBot extends TelegramLongPollingBot {
         String[] parts = text.split("\\s+", 2);
         if (parts.length < 2 || parts[1].isBlank()) {
             sendText(chatId,
-                    "Укажите chat_id чата:\n/export <chat_id>\n\nПример: /export -1001234567890");
+                    "Укажите чат:\n/export <ссылка, username или chat_id>"
+                    + "\n\nПример: /export https://t.me/durov");
             return;
         }
 
-        long targetChatId;
+        String input = parts[1].trim();
+        String taskId;
+        String chatDisplay;
+
         try {
-            targetChatId = Long.parseLong(parts[1].trim());
+            String username = extractUsername(input);
+            if (username != null) {
+                taskId = jobProducer.enqueue(userId, chatId, username);
+                chatDisplay = "@" + username;
+            } else {
+                long targetChatId = Long.parseLong(input);
+                taskId = jobProducer.enqueue(userId, chatId, targetChatId);
+                chatDisplay = String.valueOf(targetChatId);
+            }
         } catch (NumberFormatException e) {
             sendText(chatId,
-                    "Неверный формат chat_id. Должно быть число, например: -1001234567890");
+                    "Неверный формат. Используйте ссылку, @username или числовой ID."
+                    + "\n\nПример: /export https://t.me/durov");
             return;
-        }
-
-        try {
-            String taskId = jobProducer.enqueue(userId, chatId, targetChatId);
-            sendText(chatId, String.format(
-                    "Задача принята!\n\nID задачи: %s\nЧат: %d\n\n"
-                    + "Экспорт запущен. Когда воркер обработает — вы получите файл здесь.",
-                    taskId, targetChatId));
-            log.info("Пользователь {} запросил экспорт чата {}, taskId={}", userId, targetChatId, taskId);
         } catch (Exception e) {
             log.error("Ошибка при постановке задачи в очередь: {}", e.getMessage(), e);
             sendText(chatId, "Произошла ошибка при добавлении задачи. Попробуйте позже.");
+            return;
+        }
+
+        sendText(chatId, String.format(
+                "Задача принята!\n\nID задачи: %s\nЧат: %s\n\n"
+                + "Экспорт запущен. Когда воркер обработает — вы получите файл здесь.",
+                taskId, chatDisplay));
+        log.info("Пользователь {} запросил экспорт чата {}, taskId={}", userId, chatDisplay, taskId);
+    }
+
+    /**
+     * Извлекает username из ссылки t.me, @username или простого username.
+     *
+     * @param input строка от пользователя
+     * @return username без @ или null, если input — числовой ID
+     */
+    static String extractUsername(String input) {
+        Matcher matcher = TME_LINK_PATTERN.matcher(input);
+        if (matcher.find()) {
+            return matcher.group(1);
+        }
+        if (input.startsWith("@")) {
+            return input.substring(1);
+        }
+        try {
+            Long.parseLong(input);
+            return null;
+        } catch (NumberFormatException e) {
+            return input;
         }
     }
 

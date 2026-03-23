@@ -5,7 +5,7 @@ Protocols define duck-typing interfaces for worker components.
 Allows replacing implementations without changing caller code.
 """
 
-from typing import Protocol, AsyncGenerator, Optional, Tuple, Any
+from typing import Protocol, AsyncGenerator, Optional, Tuple, Any, Union
 from datetime import datetime
 
 from models import ExportedMessage, ExportRequest
@@ -27,7 +27,7 @@ class TelegramClientProtocol(Protocol):
         """Disconnect from Telegram API."""
         ...
 
-    async def verify_and_get_info(self, chat_id: int) -> Tuple[bool, Optional[dict]]:
+    async def verify_and_get_info(self, chat_id: Union[int, str]) -> Tuple[bool, Optional[dict]]:
         """
         Verify access to chat and get chat metadata.
 
@@ -43,7 +43,7 @@ class TelegramClientProtocol(Protocol):
 
     async def get_chat_history(
         self,
-        chat_id: int,
+        chat_id: Union[int, str],
         limit: int = 0,
         offset_id: int = 0,
         from_date: Optional[datetime] = None,
