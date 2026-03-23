@@ -382,14 +382,14 @@ public class ExportBot extends TelegramLongPollingBot {
      */
     private void sendMainMenu(long chatId, String text) {
         KeyboardButtonRequestChat requestChat = new KeyboardButtonRequestChat();
-        requestChat.setRequestId(CHAT_REQUEST_ID);
+        requestChat.setRequestId(String.valueOf(CHAT_REQUEST_ID));
         requestChat.setChatIsChannel(false);
 
         KeyboardButton chatButton = new KeyboardButton("📂 Выбрать группу");
         chatButton.setRequestChat(requestChat);
 
         KeyboardButtonRequestChat requestChannel = new KeyboardButtonRequestChat();
-        requestChannel.setRequestId(CHAT_REQUEST_ID + 1);
+        requestChannel.setRequestId(String.valueOf(CHAT_REQUEST_ID + 1));
         requestChannel.setChatIsChannel(true);
 
         KeyboardButton channelButton = new KeyboardButton("📢 Выбрать канал");
