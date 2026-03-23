@@ -113,7 +113,7 @@ docker-compose down
 **Services:**
 - ✅ Java Spring Boot API on `localhost:8081`
 - ✅ Telegram Bot (long polling)
-- ✅ Python Worker (asyncio, 4 parallel Pyrogram clients)
+- ✅ Python Worker (asyncio, Pyrogram, MAX_WORKERS по умолчанию 1, настраивается)
 - ✅ Redis (internal queue)
 
 ### 5. Use the Bot
@@ -195,7 +195,7 @@ You:    [receives .txt file with formatted history]
                                   │
          ╔════════════════════════▼═══════════════════════════════╗
          ║      PYTHON WORKER (asyncio + Pyrogram)               ║
-         ║  4 parallel workers (configurable via MAX_WORKERS)    ║
+         ║  MAX_WORKERS parallel workers (default: 1, configurable)    ║
          ║                                                        ║
          ║  ┌──────────────────────────────────────────────┐     ║
          ║  │  QueueConsumer                               │     ║
@@ -360,7 +360,7 @@ You:    [receives .txt file with formatted history]
 | `FileStorageService` | `com.tcleaner.storage` | Manages file lifecycle (upload, process, download, TTL cleanup) |
 | `ProcessingStatusService` | `com.tcleaner.status` | Redis wrapper for job status tracking |
 
-#### Python Worker (asyncio, 4 parallel clients)
+#### Python Worker (asyncio, configurable parallel clients)
 
 | Module | Responsibility |
 |--------|---|
@@ -624,7 +624,7 @@ JAVA_API_BASE_URL=http://java-bot:8080    # Docker
 JAVA_API_KEY=unused_for_now
 
 WORKER_NAME=export-worker-1
-MAX_WORKERS=4                  # Concurrent Pyrogram clients
+MAX_WORKERS=1                  # Concurrent Pyrogram clients (default: 1)
 ```
 
 **Timeouts & Retries:**
@@ -1204,7 +1204,7 @@ Rate limited (FloodWait 120s). Retry 2/3 after 120s
 **Solutions:**
 
 ```env
-# Reduce concurrent workers (default: 4)
+# Increase concurrent workers (default: 1)
 MAX_WORKERS=2
 
 # Increase backoff delays
@@ -1556,7 +1556,7 @@ Example commits:
 | Metric | Value | Notes |
 |--------|-------|-------|
 | **Throughput** | 1000+ msg/s | Per Pyrogram client |
-| **Concurrency** | 4-8 workers | Tested with 4 parallel, scales to 8 |
+| **Concurrency** | 1-8 workers | Default: 1, configurable via MAX_WORKERS |
 | **Memory (base)** | ~50 MB | Java + Python combined |
 | **Memory (per job)** | ~10 KB | Per concurrent export task |
 | **JSON parsing** | <500ms | For 1000-message export |
