@@ -131,8 +131,15 @@ jobs:
                   - PYTHONUNBUFFERED=1
                 depends_on: { java-bot: { condition: service_healthy } }
                 restart: unless-stopped
+                healthcheck:
+                  test: ["CMD-SHELL", "python -c 'import redis; r=redis.Redis(host=\"redis\"); r.ping()' || exit 1"]
+                  interval: 15s
+                  timeout: 5s
+                  retries: 3
+                  start_period: 10s
               redis:
                 image: redis:7-alpine
+                mem_limit: 256m
                 healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 10s }
                 restart: unless-stopped
             EOF
