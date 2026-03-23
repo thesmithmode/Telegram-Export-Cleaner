@@ -41,7 +41,7 @@ mvn test jacoco:report
 
 **Telegram Export Cleaner** is a Java Spring Boot application that processes Telegram chat exports. It provides:
 - REST API for uploading JSON export files and downloading cleaned markdown
-- Telegram bot integration for direct `/export` commands
+- Telegram bot with interactive wizard (chat picker, date range selection)
 - Async file processing with Redis job queue
 - Python worker for Telegram API interaction
 
@@ -73,8 +73,9 @@ com.tcleaner
 │   ├── ProcessingStatusService # Redis wrapper for status tracking
 │   └── StatusRepository    # Status persistence contract
 ├── bot/                    # Telegram bot (long polling)
-│   ├── ExportBot           # Command handler (/export, /start, /help)
-│   └── ExportJobProducer   # Enqueue jobs to Redis
+│   ├── ExportBot           # Interactive wizard: chat picker, date range, callbacks
+│   ├── ExportJobProducer   # Enqueue jobs to Redis (with optional from_date/to_date)
+│   └── UserSession         # Per-user conversation state (state machine)
 └── cli/                    # Command-line interface
     └── Main                # Local file processing
 ```

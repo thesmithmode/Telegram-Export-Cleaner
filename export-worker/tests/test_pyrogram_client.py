@@ -120,12 +120,13 @@ class TestTelegramClientVerifyAccess:
         )
         client.client = mock_pyrogram
 
-        accessible, info = await client.verify_and_get_info(123)
+        accessible, info, error_reason = await client.verify_and_get_info(123)
 
         assert accessible is True
         assert info is not None
         assert info["title"] == "Test Chat"
         assert info["type"] == "private"
+        assert error_reason is None
 
     @pytest.mark.asyncio
     async def test_verify_and_get_info_chat_not_found(self):
@@ -135,10 +136,11 @@ class TestTelegramClientVerifyAccess:
         mock_pyrogram.get_chat = AsyncMock(side_effect=BadRequest("Chat not found"))
         client.client = mock_pyrogram
 
-        accessible, info = await client.verify_and_get_info(999)
+        accessible, info, error_reason = await client.verify_and_get_info(999)
 
         assert accessible is False
         assert info is None
+        assert error_reason is not None
 
     @pytest.mark.asyncio
     async def test_verify_and_get_info_no_access(self):
@@ -150,9 +152,10 @@ class TestTelegramClientVerifyAccess:
         )
         client.client = mock_pyrogram
 
-        accessible, info = await client.verify_and_get_info(456)
+        accessible, info, error_reason = await client.verify_and_get_info(456)
 
         assert accessible is False
+        assert error_reason == "UNKNOWN"
 
 
 class TestTelegramClientHistoryExport:
