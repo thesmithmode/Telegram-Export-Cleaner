@@ -79,6 +79,47 @@ com.tcleaner
     └── Main                # Local file processing
 ```
 
+### Python Worker Structure (export-worker/)
+
+```
+export-worker/
+├── main.py                 # Точка входа: запуск asyncio event loop, graceful shutdown (SIGTERM/SIGINT)
+├── config.py               # Pydantic Settings: загрузка конфигурации из env vars
+├── models.py               # Pydantic-модели: ExportRequest, ExportResult, ErrorCode enum
+├── protocols.py            # Protocol-классы (typing): контракты для TelegramClient и QueueConsumer
+├── pyrogram_client.py      # Pyrogram MTProto клиент: экспорт сообщений, FloodWait handling,
+│                           #   инкрементальный экспорт с Redis-состоянием, кэш-синхронизация
+├── queue_consumer.py       # Redis BRPOP consumer: получение задач из очереди, таймауты, retry
+├── java_client.py          # HTTP-клиент к Java API: отправка сообщений на конвертацию,
+│                           #   UTF-16 entity offset handling для корректной работы с emoji
+├── json_converter.py       # Конвертация Pyrogram Message → Telegram JSON export format
+├── get_session.py          # Утилита: генерация Pyrogram string session для production
+├── requirements.txt        # Production-зависимости
+├── requirements-dev.txt    # Dev-зависимости (pytest, black, flake8, mypy)
+├── Dockerfile              # Production-образ (python:3.11-slim, non-root user)
+├── .dockerignore           # Исключения для Docker build context
+└── tests/                  # Тесты
+    ├── conftest.py         # Фикстуры: мокированные Redis, Pyrogram, httpx
+    ├── test_models.py      # Валидация Pydantic-моделей
+    ├── test_json_converter.py  # Конвертация сообщений
+    ├── test_pyrogram_client.py # Telegram API клиент
+    ├── test_queue_consumer.py  # Redis consumer
+    ├── test_java_client.py     # Java API интеграция
+    ├── test_export_worker.py   # Main worker loop
+    ├── test_integration.py     # Интеграционные тесты (с моками)
+    ├── test_end_to_end.py      # E2E тесты
+    └── test_performance.py     # Нагрузочные тесты
+```
+
+**Ключевые паттерны Python Worker:**
+
+- **Авторизация**: `TELEGRAM_SESSION_STRING` для production (stateless, без номера телефона), file-based session для локальной разработки
+- **Retry с backoff**: FloodWait от Telegram API обрабатывается с экспоненциальным backoff и дедупликацией
+- **Инкрементальный экспорт**: Состояние хранится в Redis (TTL 30 дней), повторный экспорт продолжает с последнего сообщения
+- **Graceful shutdown**: Обработка SIGTERM/SIGINT, завершение текущей задачи перед остановкой
+- **Memory monitoring**: psutil отслеживает потребление памяти (оптимизация для слабых серверов)
+- **MAX_WORKERS**: По умолчанию 1, настраивается через env var. Каждый worker — отдельный Pyrogram клиент
+
 ### Design Principles
 
 **1. Dependency Inversion (SOLID)**
@@ -172,6 +213,28 @@ mvn test jacoco:report
 - **No mocking of core logic**: Use real `MessageProcessor`, `TelegramExporter`, etc.
 - **Mock external dependencies**: `FileStorageService`, `ProcessingStatusService`, Telegram API
 - **Assertion style**: Use AssertJ (`assertThat(...)`) for readable assertions
+
+### Python Worker Tests
+
+```bash
+# Все тесты
+cd export-worker && pip install -r requirements-dev.txt
+pytest tests/ -v
+
+# Только unit-тесты (быстрые, без внешних зависимостей)
+pytest tests/test_models.py tests/test_json_converter.py -v
+
+# Интеграционные тесты
+pytest tests/test_integration.py -v
+
+# С покрытием
+pytest tests/ -v --cov=. --cov-report=html
+```
+
+**Принципы тестирования Python Worker:**
+- Внешние зависимости (Redis, Pyrogram, httpx) мокируются через `conftest.py`
+- Unit-тесты не требуют сети или Telegram API
+- E2E-тесты (`test_end_to_end.py`) проверяют полный цикл с мокированными сервисами
 
 ## Common Development Tasks
 
