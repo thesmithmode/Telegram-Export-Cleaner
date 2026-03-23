@@ -99,7 +99,6 @@ jobs:
           script: |
             mkdir -p /root/telegram-cleaner && cd /root/telegram-cleaner
             cat <<EOF > docker-compose.yml
-            version: '3.8'
             services:
               java-bot:
                 image: ghcr.io/${{ github.repository_owner }}/telegram-export-cleaner:latest
@@ -109,6 +108,8 @@ jobs:
                   - REDIS_PORT=6379
                   - TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
                   - TELEGRAM_BOT_USERNAME=ExportCleanerBot
+                volumes:
+                  - export-data:/data/export
                 depends_on: { redis: { condition: service_healthy } }
                 restart: unless-stopped
                 healthcheck:
@@ -139,14 +140,21 @@ jobs:
                   start_period: 10s
               redis:
                 image: redis:7-alpine
+                command: redis-server --appendonly yes --appendfsync everysec
                 mem_limit: 256m
+                volumes:
+                  - redis-data:/data
                 healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 10s }
                 restart: unless-stopped
+            volumes:
+              redis-data:
+              export-data:
             EOF
             echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
             docker compose pull
-            docker compose up -d
+            docker compose up -d --remove-orphans
             docker image prune -f
+            docker container prune -f
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_ACTOR: ${{ github.actor }}
