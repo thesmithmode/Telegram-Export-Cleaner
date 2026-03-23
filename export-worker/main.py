@@ -122,16 +122,23 @@ class ExportWorker:
             await self.queue_consumer.mark_job_processing(job.task_id)
 
             # Verify access and get chat info in single call
-            accessible, chat_info = await self.telegram_client.verify_and_get_info(job.chat_id)
+            accessible, chat_info, error_reason = await self.telegram_client.verify_and_get_info(job.chat_id)
             if not accessible:
-                error = f"No access to chat {job.chat_id}"
-                logger.error(f"❌ {error}")
+                error_messages = {
+                    "CHANNEL_PRIVATE": f"Канал {job.chat_id} приватный. Аккаунт должен быть участником.",
+                    "USERNAME_NOT_FOUND": f"Username {job.chat_id} не найден. Проверьте правильность.",
+                    "ADMIN_REQUIRED": f"Для экспорта чата {job.chat_id} нужны права администратора.",
+                    "CHAT_NOT_ACCESSIBLE": f"Нет доступа к чату {job.chat_id}. Аккаунт должен быть участником.",
+                }
+                error = error_messages.get(error_reason, f"No access to chat {job.chat_id}")
+                error_code = error_reason or "CHAT_NOT_ACCESSIBLE"
+                logger.error(f"❌ {error} (reason: {error_reason})")
                 await self.java_client.send_response(
                     task_id=job.task_id,
                     status="failed",
                     messages=[],
                     error=error,
-                    error_code="CHAT_NOT_ACCESSIBLE",
+                    error_code=error_code,
                     user_chat_id=job.user_chat_id,
                 )
                 await self.queue_consumer.mark_job_failed(job.task_id, error)

@@ -43,7 +43,8 @@ class TestExportWorkerE2E:
             # Setup mock behavior
             worker.telegram_client.verify_and_get_info = AsyncMock(return_value=(
                 True,
-                {'title': 'Test Chat', 'type': 'group'}
+                {'title': 'Test Chat', 'type': 'group'},
+                None
             ))
 
             # Mock message generator
@@ -96,7 +97,7 @@ class TestExportWorkerE2E:
             worker.java_client = AsyncMock()
 
             # Setup: no access to chat
-            worker.telegram_client.verify_and_get_info = AsyncMock(return_value=(False, None))
+            worker.telegram_client.verify_and_get_info = AsyncMock(return_value=(False, None, "CHAT_NOT_ACCESSIBLE"))
             worker.java_client.send_response = AsyncMock(return_value=True)
             worker.queue_consumer.mark_job_failed = AsyncMock(return_value=True)
 
@@ -131,7 +132,8 @@ class TestExportWorkerE2E:
             # Setup: access OK but export fails
             worker.telegram_client.verify_and_get_info = AsyncMock(return_value=(
                 True,
-                {'title': 'Test', 'type': 'group'}
+                {'title': 'Test', 'type': 'group'},
+                None
             ))
 
             async def failing_generator():
@@ -182,7 +184,8 @@ class TestExportWorkerE2E:
 
             worker.telegram_client.verify_and_get_info = AsyncMock(return_value=(
                 True,
-                {'title': 'Test', 'type': 'group'}
+                {'title': 'Test', 'type': 'group'},
+                None
             ))
 
             # Create async generator wrapper for get_chat_history
