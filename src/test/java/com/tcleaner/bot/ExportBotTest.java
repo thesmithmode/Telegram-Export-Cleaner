@@ -392,7 +392,7 @@ class ExportBotTest {
         message.setMessageId(1);
 
         ChatShared chatShared = new ChatShared();
-        chatShared.setRequestId(1);
+        chatShared.setRequestId(String.valueOf(1));
         chatShared.setChatId(sharedChatId);
         message.setChatShared(chatShared);
 
