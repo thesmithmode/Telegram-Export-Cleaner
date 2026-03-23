@@ -8,7 +8,7 @@ Defines data structures for:
 - Error code enumeration
 """
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from datetime import datetime
 from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict
@@ -69,7 +69,7 @@ class ExportRequest(BaseModel):
     task_id: str = Field(..., description="Unique task ID from Java")
     user_id: int = Field(..., description="Telegram user ID requesting export")
     user_chat_id: Optional[int] = Field(None, description="Telegram chat ID to send result back (bot sends here)")
-    chat_id: int = Field(..., description="Telegram chat ID to export")
+    chat_id: Union[int, str] = Field(..., description="Telegram chat ID or username to export")
     limit: int = Field(default=0, description="Max messages (0=all)")
     offset_id: int = Field(default=0, description="Start from message ID")
     from_date: Optional[str] = Field(None, description="ISO date filter")

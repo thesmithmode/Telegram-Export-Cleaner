@@ -1,6 +1,8 @@
 package com.tcleaner.core;
 
 import com.tcleaner.TelegramFileExporterInterface;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -10,6 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -29,11 +32,16 @@ import java.util.List;
  *       создаются с теми же настройками, что и Spring-бин.</li>
  * </ul>
  *
- * <h2>Ограничения памяти</h2>
- * <p>Парсинг JSON через Jackson Tree Model ({@code objectMapper.readTree}) загружает
- * всё дерево в память. Для Web API это безопасно — загрузка ограничена
- * {@code spring.servlet.multipart.max-file-size=50MB} в {@code application.properties}.
- * Для CLI ограничений нет: подача файла &gt;100 МБ может вызвать {@code OutOfMemoryError}.</p>
+ * <h2>Режимы парсинга</h2>
+ * <p>Класс предоставляет два режима обработки:</p>
+ * <ul>
+ *   <li><strong>Tree Model</strong> ({@link #processFile}) — загружает весь JSON в память.
+ *       Удобен для небольших файлов и обратной совместимости.</li>
+ *   <li><strong>Streaming</strong> ({@link #processFileStreaming}) — читает JSON через
+ *       {@link JsonParser} побайтово, записывает результат сразу в {@link Writer}.
+ *       Потребление памяти не зависит от размера файла — подходит для файлов любого
+ *       размера и высокой конкурентности.</li>
+ * </ul>
  *
  * <h2>Потокобезопасность</h2>
  * <p>Экземпляр потокобезопасен: {@link ObjectMapper} является thread-safe после
@@ -154,6 +162,107 @@ public class TelegramExporter implements TelegramFileExporterInterface {
     }
 
     /**
+     * Обрабатывает файл {@code result.json} через Jackson Streaming API без фильтрации.
+     *
+     * <p>Эквивалентно {@link #processFileStreaming(Path, MessageFilter, Writer)
+     * processFileStreaming(inputPath, null, out)}.</p>
+     *
+     * @param inputPath путь к файлу {@code result.json}
+     * @param out       {@link Writer} для записи результата (строки в формате {@code "YYYYMMDD текст\n"})
+     * @return количество записанных строк
+     * @throws IOException               при ошибках чтения файла или записи в {@code out}
+     * @throws TelegramExporterException с кодом {@code FILE_NOT_FOUND} или {@code INVALID_JSON}
+     */
+    public int processFileStreaming(Path inputPath, Writer out) throws IOException {
+        return processFileStreaming(inputPath, null, out);
+    }
+
+    /**
+     * Обрабатывает файл {@code result.json} через Jackson Streaming API с опциональной фильтрацией.
+     *
+     * <p>Читает массив {@code "messages"} по одному элементу, не загружая весь JSON в память.
+     * Каждое сообщение после фильтрации и форматирования немедленно записывается в {@code out}.
+     * Пиковое потребление памяти определяется размером одного сообщения, а не всего файла.</p>
+     *
+     * <p>Пример использования:</p>
+     * <pre>{@code
+     * try (BufferedWriter writer = Files.newBufferedWriter(outputPath)) {
+     *     int count = exporter.processFileStreaming(inputPath, filter, writer);
+     * }
+     * }</pre>
+     *
+     * @param inputPath путь к файлу {@code result.json}
+     * @param filter    фильтр сообщений; {@code null} — фильтрация не применяется
+     * @param out       {@link Writer} для записи результата
+     * @return количество записанных строк
+     * @throws IOException               при ошибках чтения файла или записи в {@code out}
+     * @throws TelegramExporterException с кодом {@code FILE_NOT_FOUND} или {@code INVALID_JSON}
+     */
+    public int processFileStreaming(Path inputPath, MessageFilter filter, Writer out)
+            throws IOException {
+        log.debug("Streaming-обработка файла: {}", inputPath);
+
+        if (!Files.exists(inputPath)) {
+            log.error("Файл не найден: {}", inputPath);
+            throw new TelegramExporterException("FILE_NOT_FOUND", "Файл не найден: " + inputPath);
+        }
+
+        int written = 0;
+        try (JsonParser parser = objectMapper.getFactory().createParser(inputPath.toFile())) {
+            // Ищем поле "messages" на верхнем уровне
+            if (!advanceToMessagesArray(parser, inputPath)) {
+                log.warn("В файле отсутствует массив messages: {}", inputPath);
+                return 0;
+            }
+
+            // Итерируем элементы массива по одному
+            while (parser.nextToken() != JsonToken.END_ARRAY) {
+                JsonNode message = objectMapper.readTree(parser);
+                if (filter != null && !filter.matches(message)) {
+                    continue;
+                }
+                String line = messageProcessor.processMessage(message);
+                if (line != null) {
+                    out.write(line);
+                    out.write('\n');
+                    written++;
+                }
+            }
+        } catch (TelegramExporterException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            log.error("Ошибка парсинга JSON (streaming): {}", ex.getMessage());
+            throw new TelegramExporterException("INVALID_JSON", "Невалидный JSON: " + ex.getMessage(), ex);
+        }
+
+        log.info("Streaming: записано {} строк из файла {}", written, inputPath.getFileName());
+        return written;
+    }
+
+    /**
+     * Продвигает {@link JsonParser} до начала массива {@code "messages"}.
+     *
+     * @param parser    активный {@link JsonParser}
+     * @param inputPath путь к файлу (для логирования)
+     * @return {@code true} если массив найден и парсер стоит на {@link JsonToken#START_ARRAY}
+     * @throws IOException при ошибках чтения
+     */
+    private boolean advanceToMessagesArray(JsonParser parser, Path inputPath) throws IOException {
+        while (parser.nextToken() != null) {
+            if (JsonToken.FIELD_NAME.equals(parser.currentToken())
+                    && "messages".equals(parser.getCurrentName())) {
+                JsonToken next = parser.nextToken();
+                if (JsonToken.START_ARRAY.equals(next)) {
+                    return true;
+                }
+                log.warn("Поле messages не является массивом в файле: {}", inputPath);
+                return false;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Обрабатывает файл без фильтрации и записывает результат в выходной файл.
      *
      * <p>Эквивалентно {@link #processFileToFile(Path, Path, MessageFilter)
@@ -171,9 +280,8 @@ public class TelegramExporter implements TelegramFileExporterInterface {
     /**
      * Обрабатывает файл с опциональной фильтрацией и записывает результат в выходной файл.
      *
-     * <p>Запись выполняется построчно через {@code Files.write(path, lines, UTF-8)}
-     * без промежуточного {@code String.join} — потребление памяти не удваивается
-     * независимо от размера результата.</p>
+     * <p>Использует {@link #processFileStreaming} — запись построчно через {@link java.io.BufferedWriter}
+     * без загрузки всего JSON в память. Подходит для файлов любого размера.</p>
      *
      * @param inputPath  путь к файлу {@code result.json}
      * @param outputPath путь к выходному файлу (создаётся или перезаписывается)
@@ -183,11 +291,11 @@ public class TelegramExporter implements TelegramFileExporterInterface {
      */
     public void processFileToFile(Path inputPath, Path outputPath, MessageFilter filter)
             throws IOException {
-        log.debug("Начало обработки: {} -> {}", inputPath, outputPath);
+        log.debug("Начало обработки (streaming): {} -> {}", inputPath, outputPath);
 
-        List<String> processed = processFile(inputPath, filter);
-
-        Files.write(outputPath, processed, StandardCharsets.UTF_8);
-        log.info("Результат записан в файл: {} ({} строк)", outputPath, processed.size());
+        try (java.io.BufferedWriter writer = Files.newBufferedWriter(outputPath, StandardCharsets.UTF_8)) {
+            int count = processFileStreaming(inputPath, filter, writer);
+            log.info("Результат записан в файл: {} ({} строк)", outputPath, count);
+        }
     }
 }
