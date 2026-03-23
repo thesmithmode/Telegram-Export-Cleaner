@@ -22,7 +22,7 @@ import java.util.UUID;
  *   "task_id":     "uuid",
  *   "user_id":     12345,
  *   "user_chat_id": 12345,
- *   "chat_id":     -100123456789,
+ *   "chat_id":     -100123456789 или "username",
  *   "limit":       0,
  *   "offset_id":   0
  * }
@@ -64,6 +64,23 @@ public class ExportJobProducer {
      * @throws RuntimeException если не удалось сериализовать задачу или записать в Redis
      */
     public String enqueue(long userId, long userChatId, long chatId) {
+        return enqueue(userId, userChatId, (Object) chatId);
+    }
+
+    /**
+     * Добавляет задачу на экспорт по username чата.
+     *
+     * @param userId         Telegram user ID пользователя, сделавшего запрос
+     * @param userChatId     Telegram chat ID — куда вернуть результат
+     * @param chatIdentifier username чата (без @)
+     * @return task_id созданной задачи
+     * @throws RuntimeException если не удалось сериализовать задачу или записать в Redis
+     */
+    public String enqueue(long userId, long userChatId, String chatIdentifier) {
+        return enqueue(userId, userChatId, (Object) chatIdentifier);
+    }
+
+    private String enqueue(long userId, long userChatId, Object chatId) {
         String taskId = "export_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
 
         Map<String, Object> job = new HashMap<>();
