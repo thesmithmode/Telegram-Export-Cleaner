@@ -17,12 +17,16 @@ import java.util.regex.Pattern;
 /**
  * Telegram-бот для запуска экспорта чатов.
  *
- * <p>Команды:</p>
+ * <p>Бот работает только в личных сообщениях (private chat).
+ * Пользователь просто отправляет идентификатор чата в любом формате:</p>
  * <ul>
- *   <li>{@code /start} — приветствие и инструкция</li>
- *   <li>{@code /export <chat_id>} — запустить экспорт чата по ID</li>
- *   <li>{@code /help} — справка</li>
+ *   <li>{@code https://t.me/durov} — ссылка</li>
+ *   <li>{@code @durov} — username с @</li>
+ *   <li>{@code durov} — username без @</li>
+ *   <li>{@code -1001234567890} — числовой ID</li>
  * </ul>
+ *
+ * <p>Команда {@code /export} поддерживается для обратной совместимости.</p>
  *
  * <p>После успешного экспорта Python-воркер отправит пользователю файл напрямую через Bot API.</p>
  *
@@ -40,15 +44,12 @@ public class ExportBot extends TelegramLongPollingBot {
     private static final String HELP_TEXT = """
             Этот бот экспортирует историю Telegram-чата и отправляет очищенный текст.
 
-            Команды:
-            /export <chat_id или ссылка> — экспортировать чат
-            /help — показать эту справку
+            Просто отправьте мне идентификатор чата:
+            • Ссылку: https://t.me/durov
+            • Username: @durov или durov
+            • ID чата: -1001234567890
 
-            Примеры:
-            /export https://t.me/durov
-            /export @durov
-            /export durov
-            /export -1001234567890
+            Для приватных чатов аккаунт должен быть их участником.
             """;
 
     private final String botUsername;
@@ -88,19 +89,28 @@ public class ExportBot extends TelegramLongPollingBot {
         long userId = message.getFrom().getId();
         String text = message.getText().trim();
 
+        // Бот работает только в личных сообщениях
+        if (!"private".equals(message.getChat().getType())) {
+            return;
+        }
+
         log.debug("Получено сообщение от userId={}: {}", userId, text);
 
         if (text.startsWith("/start") || text.startsWith("/help")) {
             sendText(chatId, HELP_TEXT);
         } else if (text.startsWith("/export")) {
+            // Обратная совместимость: /export <identifier>
             handleExport(chatId, userId, text);
-        } else {
+        } else if (text.startsWith("/")) {
             sendText(chatId, "Неизвестная команда. Используйте /help для справки.");
+        } else {
+            // Основной flow: пользователь просто отправляет идентификатор чата
+            handleExportDirect(chatId, userId, text);
         }
     }
 
     /**
-     * Обрабатывает команду /export <chat_id>.
+     * Обрабатывает команду /export <chat_id> (обратная совместимость).
      *
      * @param chatId Telegram chat ID пользователя (куда отвечать)
      * @param userId Telegram user ID пользователя
@@ -109,13 +119,23 @@ public class ExportBot extends TelegramLongPollingBot {
     private void handleExport(long chatId, long userId, String text) {
         String[] parts = text.split("\\s+", 2);
         if (parts.length < 2 || parts[1].isBlank()) {
-            sendText(chatId,
-                    "Укажите чат:\n/export <ссылка, username или chat_id>"
-                    + "\n\nПример: /export https://t.me/durov");
+            sendText(chatId, HELP_TEXT);
             return;
         }
 
-        String input = parts[1].trim();
+        handleExportDirect(chatId, userId, parts[1].trim());
+    }
+
+    /**
+     * Обрабатывает прямой ввод идентификатора чата (основной flow).
+     *
+     * <p>Принимает ссылку t.me, @username, просто username или числовой ID.</p>
+     *
+     * @param chatId Telegram chat ID пользователя (куда отвечать)
+     * @param userId Telegram user ID пользователя
+     * @param input  идентификатор чата от пользователя
+     */
+    private void handleExportDirect(long chatId, long userId, String input) {
         String taskId;
         String chatDisplay;
 
@@ -131,8 +151,8 @@ public class ExportBot extends TelegramLongPollingBot {
             }
         } catch (NumberFormatException e) {
             sendText(chatId,
-                    "Неверный формат. Используйте ссылку, @username или числовой ID."
-                    + "\n\nПример: /export https://t.me/durov");
+                    "Неверный формат. Отправьте ссылку, @username или числовой ID."
+                    + "\n\nПример: https://t.me/durov");
             return;
         } catch (Exception e) {
             log.error("Ошибка при постановке задачи в очередь: {}", e.getMessage(), e);
@@ -141,8 +161,8 @@ public class ExportBot extends TelegramLongPollingBot {
         }
 
         sendText(chatId, String.format(
-                "Задача принята!\n\nID задачи: %s\nЧат: %s\n\n"
-                + "Экспорт запущен. Когда воркер обработает — вы получите файл здесь.",
+                "⏳ Задача принята!\n\nID: %s\nЧат: %s\n\n"
+                + "Когда воркер обработает — вы получите файл здесь.",
                 taskId, chatDisplay));
         log.info("Пользователь {} запросил экспорт чата {}, taskId={}", userId, chatDisplay, taskId);
     }

@@ -235,24 +235,26 @@ class TelegramClient:
             logger.error(f"❌ Error fetching history for chat {chat_id}: {e}", exc_info=True)
             raise
 
-    async def verify_and_get_info(self, chat_id: Union[int, str]) -> tuple[bool, Optional[dict]]:
+    async def verify_and_get_info(self, chat_id: Union[int, str]) -> tuple[bool, Optional[dict], Optional[str]]:
         """
         Check access and get chat info in single API call.
 
-        FALLBACK CACHE SYNC: Pyrogram caches entity access_hash locally. If you
-        pass a raw numeric ID that isn't cached, get_chat() fails with
-        PeerIdInvalidError. This is the most common production error when users
-        copy-paste chat IDs. Solution: call get_dialogs() to sync the cache,
-        then retry get_chat().
+        FALLBACK CACHE SYNC: For numeric IDs, Pyrogram caches entity access_hash
+        locally. If the ID isn't cached, get_chat() fails with PeerIdInvalidError.
+        Solution: call get_dialogs() to sync the cache, then retry.
+        For string usernames this fallback is skipped — Pyrogram resolves them
+        via contacts.resolveUsername API directly.
 
         Args:
-            chat_id: Telegram chat ID
+            chat_id: Telegram chat ID or username
 
         Returns:
-            Tuple of (is_accessible, chat_info_dict_or_None)
+            Tuple of (is_accessible, chat_info_dict_or_None, error_reason_or_None)
+            error_reason values: CHANNEL_PRIVATE, USERNAME_NOT_FOUND,
+            ADMIN_REQUIRED, UNKNOWN
         """
         if not self.is_connected:
-            return (False, None)
+            return (False, None, "UNKNOWN")
 
         try:
             chat = await self.client.get_chat(chat_id)
@@ -268,19 +270,28 @@ class TelegramClient:
                 "members_count": chat.members_count or 0,
                 "description": chat.description or "",
             }
-            return (True, info)
+            return (True, info, None)
 
         except BadRequest as e:
-            # Common case: numeric ID not in cache. Sync dialogs and retry.
-            if "Could not find the input entity" in str(e) or "PeerIdInvalid" in str(e):
+            error_str = str(e)
+            logger.error(
+                f"BadRequest for chat {chat_id}: {type(e).__name__}: {error_str}"
+            )
+
+            # Username not found
+            if "USERNAME_NOT_OCCUPIED" in error_str or "USERNAME_INVALID" in error_str:
+                return (False, None, "USERNAME_NOT_FOUND")
+
+            # Numeric ID not in cache — sync dialogs and retry (only for numeric IDs)
+            if isinstance(chat_id, int) and (
+                "Could not find the input entity" in error_str
+                or "PeerIdInvalid" in error_str
+            ):
                 logger.warning(
                     f"Chat {chat_id} not in cache. Syncing dialog list and retrying..."
                 )
                 try:
-                    # Sync user's full dialog list to populate access_hash cache
                     await self.client.get_dialogs()
-
-                    # Retry get_chat
                     chat = await self.client.get_chat(chat_id)
                     info = {
                         "id": chat.id,
@@ -294,22 +305,27 @@ class TelegramClient:
                         "description": chat.description or "",
                     }
                     logger.info(f"✅ Successfully resolved chat {chat_id} after cache sync")
-                    return (True, info)
+                    return (True, info, None)
 
                 except Exception as retry_error:
                     logger.error(f"Cache sync retry failed for chat {chat_id}: {retry_error}")
-                    return (False, None)
-            else:
-                logger.error(f"Cannot access chat {chat_id}: {e}")
-                return (False, None)
+                    return (False, None, "CHAT_NOT_ACCESSIBLE")
 
-        except (ChannelPrivate, ChatAdminRequired):
-            logger.error(f"Cannot access chat {chat_id}")
-            return (False, None)
+            return (False, None, "CHAT_NOT_ACCESSIBLE")
+
+        except ChannelPrivate:
+            logger.error(f"❌ Channel {chat_id} is private")
+            return (False, None, "CHANNEL_PRIVATE")
+
+        except ChatAdminRequired:
+            logger.error(f"❌ Admin rights required for chat {chat_id}")
+            return (False, None, "ADMIN_REQUIRED")
 
         except Exception as e:
-            logger.error(f"Error accessing chat {chat_id}: {e}")
-            return (False, None)
+            logger.error(
+                f"Error accessing chat {chat_id}: {type(e).__name__}: {e}"
+            )
+            return (False, None, "UNKNOWN")
 
     async def set_incremental_state(self, chat_id: Union[int, str], last_message_id: int) -> None:
         """
