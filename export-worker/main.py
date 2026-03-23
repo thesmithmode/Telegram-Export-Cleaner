@@ -122,16 +122,38 @@ class ExportWorker:
             await self.queue_consumer.mark_job_processing(job.task_id)
 
             # Verify access and get chat info in single call
-            accessible, chat_info = await self.telegram_client.verify_and_get_info(job.chat_id)
+            accessible, chat_info, error_reason = await self.telegram_client.verify_and_get_info(job.chat_id)
             if not accessible:
-                error = f"No access to chat {job.chat_id}"
-                logger.error(f"❌ {error}")
+                error_messages = {
+                    "CHANNEL_PRIVATE": f"Канал {job.chat_id} приватный. Аккаунт worker-а должен быть участником.",
+                    "USERNAME_NOT_FOUND": f"Username {job.chat_id} не найден. Проверьте правильность.",
+                    "ADMIN_REQUIRED": f"Для экспорта чата {job.chat_id} нужны права администратора.",
+                    "CHAT_NOT_ACCESSIBLE": (
+                        f"Нет доступа к чату {job.chat_id}. "
+                        f"Аккаунт worker-а должен быть участником этого чата/канала."
+                    ),
+                    "SESSION_INVALID": (
+                        "Сессия Telegram worker-а истекла или заблокирована. "
+                        "Необходимо пересоздать TELEGRAM_SESSION_STRING."
+                    ),
+                    "FLOOD_RESTRICTED": (
+                        "Аккаунт worker-а временно ограничен Telegram (flood). "
+                        "Попробуйте позже."
+                    ),
+                    "UNKNOWN": (
+                        f"Не удалось получить доступ к чату {job.chat_id}. "
+                        f"Проверьте логи worker-а для подробностей."
+                    ),
+                }
+                error = error_messages.get(error_reason, f"No access to chat {job.chat_id}")
+                error_code = error_reason or "CHAT_NOT_ACCESSIBLE"
+                logger.error(f"❌ {error} (reason: {error_reason})")
                 await self.java_client.send_response(
                     task_id=job.task_id,
                     status="failed",
                     messages=[],
                     error=error,
-                    error_code="CHAT_NOT_ACCESSIBLE",
+                    error_code=error_code,
                     user_chat_id=job.user_chat_id,
                 )
                 await self.queue_consumer.mark_job_failed(job.task_id, error)
@@ -143,31 +165,60 @@ class ExportWorker:
             # Export messages - try to resume from incremental state if available
             messages: list[ExportedMessage] = []
             offset_id = job.offset_id
+            min_id = 0  # Stop iteration when reaching already-exported messages
 
-            # Check if we can resume from previous export of same chat
-            if offset_id == 0:  # Only if user didn't specify explicit offset
-                last_message_id = await self.telegram_client.get_incremental_state(job.chat_id)
-                if last_message_id:
-                    offset_id = last_message_id
-                    logger.info(f"Resuming from message {offset_id} (incremental export)")
+            # Incremental export disabled: always fetch full history.
+            # Previous implementation silently stopped at last-exported message ID,
+            # causing "tiny fragment" exports when user expected full history.
+            # TODO: re-enable as opt-in feature with explicit UI toggle in bot.
+
+            # Notify user that export has started
+            if job.user_chat_id and self.java_client:
+                await self.java_client.send_progress_update(
+                    user_chat_id=job.user_chat_id,
+                    task_id=job.task_id,
+                    message_count=0,
+                    total=job.limit if job.limit > 0 else None,
+                    started=True,
+                )
+
+            total_limit = job.limit if job.limit > 0 else None
+            last_reported_pct = 0
 
             try:
                 async for message in self.telegram_client.get_chat_history(
                     chat_id=job.chat_id,
                     limit=job.limit,
                     offset_id=offset_id,
+                    min_id=min_id,
                 ):
                     messages.append(message)
+                    count = len(messages)
 
-                    # Report progress every 500 messages to user and logs
-                    if len(messages) % 500 == 0:
-                        logger.info(f"  Exported {len(messages)} messages...")
-                        if job.user_chat_id and self.java_client:
-                            await self.java_client.send_progress_update(
-                                user_chat_id=job.user_chat_id,
-                                task_id=job.task_id,
-                                message_count=len(messages),
-                            )
+                    # Report progress at every 20% milestone
+                    if total_limit:
+                        pct = count * 100 // total_limit
+                        milestone = (pct // 20) * 20
+                        if milestone > last_reported_pct and milestone < 100:
+                            last_reported_pct = milestone
+                            logger.info(f"  Exported {count}/{total_limit} messages ({milestone}%)...")
+                            if job.user_chat_id and self.java_client:
+                                await self.java_client.send_progress_update(
+                                    user_chat_id=job.user_chat_id,
+                                    task_id=job.task_id,
+                                    message_count=count,
+                                    total=total_limit,
+                                )
+                    else:
+                        # Unknown total: notify user every 5000 messages
+                        if count % 5000 == 0:
+                            logger.info(f"  Exported {count} messages...")
+                            if job.user_chat_id and self.java_client:
+                                await self.java_client.send_progress_update(
+                                    user_chat_id=job.user_chat_id,
+                                    task_id=job.task_id,
+                                    message_count=count,
+                                )
 
             except Exception as e:
                 error = f"Export failed: {str(e)}"
@@ -183,10 +234,10 @@ class ExportWorker:
                 await self.queue_consumer.mark_job_failed(job.task_id, error)
                 return True
 
-            # Save incremental state for next export of same chat
+            # Save incremental state for next export of same chat (newest message = messages[0])
             if messages:
-                last_message_id = messages[-1].id  # Last exported message
-                await self.telegram_client.set_incremental_state(job.chat_id, last_message_id)
+                newest_message_id = messages[0].id  # Pyrogram yields newest→oldest, so [0] is newest
+                await self.telegram_client.set_incremental_state(job.chat_id, newest_message_id, job.user_chat_id)
 
             # Send results to Java API, deliver cleaned text to user
             success = await self.java_client.send_response(

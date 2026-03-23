@@ -106,9 +106,11 @@ class MessageConverter:
         result = []
         try:
             for entity in entities:
+                # entity.type is MessageEntityType enum, convert to string first
+                type_str = entity.type.name.lower() if hasattr(entity.type, 'name') else str(entity.type).lower()
                 entity_type = MessageConverter.ENTITY_TYPE_MAP.get(
-                    entity.type.lower(),
-                    entity.type.lower()
+                    type_str,
+                    type_str
                 )
 
                 model = MessageEntityModel(

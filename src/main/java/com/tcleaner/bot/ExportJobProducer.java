@@ -22,7 +22,7 @@ import java.util.UUID;
  *   "task_id":     "uuid",
  *   "user_id":     12345,
  *   "user_chat_id": 12345,
- *   "chat_id":     -100123456789,
+ *   "chat_id":     -100123456789 или "username",
  *   "limit":       0,
  *   "offset_id":   0
  * }
@@ -64,6 +64,51 @@ public class ExportJobProducer {
      * @throws RuntimeException если не удалось сериализовать задачу или записать в Redis
      */
     public String enqueue(long userId, long userChatId, long chatId) {
+        return enqueue(userId, userChatId, (Object) chatId, null, null);
+    }
+
+    /**
+     * Добавляет задачу на экспорт с фильтрацией по датам.
+     *
+     * @param userId     Telegram user ID
+     * @param userChatId Telegram chat ID — куда вернуть результат
+     * @param chatId     ID чата для экспорта
+     * @param fromDate   начальная дата (ISO, nullable)
+     * @param toDate     конечная дата (ISO, nullable)
+     * @return task_id созданной задачи
+     */
+    public String enqueue(long userId, long userChatId, long chatId, String fromDate, String toDate) {
+        return enqueue(userId, userChatId, (Object) chatId, fromDate, toDate);
+    }
+
+    /**
+     * Добавляет задачу на экспорт по username чата.
+     *
+     * @param userId         Telegram user ID пользователя, сделавшего запрос
+     * @param userChatId     Telegram chat ID — куда вернуть результат
+     * @param chatIdentifier username чата (без @)
+     * @return task_id созданной задачи
+     * @throws RuntimeException если не удалось сериализовать задачу или записать в Redis
+     */
+    public String enqueue(long userId, long userChatId, String chatIdentifier) {
+        return enqueue(userId, userChatId, (Object) chatIdentifier, null, null);
+    }
+
+    /**
+     * Добавляет задачу на экспорт по username с фильтрацией по датам.
+     *
+     * @param userId         Telegram user ID
+     * @param userChatId     Telegram chat ID — куда вернуть результат
+     * @param chatIdentifier username чата (без @)
+     * @param fromDate       начальная дата (ISO, nullable)
+     * @param toDate         конечная дата (ISO, nullable)
+     * @return task_id созданной задачи
+     */
+    public String enqueue(long userId, long userChatId, String chatIdentifier, String fromDate, String toDate) {
+        return enqueue(userId, userChatId, (Object) chatIdentifier, fromDate, toDate);
+    }
+
+    private String enqueue(long userId, long userChatId, Object chatId, String fromDate, String toDate) {
         String taskId = "export_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
 
         Map<String, Object> job = new HashMap<>();
@@ -73,6 +118,12 @@ public class ExportJobProducer {
         job.put("chat_id", chatId);
         job.put("limit", 0);
         job.put("offset_id", 0);
+        if (fromDate != null) {
+            job.put("from_date", fromDate);
+        }
+        if (toDate != null) {
+            job.put("to_date", toDate);
+        }
 
         try {
             String json = objectMapper.writeValueAsString(job);

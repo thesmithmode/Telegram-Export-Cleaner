@@ -120,12 +120,13 @@ class TestTelegramClientVerifyAccess:
         )
         client.client = mock_pyrogram
 
-        accessible, info = await client.verify_and_get_info(123)
+        accessible, info, error_reason = await client.verify_and_get_info(123)
 
         assert accessible is True
         assert info is not None
         assert info["title"] == "Test Chat"
         assert info["type"] == "private"
+        assert error_reason is None
 
     @pytest.mark.asyncio
     async def test_verify_and_get_info_chat_not_found(self):
@@ -135,10 +136,11 @@ class TestTelegramClientVerifyAccess:
         mock_pyrogram.get_chat = AsyncMock(side_effect=BadRequest("Chat not found"))
         client.client = mock_pyrogram
 
-        accessible, info = await client.verify_and_get_info(999)
+        accessible, info, error_reason = await client.verify_and_get_info(999)
 
         assert accessible is False
         assert info is None
+        assert error_reason is not None
 
     @pytest.mark.asyncio
     async def test_verify_and_get_info_no_access(self):
@@ -150,141 +152,359 @@ class TestTelegramClientVerifyAccess:
         )
         client.client = mock_pyrogram
 
-        accessible, info = await client.verify_and_get_info(456)
+        accessible, info, error_reason = await client.verify_and_get_info(456)
 
         assert accessible is False
+        assert error_reason == "UNKNOWN"
+
+    @pytest.mark.asyncio
+    async def test_verify_and_get_info_channel_without_is_bot(self):
+        """Test that Chat objects without is_bot (channels/groups) don't raise AttributeError."""
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+
+        # Simulate real Pyrogram Chat object for a channel — no is_bot/is_self/is_contact
+        class FakeChatChannel:
+            id = 1001234567890
+            title = "Some Channel"
+            username = "somechannel"
+            type = "channel"
+            members_count = 5000
+            description = "Test channel"
+            # intentionally missing: is_bot, is_self, is_contact
+
+        mock_pyrogram.get_chat = AsyncMock(return_value=FakeChatChannel())
+        client.client = mock_pyrogram
+
+        accessible, info, error_reason = await client.verify_and_get_info("somechannel")
+
+        assert accessible is True
+        assert info is not None
+        assert info["title"] == "Some Channel"
+        assert info["is_bot"] is False
+        assert info["is_self"] is False
+        assert info["is_contact"] is False
+        assert error_reason is None
 
 
 class TestTelegramClientHistoryExport:
     """Test message history export."""
 
+    def _make_msg(self, msg_id: int, text: str = ""):
+        """Create a minimal valid Pyrogram-like message mock."""
+        return MagicMock(
+            id=msg_id,
+            text=text or f"Message {msg_id}",
+            date=datetime(2025, 1, 1, 0, 0, msg_id % 60),
+            from_user=None,
+            entities=None,
+            media=None,
+            forward_from=None,
+            forward_sender_name=None,
+            forward_date=None,
+            edit_date=None,
+            reply_to_message_id=None,
+        )
+
     @pytest.mark.asyncio
     async def test_get_chat_history_success(self):
         """Test successful message export."""
         client = TelegramClient()
+        client.is_connected = True
         mock_pyrogram = AsyncMock()
 
-        # Create mock messages
-        mock_messages = [
-            MagicMock(
-                message_id=1,
-                text="Message 1",
-                date=datetime.now(),
-                from_user=MagicMock(id=123),
-                entities=[],
-            ),
-            MagicMock(
-                message_id=2,
-                text="Message 2",
-                date=datetime.now(),
-                from_user=MagicMock(id=123),
-                entities=[],
-            ),
-        ]
+        raw = [self._make_msg(2), self._make_msg(1)]
 
         async def mock_get_chat_history(*args, **kwargs):
-            for msg in mock_messages:
+            for msg in raw:
                 yield msg
 
         mock_pyrogram.get_chat_history = mock_get_chat_history
         client.client = mock_pyrogram
 
-        # Mock MessageConverter
-        with patch('pyrogram_client.MessageConverter') as mock_converter:
-            mock_converter.to_exported_message = MagicMock(
-                side_effect=lambda msg: ExportedMessage(
-                    message_id=msg.message_id,
-                    text=msg.text,
-                    date=msg.date,
-                    from_user_id=msg.from_user.id if msg.from_user else None,
-                    entities=[],
-                )
-            )
+        messages = []
+        async for msg in client.get_chat_history(123, limit=0, offset_id=0):
+            messages.append(msg)
 
-            messages = []
-            async for msg in client.get_chat_history(123, limit=0, offset_id=0):
-                messages.append(msg)
-
-            assert len(messages) == 2
-            assert messages[0].message_id == 1
-            assert messages[1].message_id == 2
+        assert len(messages) == 2
+        assert messages[0].id == 2
+        assert messages[1].id == 1
 
     @pytest.mark.asyncio
     async def test_get_chat_history_with_limit(self):
         """Test message export with limit."""
         client = TelegramClient()
+        client.is_connected = True
         mock_pyrogram = AsyncMock()
-
-        messages_yielded = []
 
         async def mock_get_chat_history(*args, **kwargs):
             assert kwargs.get("limit") == 100
-            for i in range(100):
-                yield MagicMock(
-                    message_id=i,
-                    text=f"Message {i}",
-                    date=datetime.now(),
-                    from_user=MagicMock(id=123),
-                    entities=[],
-                )
+            for i in range(100, 0, -1):
+                yield self._make_msg(i)
 
         mock_pyrogram.get_chat_history = mock_get_chat_history
         client.client = mock_pyrogram
 
-        with patch('pyrogram_client.MessageConverter') as mock_converter:
-            mock_converter.to_exported_message = MagicMock(
-                side_effect=lambda msg: ExportedMessage(
-                    message_id=msg.message_id,
-                    text=msg.text,
-                    date=msg.date,
-                    from_user_id=msg.from_user.id if msg.from_user else None,
-                    entities=[],
-                )
-            )
+        count = 0
+        async for msg in client.get_chat_history(123, limit=100):
+            count += 1
 
-            count = 0
-            async for msg in client.get_chat_history(123, limit=100):
-                count += 1
-
-            assert count == 100
+        assert count == 100
 
     @pytest.mark.asyncio
     async def test_get_chat_history_error(self):
         """Test error handling during export."""
         client = TelegramClient()
+        client.is_connected = True
         mock_pyrogram = AsyncMock()
 
         async def mock_get_chat_history_error(*args, **kwargs):
-            yield MagicMock(
-                message_id=1,
-                text="First message",
-                date=datetime.now(),
-                from_user=MagicMock(id=123),
-                entities=[],
-            )
+            yield self._make_msg(1)
             raise Exception("Export error")
 
         mock_pyrogram.get_chat_history = mock_get_chat_history_error
         client.client = mock_pyrogram
 
-        with patch('pyrogram_client.MessageConverter') as mock_converter:
-            mock_converter.to_exported_message = MagicMock(
-                return_value=ExportedMessage(
-                    message_id=1,
-                    text="First message",
-                    date=datetime.now(),
-                    from_user_id=123,
-                    entities=[],
-                )
-            )
+        messages = []
+        with pytest.raises(Exception, match="Export error"):
+            async for msg in client.get_chat_history(123):
+                messages.append(msg)
 
+        # Should have exported one message before error
+        assert len(messages) == 1
+
+
+class TestTelegramClientIncrementalExport:
+    """Test incremental export via min_id."""
+
+    @pytest.mark.asyncio
+    async def test_get_chat_history_stops_at_min_id(self):
+        """min_id causes iteration to stop when message.id <= min_id."""
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+
+        # Pyrogram yields newest→oldest: ids 10, 7, 5, 3, 1
+        raw_messages = [
+            MagicMock(id=10, date=datetime.now(), entities=None, media=None,
+                      forward_from=None, forward_sender_name=None,
+                      forward_date=None, edit_date=None, reply_to_message_id=None,
+                      caption=None, caption_entities=None, text="m10"),
+            MagicMock(id=7, date=datetime.now(), entities=None, media=None,
+                      forward_from=None, forward_sender_name=None,
+                      forward_date=None, edit_date=None, reply_to_message_id=None,
+                      caption=None, caption_entities=None, text="m7"),
+            MagicMock(id=5, date=datetime.now(), entities=None, media=None,
+                      forward_from=None, forward_sender_name=None,
+                      forward_date=None, edit_date=None, reply_to_message_id=None,
+                      caption=None, caption_entities=None, text="m5"),
+            MagicMock(id=3, date=datetime.now(), entities=None, media=None,
+                      forward_from=None, forward_sender_name=None,
+                      forward_date=None, edit_date=None, reply_to_message_id=None,
+                      caption=None, caption_entities=None, text="m3"),
+        ]
+
+        async def mock_get_chat_history(*args, **kwargs):
+            for msg in raw_messages:
+                yield msg
+
+        mock_pyrogram.get_chat_history = mock_get_chat_history
+        client.client = mock_pyrogram
+
+        # With min_id=5: should yield ids 10 and 7, stop at 5
+        collected_ids = []
+        async for msg in client.get_chat_history(123, min_id=5):
+            collected_ids.append(msg.id)
+
+        assert collected_ids == [10, 7]
+
+    @pytest.mark.asyncio
+    async def test_get_chat_history_min_id_zero_returns_all(self):
+        """min_id=0 (default) returns all messages without stopping early."""
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+
+        raw_messages = [
+            MagicMock(id=3, date=datetime.now(), entities=None, media=None,
+                      forward_from=None, forward_sender_name=None,
+                      forward_date=None, edit_date=None, reply_to_message_id=None,
+                      caption=None, caption_entities=None, text="m3"),
+            MagicMock(id=1, date=datetime.now(), entities=None, media=None,
+                      forward_from=None, forward_sender_name=None,
+                      forward_date=None, edit_date=None, reply_to_message_id=None,
+                      caption=None, caption_entities=None, text="m1"),
+        ]
+
+        async def mock_get_chat_history(*args, **kwargs):
+            for msg in raw_messages:
+                yield msg
+
+        mock_pyrogram.get_chat_history = mock_get_chat_history
+        client.client = mock_pyrogram
+
+        collected_ids = []
+        async for msg in client.get_chat_history(123):  # min_id defaults to 0
+            collected_ids.append(msg.id)
+
+        assert collected_ids == [3, 1]
+
+
+class TestTelegramClientDateFiltering:
+    """Test date filtering in get_chat_history."""
+
+    @pytest.mark.asyncio
+    async def test_from_date_stops_iteration_early(self):
+        """from_date should stop iteration (not just skip) since messages are newest→oldest."""
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+
+        iteration_count = 0
+
+        # Messages: Jan 3, Jan 2, Jan 1 (newest→oldest)
+        raw_messages = [
+            MagicMock(id=3, date=datetime(2025, 1, 3), entities=None, media=None,
+                      forward_from=None, forward_sender_name=None,
+                      forward_date=None, edit_date=None, reply_to_message_id=None,
+                      caption=None, caption_entities=None, text="m3"),
+            MagicMock(id=2, date=datetime(2025, 1, 2), entities=None, media=None,
+                      forward_from=None, forward_sender_name=None,
+                      forward_date=None, edit_date=None, reply_to_message_id=None,
+                      caption=None, caption_entities=None, text="m2"),
+            MagicMock(id=1, date=datetime(2025, 1, 1), entities=None, media=None,
+                      forward_from=None, forward_sender_name=None,
+                      forward_date=None, edit_date=None, reply_to_message_id=None,
+                      caption=None, caption_entities=None, text="m1"),
+        ]
+
+        async def mock_get_chat_history(*args, **kwargs):
+            nonlocal iteration_count
+            for msg in raw_messages:
+                iteration_count += 1
+                yield msg
+
+        mock_pyrogram.get_chat_history = mock_get_chat_history
+        client.client = mock_pyrogram
+
+        # from_date=Jan 2: should get m3, m2, then stop at m1 (older than from_date)
+        collected = []
+        async for msg in client.get_chat_history(123, from_date=datetime(2025, 1, 2)):
+            collected.append(msg.id)
+
+        assert collected == [3, 2]
+        # Key assertion: iteration stopped early, didn't process m1
+        assert iteration_count == 3  # saw m1 but returned immediately
+
+    @pytest.mark.asyncio
+    async def test_to_date_skips_newer_messages(self):
+        """to_date should skip newer messages but continue iterating."""
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+
+        raw_messages = [
+            MagicMock(id=3, date=datetime(2025, 1, 3), entities=None, media=None,
+                      forward_from=None, forward_sender_name=None,
+                      forward_date=None, edit_date=None, reply_to_message_id=None,
+                      caption=None, caption_entities=None, text="m3"),
+            MagicMock(id=2, date=datetime(2025, 1, 2), entities=None, media=None,
+                      forward_from=None, forward_sender_name=None,
+                      forward_date=None, edit_date=None, reply_to_message_id=None,
+                      caption=None, caption_entities=None, text="m2"),
+            MagicMock(id=1, date=datetime(2025, 1, 1), entities=None, media=None,
+                      forward_from=None, forward_sender_name=None,
+                      forward_date=None, edit_date=None, reply_to_message_id=None,
+                      caption=None, caption_entities=None, text="m1"),
+        ]
+
+        async def mock_get_chat_history(*args, **kwargs):
+            for msg in raw_messages:
+                yield msg
+
+        mock_pyrogram.get_chat_history = mock_get_chat_history
+        client.client = mock_pyrogram
+
+        # to_date=Jan 2: should skip m3, get m2 and m1
+        collected = []
+        async for msg in client.get_chat_history(123, to_date=datetime(2025, 1, 2)):
+            collected.append(msg.id)
+
+        assert collected == [2, 1]
+
+
+class TestTelegramClientFloodWait:
+    """Test FloodWait retry logic."""
+
+    def _make_msg(self, msg_id: int):
+        return MagicMock(
+            id=msg_id,
+            text=f"Message {msg_id}",
+            date=datetime(2025, 1, 1, 0, 0, msg_id % 60),
+            from_user=None,
+            entities=None,
+            media=None,
+            forward_from=None,
+            forward_sender_name=None,
+            forward_date=None,
+            edit_date=None,
+            reply_to_message_id=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_flood_wait_retries_and_resumes(self):
+        """FloodWait triggers retry from last_offset_id, deduplicates messages."""
+        from pyrogram.errors import FloodWait
+
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+
+        call_count = 0
+
+        async def mock_get_chat_history(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                yield self._make_msg(2)
+                raise FloodWait(value=1)
+            else:
+                # Second call: Pyrogram returns from beginning again
+                yield self._make_msg(2)  # duplicate — should be skipped
+                yield self._make_msg(1)
+
+        mock_pyrogram.get_chat_history = mock_get_chat_history
+        client.client = mock_pyrogram
+
+        with patch("pyrogram_client.asyncio.sleep", new_callable=AsyncMock):
             messages = []
-            with pytest.raises(Exception, match="Export error"):
-                async for msg in client.get_chat_history(123):
-                    messages.append(msg)
+            async for msg in client.get_chat_history(123):
+                messages.append(msg.id)
 
-            # Should have exported one message before error
-            assert len(messages) == 1
+        assert messages == [2, 1], "Should yield msg 2 once (deduplicated) and msg 1"
+        assert call_count == 2, "Should retry exactly once after FloodWait"
+
+    @pytest.mark.asyncio
+    async def test_flood_wait_max_retries_exceeded_raises(self):
+        """FloodWait raises after MAX_RETRIES exceeded."""
+        from pyrogram.errors import FloodWait
+        from config import settings
+
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+
+        async def mock_get_chat_history(*args, **kwargs):
+            raise FloodWait(value=1)
+            yield  # make it an async generator
+
+        mock_pyrogram.get_chat_history = mock_get_chat_history
+        client.client = mock_pyrogram
+
+        with patch("pyrogram_client.asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(FloodWait):
+                async for _ in client.get_chat_history(123):
+                    pass
 
 
 class TestTelegramClientContextManager:

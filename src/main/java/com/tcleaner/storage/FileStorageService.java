@@ -10,7 +10,9 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.BufferedWriter;
 import java.io.IOException;
+import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -167,8 +169,10 @@ public class FileStorageService implements FileStorageServiceInterface {
                 return ProcessingResult.error(fileId, "Файл не найден в папке Import");
             }
 
-            List<String> lines = exporter.processFile(importFile);
-            Files.write(exportFile, lines, StandardCharsets.UTF_8);
+            try (BufferedWriter writer = new BufferedWriter(
+                    new OutputStreamWriter(Files.newOutputStream(exportFile), StandardCharsets.UTF_8))) {
+                exporter.processFileStreaming(importFile, null, writer);
+            }
 
             statusService.setStatus(fileId, ProcessingStatus.COMPLETED);
             log.info("Файл обработан: {} -> {}", importFile, exportFile);

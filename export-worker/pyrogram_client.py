@@ -12,12 +12,15 @@ Handles:
 import asyncio
 import logging
 import os
-from typing import List, Optional, AsyncGenerator
+from typing import List, Optional, AsyncGenerator, Union
 from pathlib import Path
 from datetime import datetime, timedelta
 
 from pyrogram import Client, types as pyrogram_types
-from pyrogram.errors import FloodWait, Unauthorized, BadRequest, ChannelPrivate, ChatAdminRequired
+from pyrogram.errors import (
+    FloodWait, Unauthorized, BadRequest, ChannelPrivate, ChatAdminRequired,
+    UserDeactivated, AuthKeyUnregistered, SessionExpired, PeerFlood,
+)
 
 from config import settings
 from json_converter import MessageConverter
@@ -110,9 +113,10 @@ class TelegramClient:
 
     async def get_chat_history(
         self,
-        chat_id: int,
+        chat_id: Union[int, str],
         limit: int = 0,
         offset_id: int = 0,
+        min_id: int = 0,
         from_date: Optional[datetime] = None,
         to_date: Optional[datetime] = None,
     ) -> AsyncGenerator[ExportedMessage, None]:
@@ -127,7 +131,8 @@ class TelegramClient:
         Args:
             chat_id: Telegram chat ID
             limit: Max messages (0 = all)
-            offset_id: Start from message ID
+            offset_id: Start from message ID (pagination, fetches messages OLDER than this)
+            min_id: Stop when message.id <= min_id (for incremental: fetch only NEW messages)
             from_date: Filter messages from date
             to_date: Filter messages to date
 
@@ -150,9 +155,8 @@ class TelegramClient:
             max_retries = settings.MAX_RETRIES
             seen_message_ids: set[int] = set()  # Track seen messages to avoid FloodWait dups
 
+            retry_count = 0
             while True:
-                retry_count = 0
-
                 try:
                     async for message in self.client.get_chat_history(
                         chat_id=chat_id,
@@ -160,14 +164,20 @@ class TelegramClient:
                         offset_id=last_offset_id,
                     ):
                         try:
+                            # Incremental export: stop when we reach already-exported messages
+                            if min_id and message.id <= min_id:
+                                logger.debug(f"Reached already-exported message {message.id} (min_id={min_id}), stopping")
+                                return
+
                             # Skip duplicates from FloodWait retry
                             if message.id in seen_message_ids:
                                 logger.debug(f"Skipping duplicate message {message.id}")
                                 continue
 
-                            # Date filtering
+                            # Date filtering (Pyrogram iterates newest→oldest)
                             if from_date and message.date < from_date:
-                                continue
+                                logger.debug(f"Reached message older than from_date ({message.date} < {from_date}), stopping")
+                                return
                             if to_date and message.date > to_date:
                                 continue
 
@@ -235,89 +245,117 @@ class TelegramClient:
             logger.error(f"❌ Error fetching history for chat {chat_id}: {e}", exc_info=True)
             raise
 
-    async def verify_and_get_info(self, chat_id: int) -> tuple[bool, Optional[dict]]:
+    async def verify_and_get_info(self, chat_id: Union[int, str]) -> tuple[bool, Optional[dict], Optional[str]]:
         """
         Check access and get chat info in single API call.
 
-        FALLBACK CACHE SYNC: Pyrogram caches entity access_hash locally. If you
-        pass a raw numeric ID that isn't cached, get_chat() fails with
-        PeerIdInvalidError. This is the most common production error when users
-        copy-paste chat IDs. Solution: call get_dialogs() to sync the cache,
-        then retry get_chat().
+        FALLBACK CACHE SYNC: For numeric IDs, Pyrogram caches entity access_hash
+        locally. If the ID isn't cached, get_chat() fails with PeerIdInvalidError.
+        Solution: call get_dialogs() to sync the cache, then retry.
+        For string usernames this fallback is skipped — Pyrogram resolves them
+        via contacts.resolveUsername API directly.
 
         Args:
-            chat_id: Telegram chat ID
+            chat_id: Telegram chat ID or username
 
         Returns:
-            Tuple of (is_accessible, chat_info_dict_or_None)
+            Tuple of (is_accessible, chat_info_dict_or_None, error_reason_or_None)
+            error_reason values: CHANNEL_PRIVATE, USERNAME_NOT_FOUND,
+            ADMIN_REQUIRED, UNKNOWN
         """
         if not self.is_connected:
-            return (False, None)
+            return (False, None, "UNKNOWN")
 
         try:
             chat = await self.client.get_chat(chat_id)
 
             info = {
                 "id": chat.id,
-                "title": chat.title or "",
-                "username": chat.username or "",
+                "title": getattr(chat, "title", "") or "",
+                "username": getattr(chat, "username", "") or "",
                 "type": str(chat.type),
-                "is_bot": chat.is_bot,
-                "is_self": chat.is_self,
-                "is_contact": chat.is_contact,
-                "members_count": chat.members_count or 0,
-                "description": chat.description or "",
+                "is_bot": getattr(chat, "is_bot", False),
+                "is_self": getattr(chat, "is_self", False),
+                "is_contact": getattr(chat, "is_contact", False),
+                "members_count": getattr(chat, "members_count", 0) or 0,
+                "description": getattr(chat, "description", "") or "",
             }
-            return (True, info)
+            return (True, info, None)
 
         except BadRequest as e:
-            # Common case: numeric ID not in cache. Sync dialogs and retry.
-            if "Could not find the input entity" in str(e) or "PeerIdInvalid" in str(e):
+            error_str = str(e)
+            logger.error(
+                f"BadRequest for chat {chat_id}: {type(e).__name__}: {error_str}"
+            )
+
+            # Username not found
+            if "USERNAME_NOT_OCCUPIED" in error_str or "USERNAME_INVALID" in error_str:
+                return (False, None, "USERNAME_NOT_FOUND")
+
+            # Numeric ID not in cache — sync dialogs and retry (only for numeric IDs)
+            if isinstance(chat_id, int) and (
+                "Could not find the input entity" in error_str
+                or "PeerIdInvalid" in error_str
+            ):
                 logger.warning(
                     f"Chat {chat_id} not in cache. Syncing dialog list and retrying..."
                 )
                 try:
-                    # Sync user's full dialog list to populate access_hash cache
                     await self.client.get_dialogs()
-
-                    # Retry get_chat
                     chat = await self.client.get_chat(chat_id)
                     info = {
                         "id": chat.id,
-                        "title": chat.title or "",
-                        "username": chat.username or "",
+                        "title": getattr(chat, "title", "") or "",
+                        "username": getattr(chat, "username", "") or "",
                         "type": str(chat.type),
-                        "is_bot": chat.is_bot,
-                        "is_self": chat.is_self,
-                        "is_contact": chat.is_contact,
-                        "members_count": chat.members_count or 0,
-                        "description": chat.description or "",
+                        "is_bot": getattr(chat, "is_bot", False),
+                        "is_self": getattr(chat, "is_self", False),
+                        "is_contact": getattr(chat, "is_contact", False),
+                        "members_count": getattr(chat, "members_count", 0) or 0,
+                        "description": getattr(chat, "description", "") or "",
                     }
                     logger.info(f"✅ Successfully resolved chat {chat_id} after cache sync")
-                    return (True, info)
+                    return (True, info, None)
 
                 except Exception as retry_error:
                     logger.error(f"Cache sync retry failed for chat {chat_id}: {retry_error}")
-                    return (False, None)
-            else:
-                logger.error(f"Cannot access chat {chat_id}: {e}")
-                return (False, None)
+                    return (False, None, "CHAT_NOT_ACCESSIBLE")
 
-        except (ChannelPrivate, ChatAdminRequired):
-            logger.error(f"Cannot access chat {chat_id}")
-            return (False, None)
+            return (False, None, "CHAT_NOT_ACCESSIBLE")
+
+        except ChannelPrivate:
+            logger.error(f"❌ Channel {chat_id} is private")
+            return (False, None, "CHANNEL_PRIVATE")
+
+        except ChatAdminRequired:
+            logger.error(f"❌ Admin rights required for chat {chat_id}")
+            return (False, None, "ADMIN_REQUIRED")
+
+        except (Unauthorized, UserDeactivated, AuthKeyUnregistered, SessionExpired) as e:
+            logger.error(f"❌ Session/auth error for chat {chat_id}: {type(e).__name__}: {e}")
+            return (False, None, "SESSION_INVALID")
+
+        except PeerFlood as e:
+            logger.error(f"❌ Account flood-restricted, cannot access chat {chat_id}: {e}")
+            return (False, None, "FLOOD_RESTRICTED")
 
         except Exception as e:
-            logger.error(f"Error accessing chat {chat_id}: {e}")
-            return (False, None)
+            logger.error(
+                f"Error accessing chat {chat_id}: {type(e).__name__}: {e}"
+            )
+            return (False, None, "UNKNOWN")
 
-    async def set_incremental_state(self, chat_id: int, last_message_id: int) -> None:
+    async def set_incremental_state(self, chat_id: Union[int, str], newest_message_id: int, user_id: Union[int, str]) -> None:
         """
         Save incremental export state to Redis for resumption on re-export.
 
+        Stores the NEWEST exported message ID (messages[0]) so next export
+        fetches only messages newer than this point.
+
         Args:
             chat_id: Telegram chat ID
-            last_message_id: ID of last exported message (to resume from)
+            newest_message_id: ID of the NEWEST exported message
+            user_id: Telegram user ID (state is per-user-per-chat)
         """
         if not redis:
             logger.debug("Redis not available, skipping state persistence")
@@ -331,22 +369,23 @@ class TelegramClient:
                     decode_responses=True,
                 )
 
-            key = f"state:export:{chat_id}:last_message_id"
-            await self.redis_client.set(key, last_message_id, ex=30 * 24 * 3600)  # 30 days
-            logger.debug(f"Saved incremental state for chat {chat_id}: message_id={last_message_id}")
+            key = f"state:export:{user_id}:{chat_id}:last_message_id"
+            await self.redis_client.set(key, newest_message_id, ex=30 * 24 * 3600)  # 30 days
+            logger.debug(f"Saved incremental state for user {user_id} chat {chat_id}: newest_message_id={newest_message_id}")
 
         except Exception as e:
             logger.warning(f"Could not save incremental state to Redis: {e}")
 
-    async def get_incremental_state(self, chat_id: int) -> Optional[int]:
+    async def get_incremental_state(self, chat_id: Union[int, str], user_id: Union[int, str]) -> Optional[int]:
         """
-        Get last exported message ID for incremental export resume.
+        Get newest exported message ID for incremental export.
 
         Args:
             chat_id: Telegram chat ID
+            user_id: Telegram user ID (state is per-user-per-chat)
 
         Returns:
-            Last message ID if available, None otherwise
+            Newest message ID from last export if available, None otherwise
         """
         if not redis:
             return None
@@ -359,11 +398,11 @@ class TelegramClient:
                     decode_responses=True,
                 )
 
-            key = f"state:export:{chat_id}:last_message_id"
+            key = f"state:export:{user_id}:{chat_id}:last_message_id"
             value = await self.redis_client.get(key)
             if value:
                 message_id = int(value)
-                logger.info(f"Resuming chat {chat_id} from message_id={message_id}")
+                logger.info(f"Found incremental state for user {user_id} chat {chat_id}: newest_message_id={message_id}")
                 return message_id
             return None
 
