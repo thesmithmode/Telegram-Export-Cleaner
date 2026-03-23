@@ -20,8 +20,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Create necessary directories
-RUN mkdir -p session logs
+# Create non-root user and necessary directories
+RUN groupadd -r app && useradd -r -g app app && \
+    mkdir -p session logs && chown -R app:app /app
+USER app
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
