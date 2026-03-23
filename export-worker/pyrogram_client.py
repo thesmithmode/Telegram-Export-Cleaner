@@ -12,7 +12,7 @@ Handles:
 import asyncio
 import logging
 import os
-from typing import List, Optional, AsyncGenerator
+from typing import List, Optional, AsyncGenerator, Union
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -110,7 +110,7 @@ class TelegramClient:
 
     async def get_chat_history(
         self,
-        chat_id: int,
+        chat_id: Union[int, str],
         limit: int = 0,
         offset_id: int = 0,
         from_date: Optional[datetime] = None,
@@ -235,7 +235,7 @@ class TelegramClient:
             logger.error(f"❌ Error fetching history for chat {chat_id}: {e}", exc_info=True)
             raise
 
-    async def verify_and_get_info(self, chat_id: int) -> tuple[bool, Optional[dict]]:
+    async def verify_and_get_info(self, chat_id: Union[int, str]) -> tuple[bool, Optional[dict]]:
         """
         Check access and get chat info in single API call.
 
@@ -311,7 +311,7 @@ class TelegramClient:
             logger.error(f"Error accessing chat {chat_id}: {e}")
             return (False, None)
 
-    async def set_incremental_state(self, chat_id: int, last_message_id: int) -> None:
+    async def set_incremental_state(self, chat_id: Union[int, str], last_message_id: int) -> None:
         """
         Save incremental export state to Redis for resumption on re-export.
 
@@ -338,7 +338,7 @@ class TelegramClient:
         except Exception as e:
             logger.warning(f"Could not save incremental state to Redis: {e}")
 
-    async def get_incremental_state(self, chat_id: int) -> Optional[int]:
+    async def get_incremental_state(self, chat_id: Union[int, str]) -> Optional[int]:
         """
         Get last exported message ID for incremental export resume.
 
