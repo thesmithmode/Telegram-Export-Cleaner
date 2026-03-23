@@ -1,6 +1,7 @@
 package com.tcleaner.core;
 
 import java.io.IOException;
+import java.io.Writer;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -34,4 +35,17 @@ public interface TelegramExporterInterface {
      * @throws IOException при ошибках чтения файла
      */
     List<String> processFile(Path inputPath, MessageFilter filter) throws IOException;
+
+    /**
+     * Обрабатывает файл result.json через Jackson Streaming API, записывая результат в Writer.
+     *
+     * <p>Не загружает весь JSON в память — подходит для файлов любого размера.</p>
+     *
+     * @param inputPath путь к файлу result.json
+     * @param filter    фильтр для сообщений (может быть null)
+     * @param out       Writer для записи результата
+     * @return количество записанных строк
+     * @throws IOException при ошибках чтения файла или записи
+     */
+    int processFileStreaming(Path inputPath, MessageFilter filter, Writer out) throws IOException;
 }
