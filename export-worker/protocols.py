@@ -27,17 +27,19 @@ class TelegramClientProtocol(Protocol):
         """Disconnect from Telegram API."""
         ...
 
-    async def verify_and_get_info(self, chat_id: Union[int, str]) -> Tuple[bool, Optional[dict]]:
+    async def verify_and_get_info(self, chat_id: Union[int, str]) -> Tuple[bool, Optional[dict], Optional[str]]:
         """
         Verify access to chat and get chat metadata.
 
         Args:
-            chat_id: Target chat ID
+            chat_id: Target chat ID or username
 
         Returns:
-            (is_accessible, chat_info) where:
+            (is_accessible, chat_info, error_reason) where:
             - is_accessible: bool indicating if chat is accessible
             - chat_info: dict with title, type, etc. or None if not accessible
+            - error_reason: CHANNEL_PRIVATE, USERNAME_NOT_FOUND,
+              ADMIN_REQUIRED, CHAT_NOT_ACCESSIBLE, UNKNOWN, or None if accessible
         """
         ...
 

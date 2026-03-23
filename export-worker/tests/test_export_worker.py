@@ -85,7 +85,7 @@ class TestExportWorkerJobProcessing:
 
         # Mock Telegram client
         worker.telegram_client.verify_and_get_info = AsyncMock(
-            return_value=(True, {"title": "Test Chat", "type": "private"})
+            return_value=(True, {"title": "Test Chat", "type": "private"}, None)
         )
 
         # Mock message generator
@@ -140,7 +140,7 @@ class TestExportWorkerJobProcessing:
         )
 
         worker.telegram_client.verify_and_get_info = AsyncMock(
-            return_value=(False, None)
+            return_value=(False, None, "CHAT_NOT_ACCESSIBLE")
         )
         worker.java_client.send_response = AsyncMock(return_value=True)
         worker.queue_consumer.mark_job_processing = AsyncMock()
@@ -153,7 +153,7 @@ class TestExportWorkerJobProcessing:
         worker.java_client.send_response.assert_called_once()
         args, kwargs = worker.java_client.send_response.call_args
         assert kwargs["status"] == "failed"
-        assert "not accessible" in kwargs["error"].lower()
+        assert kwargs["error_code"] == "CHAT_NOT_ACCESSIBLE"
 
     @pytest.mark.asyncio
     async def test_process_job_export_error(self, worker):
@@ -168,7 +168,7 @@ class TestExportWorkerJobProcessing:
         )
 
         worker.telegram_client.verify_and_get_info = AsyncMock(
-            return_value=(True, {"title": "Test", "type": "private"})
+            return_value=(True, {"title": "Test", "type": "private"}, None)
         )
 
         # Mock error during export
@@ -209,7 +209,7 @@ class TestExportWorkerJobProcessing:
         )
 
         worker.telegram_client.verify_and_get_info = AsyncMock(
-            return_value=(True, {"title": "Test", "type": "private"})
+            return_value=(True, {"title": "Test", "type": "private"}, None)
         )
 
         # Mock successful export
