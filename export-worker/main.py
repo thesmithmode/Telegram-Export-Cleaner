@@ -173,6 +173,19 @@ class ExportWorker:
                     offset_id = last_message_id
                     logger.info(f"Resuming from message {offset_id} (incremental export)")
 
+            # Notify user that export has started
+            if job.user_chat_id and self.java_client:
+                await self.java_client.send_progress_update(
+                    user_chat_id=job.user_chat_id,
+                    task_id=job.task_id,
+                    message_count=0,
+                    total=job.limit if job.limit > 0 else None,
+                    started=True,
+                )
+
+            total_limit = job.limit if job.limit > 0 else None
+            last_reported_pct = 0
+
             try:
                 async for message in self.telegram_client.get_chat_history(
                     chat_id=job.chat_id,
@@ -180,16 +193,26 @@ class ExportWorker:
                     offset_id=offset_id,
                 ):
                     messages.append(message)
+                    count = len(messages)
 
-                    # Report progress every 500 messages to user and logs
-                    if len(messages) % 500 == 0:
-                        logger.info(f"  Exported {len(messages)} messages...")
-                        if job.user_chat_id and self.java_client:
-                            await self.java_client.send_progress_update(
-                                user_chat_id=job.user_chat_id,
-                                task_id=job.task_id,
-                                message_count=len(messages),
-                            )
+                    # Report progress at every 20% milestone
+                    if total_limit:
+                        pct = count * 100 // total_limit
+                        milestone = (pct // 20) * 20
+                        if milestone > last_reported_pct and milestone < 100:
+                            last_reported_pct = milestone
+                            logger.info(f"  Exported {count}/{total_limit} messages ({milestone}%)...")
+                            if job.user_chat_id and self.java_client:
+                                await self.java_client.send_progress_update(
+                                    user_chat_id=job.user_chat_id,
+                                    task_id=job.task_id,
+                                    message_count=count,
+                                    total=total_limit,
+                                )
+                    else:
+                        # Unknown total: log every 10k messages, no user notification
+                        if count % 10000 == 0:
+                            logger.info(f"  Exported {count} messages...")
 
             except Exception as e:
                 error = f"Export failed: {str(e)}"
