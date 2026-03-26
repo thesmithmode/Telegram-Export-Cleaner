@@ -299,7 +299,8 @@ class JavaBotClient:
         user_chat_id: int,
         task_id: str,
         message_count: int,
-        percentage: Optional[int] = None,
+        total: Optional[int] = None,
+        started: bool = False,
     ) -> bool:
         """
         Send progress update to user during long export.
@@ -308,18 +309,25 @@ class JavaBotClient:
             user_chat_id: User's Telegram chat ID
             task_id: Export task ID for reference
             message_count: Number of messages exported so far
-            percentage: Progress as percentage (0-100), or None for indeterminate
+            total: Total messages expected (if known)
+            started: True if this is the initial "started" notification
 
         Returns:
             True if message sent, False otherwise
         """
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
 
-        if percentage is not None:
+        if started:
+            if total:
+                text = f"⏳ Экспорт начался — будет обработано до {total} сообщений"
+            else:
+                text = "⏳ Экспорт начался, ожидайте..."
+        elif total:
+            percentage = message_count * 100 // total
             progress_bar = self._build_progress_bar(percentage)
-            text = f"📊 Export progress: {message_count} messages\n{progress_bar} {percentage}%"
+            text = f"📊 {progress_bar} {percentage}% ({message_count}/{total})"
         else:
-            text = f"📊 Exporting... {message_count} messages processed"
+            text = f"📊 Экспортировано {message_count} сообщений..."
 
         try:
             response = await self._http_client.post(
