@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(docs.pyrogram.org)",
+      "WebFetch(stackoverflow.com)"
+    ]
+  }
+}

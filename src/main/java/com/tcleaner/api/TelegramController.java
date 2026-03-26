@@ -16,12 +16,15 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
+import java.io.BufferedWriter;
 import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -40,10 +43,9 @@ import java.util.Map;
  * </ul>
  *
  * <h2>Память</h2>
- * <p>Список обработанных строк формируется один раз в {@link TelegramExporter} и
- * напрямую объединяется через {@code String.join} без промежуточной записи на диск
- * и повторного чтения. Для синхронного endpoint'а, где результат сразу отдаётся
- * клиенту, это оптимально.</p>
+ * <p>Обработка выполняется через Jackson Streaming API: сообщения читаются по одному
+ * и немедленно пишутся в HTTP response через {@link StreamingResponseBody}.
+ * Пиковое потребление памяти не зависит от размера входного файла.</p>
  */
 @RestController
 @RequestMapping("/api")
@@ -99,7 +101,7 @@ public class TelegramController {
 
         try {
             MessageFilter filter = MessageFilterFactory.build(startDate, endDate, keywords, excludeKeywords);
-            return processWithTempDir(file, filter);
+            return streamWithTempDir(file, filter);
         } catch (Exception ex) {
             return handleConvertException(ex);
         }
@@ -156,62 +158,64 @@ public class TelegramController {
     }
 
     /**
-     * Обрабатывает multipart-файл во временной директории и возвращает результат.
+     * Обрабатывает multipart-файл через streaming и отдаёт результат клиенту по мере обработки.
      *
-     * <p>Файл сохраняется во временную директорию для передачи в {@link TelegramExporter}.
-     * Результат возвращается клиенту напрямую из памяти — без дополнительных I/O-операций.</p>
+     * <p>Файл сохраняется во временную директорию, затем читается через Jackson Streaming API.
+     * Каждая строка пишется в HTTP response сразу после обработки — без накопления в памяти.
+     * Временная директория удаляется после завершения стрима.</p>
      *
      * @param file   загруженный multipart-файл
      * @param filter фильтр сообщений, или {@code null}
-     * @return текстовый ответ с обработанными сообщениями
+     * @return streaming-ответ с обработанными сообщениями
      * @throws IOException при ошибках ввода-вывода
      */
-    private ResponseEntity<?> processWithTempDir(
+    private ResponseEntity<StreamingResponseBody> streamWithTempDir(
             MultipartFile file, MessageFilter filter) throws IOException {
-        try (TempDirectory tempDir = new TempDirectory()) {
-            Path inputFile = tempDir.resolve("result.json");
-            file.transferTo(inputFile.toFile());
+        TempDirectory tempDir = new TempDirectory();
+        Path inputFile = tempDir.resolve("result.json");
+        file.transferTo(inputFile.toFile());
 
-            List<String> processed = exporter.processFile(inputFile, filter);
-            String result = String.join("\n", processed);
-            if (!result.isEmpty()) {
-                result += "\n";
+        StreamingResponseBody body = outputStream -> {
+            try (tempDir;
+                 BufferedWriter writer = new BufferedWriter(
+                         new OutputStreamWriter(outputStream, StandardCharsets.UTF_8))) {
+                exporter.processFileStreaming(inputFile, filter, writer);
             }
+        };
 
-            return ResponseEntity.ok()
-                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=output.txt")
-                    .contentType(MediaType.TEXT_PLAIN)
-                    .body(result);
-        }
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=output.txt")
+                .contentType(MediaType.TEXT_PLAIN)
+                .body(body);
     }
 
     /**
-     * Обрабатывает JSON-строку во временной директории и возвращает результат.
+     * Обрабатывает JSON-строку через streaming и отдаёт результат клиенту по мере обработки.
      *
-     * <p>JSON сохраняется во временный файл для передачи в {@link TelegramExporter}.
-     * Результат возвращается клиенту напрямую из памяти.</p>
+     * <p>JSON сохраняется во временный файл, затем читается через Jackson Streaming API.</p>
      *
      * @param jsonContent содержимое {@code result.json}
      * @param filter      фильтр сообщений, или {@code null}
-     * @return текстовый ответ с обработанными сообщениями
+     * @return streaming-ответ с обработанными сообщениями
      * @throws IOException при ошибках ввода-вывода
      */
-    private ResponseEntity<?> processJsonWithTempDir(
+    private ResponseEntity<StreamingResponseBody> processJsonWithTempDir(
             String jsonContent, MessageFilter filter) throws IOException {
-        try (TempDirectory tempDir = new TempDirectory()) {
-            Path inputFile = tempDir.resolve("result.json");
-            Files.writeString(inputFile, jsonContent);
+        TempDirectory tempDir = new TempDirectory();
+        Path inputFile = tempDir.resolve("result.json");
+        Files.writeString(inputFile, jsonContent);
 
-            List<String> processed = exporter.processFile(inputFile, filter);
-            String result = String.join("\n", processed);
-            if (!result.isEmpty()) {
-                result += "\n";
+        StreamingResponseBody body = outputStream -> {
+            try (tempDir;
+                 BufferedWriter writer = new BufferedWriter(
+                         new OutputStreamWriter(outputStream, StandardCharsets.UTF_8))) {
+                exporter.processFileStreaming(inputFile, filter, writer);
             }
+        };
 
-            return ResponseEntity.ok()
-                    .contentType(MediaType.TEXT_PLAIN)
-                    .body(result);
-        }
+        return ResponseEntity.ok()
+                .contentType(MediaType.TEXT_PLAIN)
+                .body(body);
     }
 
     /**

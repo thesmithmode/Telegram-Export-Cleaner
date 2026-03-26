@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -21,6 +22,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -141,12 +143,11 @@ class FileStorageServiceTest {
         @Test
         @DisplayName("При ошибке обработки: входной .json удаляется, битый .md не остаётся")
         void onErrorDeletesBothInputAndPartialExport() throws IOException {
-            // Создаём мок-экспортер, который бросает исключение
+            // Создаём мок-экспортер, который бросает исключение при streaming-обработке
             TelegramExporter failingExporter = mock(TelegramExporter.class);
-            when(failingExporter.processFile(any(Path.class), any()))
-                    .thenThrow(new TelegramExporterException("INVALID_JSON", "Битый JSON"));
-            when(failingExporter.processFile(any(Path.class)))
-                    .thenThrow(new TelegramExporterException("INVALID_JSON", "Битый JSON"));
+            doAnswer(inv -> {
+                throw new TelegramExporterException("INVALID_JSON", "Битый JSON");
+            }).when(failingExporter).processFileStreaming(any(Path.class), any(), any(Writer.class));
 
             StorageConfig config = new StorageConfig();
             config.setImportPath(importDir.toString());
