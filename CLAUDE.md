@@ -305,6 +305,7 @@ project.build.sourceEncoding=UTF-8
 Follow this format:
 - **Prefix** (English): `FIX`, `FEAT`, `CHORE`, `REFACTOR`, `TEST`, `DOCS`
 - **Description** (Russian): Detailed explanation of what changed and why
+- **НИКОГДА** не добавлять `Co-Authored-By` или любые другие trailer-строки в конец коммита
 
 Example:
 ```

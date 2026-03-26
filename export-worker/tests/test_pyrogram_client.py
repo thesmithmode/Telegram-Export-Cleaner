@@ -157,6 +157,35 @@ class TestTelegramClientVerifyAccess:
         assert accessible is False
         assert error_reason == "UNKNOWN"
 
+    @pytest.mark.asyncio
+    async def test_verify_and_get_info_channel_without_is_bot(self):
+        """Test that Chat objects without is_bot (channels/groups) don't raise AttributeError."""
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+
+        # Simulate real Pyrogram Chat object for a channel — no is_bot/is_self/is_contact
+        class FakeChatChannel:
+            id = 1001234567890
+            title = "Some Channel"
+            username = "somechannel"
+            type = "channel"
+            members_count = 5000
+            description = "Test channel"
+            # intentionally missing: is_bot, is_self, is_contact
+
+        mock_pyrogram.get_chat = AsyncMock(return_value=FakeChatChannel())
+        client.client = mock_pyrogram
+
+        accessible, info, error_reason = await client.verify_and_get_info("somechannel")
+
+        assert accessible is True
+        assert info is not None
+        assert info["title"] == "Some Channel"
+        assert info["is_bot"] is False
+        assert info["is_self"] is False
+        assert info["is_contact"] is False
+        assert error_reason is None
+
 
 class TestTelegramClientHistoryExport:
     """Test message history export."""

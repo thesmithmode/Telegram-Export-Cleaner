@@ -17,7 +17,10 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 from pyrogram import Client, types as pyrogram_types
-from pyrogram.errors import FloodWait, Unauthorized, BadRequest, ChannelPrivate, ChatAdminRequired
+from pyrogram.errors import (
+    FloodWait, Unauthorized, BadRequest, ChannelPrivate, ChatAdminRequired,
+    UserDeactivated, AuthKeyUnregistered, SessionExpired, PeerFlood,
+)
 
 from config import settings
 from json_converter import MessageConverter
@@ -261,14 +264,14 @@ class TelegramClient:
 
             info = {
                 "id": chat.id,
-                "title": chat.title or "",
-                "username": chat.username or "",
+                "title": getattr(chat, "title", "") or "",
+                "username": getattr(chat, "username", "") or "",
                 "type": str(chat.type),
-                "is_bot": chat.is_bot,
-                "is_self": chat.is_self,
-                "is_contact": chat.is_contact,
-                "members_count": chat.members_count or 0,
-                "description": chat.description or "",
+                "is_bot": getattr(chat, "is_bot", False),
+                "is_self": getattr(chat, "is_self", False),
+                "is_contact": getattr(chat, "is_contact", False),
+                "members_count": getattr(chat, "members_count", 0) or 0,
+                "description": getattr(chat, "description", "") or "",
             }
             return (True, info, None)
 
@@ -295,14 +298,14 @@ class TelegramClient:
                     chat = await self.client.get_chat(chat_id)
                     info = {
                         "id": chat.id,
-                        "title": chat.title or "",
-                        "username": chat.username or "",
+                        "title": getattr(chat, "title", "") or "",
+                        "username": getattr(chat, "username", "") or "",
                         "type": str(chat.type),
-                        "is_bot": chat.is_bot,
-                        "is_self": chat.is_self,
-                        "is_contact": chat.is_contact,
-                        "members_count": chat.members_count or 0,
-                        "description": chat.description or "",
+                        "is_bot": getattr(chat, "is_bot", False),
+                        "is_self": getattr(chat, "is_self", False),
+                        "is_contact": getattr(chat, "is_contact", False),
+                        "members_count": getattr(chat, "members_count", 0) or 0,
+                        "description": getattr(chat, "description", "") or "",
                     }
                     logger.info(f"✅ Successfully resolved chat {chat_id} after cache sync")
                     return (True, info, None)
@@ -320,6 +323,14 @@ class TelegramClient:
         except ChatAdminRequired:
             logger.error(f"❌ Admin rights required for chat {chat_id}")
             return (False, None, "ADMIN_REQUIRED")
+
+        except (Unauthorized, UserDeactivated, AuthKeyUnregistered, SessionExpired) as e:
+            logger.error(f"❌ Session/auth error for chat {chat_id}: {type(e).__name__}: {e}")
+            return (False, None, "SESSION_INVALID")
+
+        except PeerFlood as e:
+            logger.error(f"❌ Account flood-restricted, cannot access chat {chat_id}: {e}")
+            return (False, None, "FLOOD_RESTRICTED")
 
         except Exception as e:
             logger.error(

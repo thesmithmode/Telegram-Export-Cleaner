@@ -125,10 +125,25 @@ class ExportWorker:
             accessible, chat_info, error_reason = await self.telegram_client.verify_and_get_info(job.chat_id)
             if not accessible:
                 error_messages = {
-                    "CHANNEL_PRIVATE": f"Канал {job.chat_id} приватный. Аккаунт должен быть участником.",
+                    "CHANNEL_PRIVATE": f"Канал {job.chat_id} приватный. Аккаунт worker-а должен быть участником.",
                     "USERNAME_NOT_FOUND": f"Username {job.chat_id} не найден. Проверьте правильность.",
                     "ADMIN_REQUIRED": f"Для экспорта чата {job.chat_id} нужны права администратора.",
-                    "CHAT_NOT_ACCESSIBLE": f"Нет доступа к чату {job.chat_id}. Аккаунт должен быть участником.",
+                    "CHAT_NOT_ACCESSIBLE": (
+                        f"Нет доступа к чату {job.chat_id}. "
+                        f"Аккаунт worker-а должен быть участником этого чата/канала."
+                    ),
+                    "SESSION_INVALID": (
+                        "Сессия Telegram worker-а истекла или заблокирована. "
+                        "Необходимо пересоздать TELEGRAM_SESSION_STRING."
+                    ),
+                    "FLOOD_RESTRICTED": (
+                        "Аккаунт worker-а временно ограничен Telegram (flood). "
+                        "Попробуйте позже."
+                    ),
+                    "UNKNOWN": (
+                        f"Не удалось получить доступ к чату {job.chat_id}. "
+                        f"Проверьте логи worker-а для подробностей."
+                    ),
                 }
                 error = error_messages.get(error_reason, f"No access to chat {job.chat_id}")
                 error_code = error_reason or "CHAT_NOT_ACCESSIBLE"
