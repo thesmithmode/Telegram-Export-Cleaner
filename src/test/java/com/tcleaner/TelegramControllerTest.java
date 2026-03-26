@@ -171,8 +171,11 @@ class TelegramControllerTest {
         }
 
         @Test
-        @DisplayName("Возвращает 400 при TelegramExporterException с INVALID_JSON")
-        void returns400WhenExporterThrowsInvalidJson() throws IOException {
+        @DisplayName("TelegramExporterException при невалидном JSON — заголовок 200, стрим обрывается")
+        void exporterException_headersAlreadySent_streamFails() throws IOException {
+            // StreamingResponseBody: заголовки (200 OK) отправляются ДО выполнения лямбды.
+            // Если экспортер бросает исключение внутри стрима — изменить статус уже нельзя.
+            // Соединение просто обрывается. Это штатное поведение Spring StreamingResponseBody.
             TelegramExporterInterface mockExporter = mock(TelegramExporterInterface.class);
             doAnswer(inv -> {
                 throw new TelegramExporterException("INVALID_JSON", "Невалидный JSON");
@@ -185,13 +188,24 @@ class TelegramControllerTest {
 
             ResponseEntity<?> response = ctrl.convert(file, null, null, null, null);
 
-            // StreamingResponseBody выполняется при вызове writeTo — исключение не перехватывается
-            // контроллером на этапе построения ResponseEntity, поэтому тест проверяет что
-            // при невалидном JSON выбрасывается IOException при чтении streaming-тела
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-            // Проверяем что исключение пробрасывается при записи в stream
             org.junit.jupiter.api.Assertions.assertThrows(Exception.class,
                     () -> readStreamingBody(response));
+        }
+
+        @Test
+        @DisplayName("Пути сервера не утекают в тело ответа при ошибке даты")
+        void errorMessageDoesNotLeakServerPaths() {
+            MockMultipartFile file = new MockMultipartFile(
+                    "file", "result.json", "application/json",
+                    "{\"messages\":[]}".getBytes());
+
+            ResponseEntity<?> response = controller.convert(file, "not-a-date", null, null, null);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            String body = response.getBody().toString();
+            assertThat(body).doesNotContain("/tmp");
+            assertThat(body).doesNotContain("telegram-cleaner");
         }
 
         @Test
@@ -273,6 +287,23 @@ class TelegramControllerTest {
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(readStreamingBody(response)).isEqualTo("20250624 Test\n");
+        }
+
+        @Test
+        @DisplayName("TelegramExporterException внутри стрима — заголовок 200, стрим обрывается")
+        void exporterException_streamFails() throws IOException {
+            TelegramExporterInterface mockExporter = mock(TelegramExporterInterface.class);
+            doAnswer(inv -> {
+                throw new TelegramExporterException("INVALID_JSON", "Невалидный JSON");
+            }).when(mockExporter).processFileStreaming(any(Path.class), any(), any(Writer.class));
+
+            TelegramController ctrl = new TelegramController(mockExporter);
+            ResponseEntity<?> response = ctrl.convertJson(
+                    "not valid json", null, null, null, null);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            org.junit.jupiter.api.Assertions.assertThrows(Exception.class,
+                    () -> readStreamingBody(response));
         }
 
         @Test
