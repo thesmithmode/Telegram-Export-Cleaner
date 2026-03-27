@@ -48,6 +48,7 @@ class TelegramClientProtocol(Protocol):
         chat_id: Union[int, str],
         limit: int = 0,
         offset_id: int = 0,
+        min_id: int = 0,
         from_date: Optional[datetime] = None,
         to_date: Optional[datetime] = None,
     ) -> AsyncGenerator[ExportedMessage, None]:
@@ -57,7 +58,8 @@ class TelegramClientProtocol(Protocol):
         Args:
             chat_id: Target chat ID
             limit: Max messages (0 = all)
-            offset_id: Start from message ID
+            offset_id: Start from message ID (fetches messages OLDER than this)
+            min_id: Stop when message.id <= min_id (incremental: fetch only new messages)
             from_date: Filter from date (optional)
             to_date: Filter to date (optional)
 

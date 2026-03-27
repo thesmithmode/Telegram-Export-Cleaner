@@ -90,20 +90,8 @@ class TestExportWorkerJobProcessing:
 
         # Mock message generator
         messages = [
-            ExportedMessage(
-                message_id=1,
-                text="Hello",
-                date=datetime.now(),
-                from_user_id=123,
-                entities=[],
-            ),
-            ExportedMessage(
-                message_id=2,
-                text="World",
-                date=datetime.now(),
-                from_user_id=123,
-                entities=[],
-            ),
+            ExportedMessage(id=2, date="2025-01-01T00:00:01", text="World"),
+            ExportedMessage(id=1, date="2025-01-01T00:00:00", text="Hello"),
         ]
 
         async def mock_history(*args, **kwargs):
@@ -111,6 +99,7 @@ class TestExportWorkerJobProcessing:
                 yield msg
 
         worker.telegram_client.get_chat_history = mock_history
+        worker.telegram_client.get_incremental_state = AsyncMock(return_value=None)
 
         # Mock Java client
         worker.java_client.send_response = AsyncMock(return_value=True)
@@ -173,13 +162,7 @@ class TestExportWorkerJobProcessing:
 
         # Mock error during export
         async def mock_history_error(*args, **kwargs):
-            yield ExportedMessage(
-                message_id=1,
-                text="First",
-                date=datetime.now(),
-                from_user_id=123,
-                entities=[],
-            )
+            yield ExportedMessage(id=1, date="2025-01-01T00:00:00", text="First")
             raise ValueError("Export error")
 
         worker.telegram_client.get_chat_history = mock_history_error
@@ -214,13 +197,7 @@ class TestExportWorkerJobProcessing:
 
         # Mock successful export
         async def mock_history(*args, **kwargs):
-            yield ExportedMessage(
-                message_id=1,
-                text="Message",
-                date=datetime.now(),
-                from_user_id=123,
-                entities=[],
-            )
+            yield ExportedMessage(id=1, date="2025-01-01T00:00:00", text="Message")
 
         worker.telegram_client.get_chat_history = mock_history
 
