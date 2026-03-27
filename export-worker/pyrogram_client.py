@@ -116,6 +116,7 @@ class TelegramClient:
         chat_id: Union[int, str],
         limit: int = 0,
         offset_id: int = 0,
+        min_id: int = 0,
         from_date: Optional[datetime] = None,
         to_date: Optional[datetime] = None,
     ) -> AsyncGenerator[ExportedMessage, None]:
@@ -130,7 +131,8 @@ class TelegramClient:
         Args:
             chat_id: Telegram chat ID
             limit: Max messages (0 = all)
-            offset_id: Start from message ID
+            offset_id: Start from message ID (pagination, fetches messages OLDER than this)
+            min_id: Stop when message.id <= min_id (for incremental: fetch only NEW messages)
             from_date: Filter messages from date
             to_date: Filter messages to date
 
@@ -163,6 +165,11 @@ class TelegramClient:
                         offset_id=last_offset_id,
                     ):
                         try:
+                            # Incremental export: stop when we reach already-exported messages
+                            if min_id and message.id <= min_id:
+                                logger.debug(f"Reached already-exported message {message.id} (min_id={min_id}), stopping")
+                                return
+
                             # Skip duplicates from FloodWait retry
                             if message.id in seen_message_ids:
                                 logger.debug(f"Skipping duplicate message {message.id}")
@@ -338,13 +345,17 @@ class TelegramClient:
             )
             return (False, None, "UNKNOWN")
 
-    async def set_incremental_state(self, chat_id: Union[int, str], last_message_id: int) -> None:
+    async def set_incremental_state(self, chat_id: Union[int, str], newest_message_id: int, user_id: Union[int, str]) -> None:
         """
         Save incremental export state to Redis for resumption on re-export.
 
+        Stores the NEWEST exported message ID (messages[0]) so next export
+        fetches only messages newer than this point.
+
         Args:
             chat_id: Telegram chat ID
-            last_message_id: ID of last exported message (to resume from)
+            newest_message_id: ID of the NEWEST exported message
+            user_id: Telegram user ID (state is per-user-per-chat)
         """
         if not redis:
             logger.debug("Redis not available, skipping state persistence")
@@ -358,22 +369,23 @@ class TelegramClient:
                     decode_responses=True,
                 )
 
-            key = f"state:export:{chat_id}:last_message_id"
-            await self.redis_client.set(key, last_message_id, ex=30 * 24 * 3600)  # 30 days
-            logger.debug(f"Saved incremental state for chat {chat_id}: message_id={last_message_id}")
+            key = f"state:export:{user_id}:{chat_id}:last_message_id"
+            await self.redis_client.set(key, newest_message_id, ex=30 * 24 * 3600)  # 30 days
+            logger.debug(f"Saved incremental state for user {user_id} chat {chat_id}: newest_message_id={newest_message_id}")
 
         except Exception as e:
             logger.warning(f"Could not save incremental state to Redis: {e}")
 
-    async def get_incremental_state(self, chat_id: Union[int, str]) -> Optional[int]:
+    async def get_incremental_state(self, chat_id: Union[int, str], user_id: Union[int, str]) -> Optional[int]:
         """
-        Get last exported message ID for incremental export resume.
+        Get newest exported message ID for incremental export.
 
         Args:
             chat_id: Telegram chat ID
+            user_id: Telegram user ID (state is per-user-per-chat)
 
         Returns:
-            Last message ID if available, None otherwise
+            Newest message ID from last export if available, None otherwise
         """
         if not redis:
             return None
@@ -386,11 +398,11 @@ class TelegramClient:
                     decode_responses=True,
                 )
 
-            key = f"state:export:{chat_id}:last_message_id"
+            key = f"state:export:{user_id}:{chat_id}:last_message_id"
             value = await self.redis_client.get(key)
             if value:
                 message_id = int(value)
-                logger.info(f"Resuming chat {chat_id} from message_id={message_id}")
+                logger.info(f"Found incremental state for user {user_id} chat {chat_id}: newest_message_id={message_id}")
                 return message_id
             return None
 

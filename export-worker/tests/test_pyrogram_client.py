@@ -319,6 +319,82 @@ class TestTelegramClientHistoryExport:
             assert len(messages) == 1
 
 
+class TestTelegramClientIncrementalExport:
+    """Test incremental export via min_id."""
+
+    @pytest.mark.asyncio
+    async def test_get_chat_history_stops_at_min_id(self):
+        """min_id causes iteration to stop when message.id <= min_id."""
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+
+        # Pyrogram yields newest→oldest: ids 10, 7, 5, 3, 1
+        raw_messages = [
+            MagicMock(id=10, date=datetime.now(), entities=None, media=None,
+                      forward_from=None, forward_sender_name=None,
+                      forward_date=None, edit_date=None, reply_to_message_id=None,
+                      caption=None, caption_entities=None, text="m10"),
+            MagicMock(id=7, date=datetime.now(), entities=None, media=None,
+                      forward_from=None, forward_sender_name=None,
+                      forward_date=None, edit_date=None, reply_to_message_id=None,
+                      caption=None, caption_entities=None, text="m7"),
+            MagicMock(id=5, date=datetime.now(), entities=None, media=None,
+                      forward_from=None, forward_sender_name=None,
+                      forward_date=None, edit_date=None, reply_to_message_id=None,
+                      caption=None, caption_entities=None, text="m5"),
+            MagicMock(id=3, date=datetime.now(), entities=None, media=None,
+                      forward_from=None, forward_sender_name=None,
+                      forward_date=None, edit_date=None, reply_to_message_id=None,
+                      caption=None, caption_entities=None, text="m3"),
+        ]
+
+        async def mock_get_chat_history(*args, **kwargs):
+            for msg in raw_messages:
+                yield msg
+
+        mock_pyrogram.get_chat_history = mock_get_chat_history
+        client.client = mock_pyrogram
+
+        # With min_id=5: should yield ids 10 and 7, stop at 5
+        collected_ids = []
+        async for msg in client.get_chat_history(123, min_id=5):
+            collected_ids.append(msg.id)
+
+        assert collected_ids == [10, 7]
+
+    @pytest.mark.asyncio
+    async def test_get_chat_history_min_id_zero_returns_all(self):
+        """min_id=0 (default) returns all messages without stopping early."""
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+
+        raw_messages = [
+            MagicMock(id=3, date=datetime.now(), entities=None, media=None,
+                      forward_from=None, forward_sender_name=None,
+                      forward_date=None, edit_date=None, reply_to_message_id=None,
+                      caption=None, caption_entities=None, text="m3"),
+            MagicMock(id=1, date=datetime.now(), entities=None, media=None,
+                      forward_from=None, forward_sender_name=None,
+                      forward_date=None, edit_date=None, reply_to_message_id=None,
+                      caption=None, caption_entities=None, text="m1"),
+        ]
+
+        async def mock_get_chat_history(*args, **kwargs):
+            for msg in raw_messages:
+                yield msg
+
+        mock_pyrogram.get_chat_history = mock_get_chat_history
+        client.client = mock_pyrogram
+
+        collected_ids = []
+        async for msg in client.get_chat_history(123):  # min_id defaults to 0
+            collected_ids.append(msg.id)
+
+        assert collected_ids == [3, 1]
+
+
 class TestTelegramClientContextManager:
     """Test context manager protocol."""
 

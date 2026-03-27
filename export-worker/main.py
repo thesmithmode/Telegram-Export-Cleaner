@@ -165,13 +165,14 @@ class ExportWorker:
             # Export messages - try to resume from incremental state if available
             messages: list[ExportedMessage] = []
             offset_id = job.offset_id
+            min_id = 0  # Stop iteration when reaching already-exported messages
 
-            # Check if we can resume from previous export of same chat
+            # Check if we have a previous export for this user+chat (incremental: fetch only new)
             if offset_id == 0:  # Only if user didn't specify explicit offset
-                last_message_id = await self.telegram_client.get_incremental_state(job.chat_id)
+                last_message_id = await self.telegram_client.get_incremental_state(job.chat_id, job.user_chat_id)
                 if last_message_id:
-                    offset_id = last_message_id
-                    logger.info(f"Resuming from message {offset_id} (incremental export)")
+                    min_id = last_message_id  # Stop when we reach this ID (already exported)
+                    logger.info(f"Incremental export for user {job.user_chat_id}: fetching messages newer than {min_id}")
 
             # Notify user that export has started
             if job.user_chat_id and self.java_client:
@@ -191,6 +192,7 @@ class ExportWorker:
                     chat_id=job.chat_id,
                     limit=job.limit,
                     offset_id=offset_id,
+                    min_id=min_id,
                 ):
                     messages.append(message)
                     count = len(messages)
@@ -228,10 +230,10 @@ class ExportWorker:
                 await self.queue_consumer.mark_job_failed(job.task_id, error)
                 return True
 
-            # Save incremental state for next export of same chat
+            # Save incremental state for next export of same chat (newest message = messages[0])
             if messages:
-                last_message_id = messages[-1].id  # Last exported message
-                await self.telegram_client.set_incremental_state(job.chat_id, last_message_id)
+                newest_message_id = messages[0].id  # Pyrogram yields newest→oldest, so [0] is newest
+                await self.telegram_client.set_incremental_state(job.chat_id, newest_message_id, job.user_chat_id)
 
             # Send results to Java API, deliver cleaned text to user
             success = await self.java_client.send_response(
