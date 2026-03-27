@@ -190,133 +190,88 @@ class TestTelegramClientVerifyAccess:
 class TestTelegramClientHistoryExport:
     """Test message history export."""
 
+    def _make_msg(self, msg_id: int, text: str = ""):
+        """Create a minimal valid Pyrogram-like message mock."""
+        return MagicMock(
+            id=msg_id,
+            text=text or f"Message {msg_id}",
+            date=datetime(2025, 1, 1, 0, 0, msg_id % 60),
+            from_user=None,
+            entities=None,
+            media=None,
+            forward_from=None,
+            forward_sender_name=None,
+            forward_date=None,
+            edit_date=None,
+            reply_to_message_id=None,
+        )
+
     @pytest.mark.asyncio
     async def test_get_chat_history_success(self):
         """Test successful message export."""
         client = TelegramClient()
+        client.is_connected = True
         mock_pyrogram = AsyncMock()
 
-        # Create mock messages
-        mock_messages = [
-            MagicMock(
-                message_id=1,
-                text="Message 1",
-                date=datetime.now(),
-                from_user=MagicMock(id=123),
-                entities=[],
-            ),
-            MagicMock(
-                message_id=2,
-                text="Message 2",
-                date=datetime.now(),
-                from_user=MagicMock(id=123),
-                entities=[],
-            ),
-        ]
+        raw = [self._make_msg(2), self._make_msg(1)]
 
         async def mock_get_chat_history(*args, **kwargs):
-            for msg in mock_messages:
+            for msg in raw:
                 yield msg
 
         mock_pyrogram.get_chat_history = mock_get_chat_history
         client.client = mock_pyrogram
 
-        # Mock MessageConverter
-        with patch('pyrogram_client.MessageConverter') as mock_converter:
-            mock_converter.to_exported_message = MagicMock(
-                side_effect=lambda msg: ExportedMessage(
-                    message_id=msg.message_id,
-                    text=msg.text,
-                    date=msg.date,
-                    from_user_id=msg.from_user.id if msg.from_user else None,
-                    entities=[],
-                )
-            )
+        messages = []
+        async for msg in client.get_chat_history(123, limit=0, offset_id=0):
+            messages.append(msg)
 
-            messages = []
-            async for msg in client.get_chat_history(123, limit=0, offset_id=0):
-                messages.append(msg)
-
-            assert len(messages) == 2
-            assert messages[0].message_id == 1
-            assert messages[1].message_id == 2
+        assert len(messages) == 2
+        assert messages[0].id == 2
+        assert messages[1].id == 1
 
     @pytest.mark.asyncio
     async def test_get_chat_history_with_limit(self):
         """Test message export with limit."""
         client = TelegramClient()
+        client.is_connected = True
         mock_pyrogram = AsyncMock()
-
-        messages_yielded = []
 
         async def mock_get_chat_history(*args, **kwargs):
             assert kwargs.get("limit") == 100
-            for i in range(100):
-                yield MagicMock(
-                    message_id=i,
-                    text=f"Message {i}",
-                    date=datetime.now(),
-                    from_user=MagicMock(id=123),
-                    entities=[],
-                )
+            for i in range(100, 0, -1):
+                yield self._make_msg(i)
 
         mock_pyrogram.get_chat_history = mock_get_chat_history
         client.client = mock_pyrogram
 
-        with patch('pyrogram_client.MessageConverter') as mock_converter:
-            mock_converter.to_exported_message = MagicMock(
-                side_effect=lambda msg: ExportedMessage(
-                    message_id=msg.message_id,
-                    text=msg.text,
-                    date=msg.date,
-                    from_user_id=msg.from_user.id if msg.from_user else None,
-                    entities=[],
-                )
-            )
+        count = 0
+        async for msg in client.get_chat_history(123, limit=100):
+            count += 1
 
-            count = 0
-            async for msg in client.get_chat_history(123, limit=100):
-                count += 1
-
-            assert count == 100
+        assert count == 100
 
     @pytest.mark.asyncio
     async def test_get_chat_history_error(self):
         """Test error handling during export."""
         client = TelegramClient()
+        client.is_connected = True
         mock_pyrogram = AsyncMock()
 
         async def mock_get_chat_history_error(*args, **kwargs):
-            yield MagicMock(
-                message_id=1,
-                text="First message",
-                date=datetime.now(),
-                from_user=MagicMock(id=123),
-                entities=[],
-            )
+            yield self._make_msg(1)
             raise Exception("Export error")
 
         mock_pyrogram.get_chat_history = mock_get_chat_history_error
         client.client = mock_pyrogram
 
-        with patch('pyrogram_client.MessageConverter') as mock_converter:
-            mock_converter.to_exported_message = MagicMock(
-                return_value=ExportedMessage(
-                    message_id=1,
-                    text="First message",
-                    date=datetime.now(),
-                    from_user_id=123,
-                    entities=[],
-                )
-            )
+        messages = []
+        with pytest.raises(Exception, match="Export error"):
+            async for msg in client.get_chat_history(123):
+                messages.append(msg)
 
-            messages = []
-            with pytest.raises(Exception, match="Export error"):
-                async for msg in client.get_chat_history(123):
-                    messages.append(msg)
-
-            # Should have exported one message before error
-            assert len(messages) == 1
+        # Should have exported one message before error
+        assert len(messages) == 1
 
 
 class TestTelegramClientIncrementalExport:
