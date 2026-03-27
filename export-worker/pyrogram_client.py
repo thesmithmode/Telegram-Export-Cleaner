@@ -155,9 +155,8 @@ class TelegramClient:
             max_retries = settings.MAX_RETRIES
             seen_message_ids: set[int] = set()  # Track seen messages to avoid FloodWait dups
 
+            retry_count = 0
             while True:
-                retry_count = 0
-
                 try:
                     async for message in self.client.get_chat_history(
                         chat_id=chat_id,

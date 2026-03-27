@@ -350,6 +350,80 @@ class TestTelegramClientIncrementalExport:
         assert collected_ids == [3, 1]
 
 
+class TestTelegramClientFloodWait:
+    """Test FloodWait retry logic."""
+
+    def _make_msg(self, msg_id: int):
+        return MagicMock(
+            id=msg_id,
+            text=f"Message {msg_id}",
+            date=datetime(2025, 1, 1, 0, 0, msg_id % 60),
+            from_user=None,
+            entities=None,
+            media=None,
+            forward_from=None,
+            forward_sender_name=None,
+            forward_date=None,
+            edit_date=None,
+            reply_to_message_id=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_flood_wait_retries_and_resumes(self):
+        """FloodWait triggers retry from last_offset_id, deduplicates messages."""
+        from pyrogram.errors import FloodWait
+
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+
+        call_count = 0
+
+        async def mock_get_chat_history(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                yield self._make_msg(2)
+                raise FloodWait(value=1)
+            else:
+                # Second call: Pyrogram returns from beginning again
+                yield self._make_msg(2)  # duplicate — should be skipped
+                yield self._make_msg(1)
+
+        mock_pyrogram.get_chat_history = mock_get_chat_history
+        client.client = mock_pyrogram
+
+        with patch("pyrogram_client.asyncio.sleep", new_callable=AsyncMock):
+            messages = []
+            async for msg in client.get_chat_history(123):
+                messages.append(msg.id)
+
+        assert messages == [2, 1], "Should yield msg 2 once (deduplicated) and msg 1"
+        assert call_count == 2, "Should retry exactly once after FloodWait"
+
+    @pytest.mark.asyncio
+    async def test_flood_wait_max_retries_exceeded_raises(self):
+        """FloodWait raises after MAX_RETRIES exceeded."""
+        from pyrogram.errors import FloodWait
+        from config import settings
+
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+
+        async def mock_get_chat_history(*args, **kwargs):
+            raise FloodWait(value=1)
+            yield  # make it an async generator
+
+        mock_pyrogram.get_chat_history = mock_get_chat_history
+        client.client = mock_pyrogram
+
+        with patch("pyrogram_client.asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(FloodWait):
+                async for _ in client.get_chat_history(123):
+                    pass
+
+
 class TestTelegramClientContextManager:
     """Test context manager protocol."""
 
