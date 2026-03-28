@@ -131,7 +131,7 @@ export-worker/
 
 - **Авторизация**: `TELEGRAM_SESSION_STRING` для production (stateless, без номера телефона), file-based session для локальной разработки
 - **Retry с backoff**: FloodWait от Telegram API обрабатывается с экспоненциальным backoff и дедупликацией
-- **Кэш сообщений (MessageCache)**: Redis sorted sets для кэширования экспортированных сообщений per-chat. При повторном экспорте — загружает только недостающие диапазоны из Telegram API, кэшированные берёт из Redis. TTL 7 дней, лимит 100K сообщений/чат, LRU eviction при превышении 120MB. Включается через `CACHE_ENABLED=true`.
+- **Кэш сообщений (MessageCache)**: Redis sorted sets для кэширования per-chat. Два индекса: по msg_id (`cache:msgs`) и по дате (`cache:dates`). Трекинг кэшированных диапазонов по ID (`cache:ranges`) и по датам (`cache:date_ranges`). При повторном экспорте — gap detection по датам или ID → fetch только недостающего → merge с кэшем → монолитный файл. Пример: Вася экспортирует 11-13.01, Петя 01-08.01, Коля запрашивает 01-15.01 → из кэша 01-08 и 11-13, fetch только 09-10 и 14-15. TTL 7 дней, лимит 100K/чат, LRU eviction 120MB. `CACHE_ENABLED=true`.
 - **Graceful shutdown**: Обработка SIGTERM/SIGINT, завершение текущей задачи перед остановкой
 - **Memory monitoring**: psutil отслеживает потребление памяти (оптимизация для слабых серверов)
 - **MAX_WORKERS**: По умолчанию 1, настраивается через env var. Каждый worker — отдельный Pyrogram клиент
