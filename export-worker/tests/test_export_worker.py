@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch, call
 from datetime import datetime
 
 from main import ExportWorker
+from message_cache import MessageCache
 from models import ExportRequest, ExportedMessage
 
 
@@ -69,6 +70,11 @@ class TestExportWorkerJobProcessing:
         worker.queue_consumer = AsyncMock()
         worker.telegram_client = AsyncMock()
         worker.java_client = AsyncMock()
+        # Disabled cache — tests exercise direct Telegram fetch path
+        worker.message_cache = MessageCache(
+            redis_client=AsyncMock(),
+            enabled=False,
+        )
         return worker
 
     @pytest.mark.asyncio
@@ -244,6 +250,118 @@ class TestExportWorkerCleanup:
         await worker.cleanup()
 
         assert worker.running is False
+
+
+class TestExportWorkerWithCache:
+    """Test job processing with cache enabled."""
+
+    @pytest.fixture
+    async def redis_client(self):
+        import fakeredis.aioredis
+        client = fakeredis.aioredis.FakeRedis(decode_responses=False)
+        yield client
+        await client.aclose()
+
+    @pytest.fixture
+    async def worker(self, redis_client):
+        worker = ExportWorker()
+        worker.queue_consumer = AsyncMock()
+        worker.telegram_client = AsyncMock()
+        worker.java_client = AsyncMock()
+        worker.message_cache = MessageCache(
+            redis_client=redis_client,
+            ttl_seconds=3600,
+            max_memory_mb=120,
+            max_messages_per_chat=1000,
+            enabled=True,
+        )
+        return worker
+
+    @pytest.mark.asyncio
+    async def test_first_export_populates_cache(self, worker):
+        """First export of a chat should populate cache."""
+        job = ExportRequest(
+            task_id="cache_test_1",
+            user_id=123,
+            user_chat_id=123,
+            chat_id=456,
+            limit=0,
+            offset_id=0,
+        )
+
+        worker.telegram_client.verify_and_get_info = AsyncMock(
+            return_value=(True, {"title": "Test", "type": "private"}, None)
+        )
+
+        messages = [
+            ExportedMessage(id=3, date="2025-01-01T00:00:02", text="C"),
+            ExportedMessage(id=2, date="2025-01-01T00:00:01", text="B"),
+            ExportedMessage(id=1, date="2025-01-01T00:00:00", text="A"),
+        ]
+
+        async def mock_history(*args, **kwargs):
+            for msg in messages:
+                yield msg
+
+        worker.telegram_client.get_chat_history = mock_history
+        worker.java_client.send_response = AsyncMock(return_value=True)
+
+        await worker.process_job(job)
+
+        # Cache should now have these messages
+        cached = await worker.message_cache.get_cached_ranges(456)
+        assert cached == [[1, 3]]
+
+    @pytest.mark.asyncio
+    async def test_second_export_uses_cache(self, worker):
+        """Second export should fetch only new messages, reuse cached."""
+        job = ExportRequest(
+            task_id="cache_test_2",
+            user_id=999,
+            user_chat_id=999,
+            chat_id=456,
+            limit=0,
+            offset_id=0,
+        )
+
+        worker.telegram_client.verify_and_get_info = AsyncMock(
+            return_value=(True, {"title": "Test", "type": "private"}, None)
+        )
+
+        # Pre-populate cache with messages 1-3
+        await worker.message_cache.store_messages(456, [
+            ExportedMessage(id=1, date="2025-01-01T00:00:00", text="A"),
+            ExportedMessage(id=2, date="2025-01-01T00:00:01", text="B"),
+            ExportedMessage(id=3, date="2025-01-01T00:00:02", text="C"),
+        ])
+
+        # Telegram only returns NEW messages (id=4,5)
+        new_msgs = [
+            ExportedMessage(id=5, date="2025-01-01T00:00:04", text="E"),
+            ExportedMessage(id=4, date="2025-01-01T00:00:03", text="D"),
+        ]
+
+        call_count = 0
+
+        async def mock_history(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # First call: fetch newer than cache max (min_id=3)
+                for msg in new_msgs:
+                    yield msg
+            # No gap-filling calls expected (range [1-3] is continuous)
+
+        worker.telegram_client.get_chat_history = mock_history
+        worker.java_client.send_response = AsyncMock(return_value=True)
+
+        await worker.process_job(job)
+
+        # Verify: Java received ALL 5 messages (3 cached + 2 new)
+        args, kwargs = worker.java_client.send_response.call_args
+        assert kwargs["status"] == "completed"
+        result_ids = sorted(m.id for m in kwargs["messages"])
+        assert result_ids == [1, 2, 3, 4, 5]
 
 
 class TestExportWorkerMemoryLogging:
