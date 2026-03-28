@@ -102,16 +102,16 @@ class TestMessageEntity:
         assert entity.url is None
         assert entity.user_id is None
 
-    def test_text_url_entity(self):
-        """Should handle text_url with URL"""
+    def test_text_link_entity(self):
+        """Should handle text_link with URL"""
         entity = MessageEntity(
-            type="text_url",
+            type="text_link",
             offset=0,
             length=4,
             url="https://example.com"
         )
 
-        assert entity.type == "text_url"
+        assert entity.type == "text_link"
         assert entity.url == "https://example.com"
 
     def test_text_mention_entity(self):

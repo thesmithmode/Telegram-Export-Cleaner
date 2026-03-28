@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 class JavaBotClient:
     """Uploads exported messages to Java API and delivers result to user."""
 
-    def __init__(self, timeout: int = 300, max_retries: int = 3):
+    def __init__(self, timeout: int = 1800, max_retries: int = 3):
         self.base_url = settings.JAVA_API_BASE_URL.rstrip("/")
         self.timeout = timeout
         self.max_retries = max_retries
@@ -84,7 +84,13 @@ class JavaBotClient:
 
         # Deliver cleaned text to user via Telegram Bot API
         if user_chat_id and self.bot_token:
-            await self._send_file_to_user(user_chat_id, task_id, cleaned_text)
+            sent = await self._send_file_to_user(user_chat_id, task_id, cleaned_text)
+            if not sent:
+                await self._notify_user_failure(
+                    user_chat_id, task_id,
+                    "Не удалось отправить файл. Попробуйте снова."
+                )
+                return False
         else:
             logger.warning(
                 f"No user_chat_id or bot token — skipping Telegram delivery "
@@ -259,28 +265,64 @@ class JavaBotClient:
         logger.error(f"❌ Java API failed after {self.max_retries} retries")
         return None
 
+    # Telegram Bot API file size limit: 50MB, use 45MB as safe threshold
+    MAX_FILE_SIZE_BYTES = 45 * 1024 * 1024
+
     async def _send_file_to_user(
         self, user_chat_id: int, task_id: str, cleaned_text: str
     ) -> bool:
-        """Send cleaned text as a .txt file to user via Telegram Bot API."""
+        """Send cleaned text as .txt file(s) to user via Telegram Bot API.
+
+        If the file exceeds 45MB, splits into multiple parts by lines.
+        """
+        text_bytes = cleaned_text.encode("utf-8")
+        file_size = len(text_bytes)
+
+        if file_size <= self.MAX_FILE_SIZE_BYTES:
+            return await self._send_single_file(
+                user_chat_id, task_id, text_bytes,
+                f"export_{task_id}.txt",
+                f"✅ Экспорт завершён ({task_id})",
+            )
+
+        # Split into parts
+        logger.info(
+            f"File size {file_size / 1024 / 1024:.1f}MB exceeds limit, splitting..."
+        )
+        parts = self._split_text_by_size(cleaned_text, self.MAX_FILE_SIZE_BYTES)
+        total_parts = len(parts)
+
+        for i, part in enumerate(parts, 1):
+            part_bytes = part.encode("utf-8")
+            filename = f"export_{task_id}_part{i}.txt"
+            caption = f"✅ Экспорт завершён — часть {i}/{total_parts}"
+            success = await self._send_single_file(
+                user_chat_id, task_id, part_bytes, filename, caption
+            )
+            if not success:
+                logger.error(f"Failed to send part {i}/{total_parts}")
+                return False
+
+        logger.info(f"✅ Sent {total_parts} parts to user {user_chat_id}")
+        return True
+
+    async def _send_single_file(
+        self, user_chat_id: int, task_id: str,
+        file_bytes: bytes, filename: str, caption: str
+    ) -> bool:
+        """Send a single file via Telegram Bot API sendDocument."""
         url = f"https://api.telegram.org/bot{self.bot_token}/sendDocument"
-        filename = f"export_{task_id}.txt"
 
         try:
             response = await self._http_client.post(
                 url,
-                data={
-                    "chat_id": user_chat_id,
-                    "caption": f"✅ Export complete ({task_id})",
-                },
-                files={
-                    "document": (filename, cleaned_text.encode("utf-8"), "text/plain")
-                },
+                data={"chat_id": user_chat_id, "caption": caption},
+                files={"document": (filename, file_bytes, "text/plain")},
             )
 
             if response.status_code == 200:
                 logger.info(
-                    f"✅ Sent export file to user {user_chat_id} (task {task_id})"
+                    f"✅ Sent {filename} to user {user_chat_id} (task {task_id})"
                 )
                 return True
             else:
@@ -294,6 +336,31 @@ class JavaBotClient:
             logger.error(f"Error sending file to user: {e}", exc_info=True)
             return False
 
+    @staticmethod
+    def _split_text_by_size(text: str, max_bytes: int) -> list[str]:
+        """Split text into parts, each under max_bytes when UTF-8 encoded.
+
+        Splits on line boundaries to avoid breaking messages.
+        """
+        parts = []
+        lines = text.split("\n")
+        current_part: list[str] = []
+        current_size = 0
+
+        for line in lines:
+            line_bytes = len(line.encode("utf-8")) + 1  # +1 for \n
+            if current_size + line_bytes > max_bytes and current_part:
+                parts.append("\n".join(current_part))
+                current_part = []
+                current_size = 0
+            current_part.append(line)
+            current_size += line_bytes
+
+        if current_part:
+            parts.append("\n".join(current_part))
+
+        return parts
+
     async def send_progress_update(
         self,
         user_chat_id: int,
@@ -301,6 +368,7 @@ class JavaBotClient:
         message_count: int,
         total: Optional[int] = None,
         started: bool = False,
+        elapsed_seconds: float = 0,
     ) -> bool:
         """
         Send progress update to user during long export.
@@ -311,6 +379,7 @@ class JavaBotClient:
             message_count: Number of messages exported so far
             total: Total messages expected (if known)
             started: True if this is the initial "started" notification
+            elapsed_seconds: Seconds elapsed since export start (for ETA)
 
         Returns:
             True if message sent, False otherwise
@@ -325,7 +394,10 @@ class JavaBotClient:
         elif total:
             percentage = message_count * 100 // total
             progress_bar = self._build_progress_bar(percentage)
+            eta_str = self._format_eta(elapsed_seconds, percentage)
             text = f"📊 {progress_bar} {percentage}% ({message_count}/{total})"
+            if eta_str:
+                text += f"\n⏱ Осталось ~{eta_str}"
         else:
             text = f"📊 Экспортировано {message_count} сообщений..."
 
@@ -344,6 +416,17 @@ class JavaBotClient:
         filled = int(width * percentage / 100)
         empty = width - filled
         return "▓" * filled + "░" * empty
+
+    @staticmethod
+    def _format_eta(elapsed_seconds: float, percentage: int) -> str:
+        """Вычислить примерное оставшееся время на основе прошедшего и процента."""
+        if percentage <= 0 or elapsed_seconds <= 0:
+            return ""
+        remaining = elapsed_seconds * (100 - percentage) / percentage
+        if remaining < 60:
+            return f"{int(remaining)} сек"
+        minutes = int(remaining) // 60
+        return f"{minutes} мин"
 
     async def _notify_user_failure(
         self, user_chat_id: int, task_id: str, error: str

@@ -104,10 +104,11 @@ class TestEntityConversion:
         assert result[0].type == "bold"
         assert result[1].type == "link"
 
-    def test_text_url_entity(self):
-        """Should include URL for text_url"""
+    def test_text_link_entity(self):
+        """Should include URL for text_link (Pyrogram TEXT_LINK enum)"""
         entity = Mock()
-        entity.type = "text_url"
+        entity.type = Mock()
+        entity.type.name = "TEXT_LINK"
         entity.offset = 0
         entity.length = 4
         entity.url = "https://example.com"
@@ -115,7 +116,7 @@ class TestEntityConversion:
         result = MessageConverter.convert_entities([entity])
 
         assert len(result) == 1
-        assert result[0].type == "text_url"
+        assert result[0].type == "text_link"
         assert result[0].url == "https://example.com"
 
     def test_empty_entities_list(self):

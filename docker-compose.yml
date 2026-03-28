@@ -24,7 +24,7 @@ services:
     container_name: telegram-export-redis
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes --appendfsync everysec
+    command: redis-server --appendonly yes --appendfsync everysec --maxmemory 200mb --maxmemory-policy allkeys-lru
     mem_limit: 256m
     cpus: '0.25'
     healthcheck:
