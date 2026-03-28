@@ -100,11 +100,10 @@ export-worker/
 ├── main.py                 # Точка входа: запуск asyncio event loop, graceful shutdown (SIGTERM/SIGINT)
 ├── config.py               # Pydantic Settings: загрузка конфигурации из env vars
 ├── models.py               # Pydantic-модели: ExportRequest, ExportResult, ErrorCode enum
-├── protocols.py            # Protocol-классы (typing): контракты для TelegramClient и QueueConsumer
 ├── message_cache.py        # Redis-кэш сообщений: sorted sets, range tracking, gap detection,
 │                           #   msgpack сериализация, TTL 7 дней, LRU eviction, per-chat cap
 ├── pyrogram_client.py      # Pyrogram MTProto клиент: экспорт сообщений, FloodWait handling,
-│                           #   инкрементальный экспорт с Redis-состоянием, кэш-синхронизация
+│                           #   кэш-синхронизация Pyrogram entity access_hash
 ├── queue_consumer.py       # Redis BRPOP consumer: получение задач из очереди, таймауты, retry
 ├── java_client.py          # HTTP-клиент к Java API: отправка сообщений на конвертацию,
 │                           #   UTF-16 entity offset handling для корректной работы с emoji

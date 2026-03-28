@@ -245,6 +245,21 @@ class TelegramClient:
             logger.error(f"❌ Error fetching history for chat {chat_id}: {e}", exc_info=True)
             raise
 
+    @staticmethod
+    def _build_chat_info(chat) -> dict:
+        """Extract chat metadata into a dict."""
+        return {
+            "id": chat.id,
+            "title": getattr(chat, "title", "") or "",
+            "username": getattr(chat, "username", "") or "",
+            "type": str(chat.type),
+            "is_bot": getattr(chat, "is_bot", False),
+            "is_self": getattr(chat, "is_self", False),
+            "is_contact": getattr(chat, "is_contact", False),
+            "members_count": getattr(chat, "members_count", 0) or 0,
+            "description": getattr(chat, "description", "") or "",
+        }
+
     async def verify_and_get_info(self, chat_id: Union[int, str]) -> tuple[bool, Optional[dict], Optional[str]]:
         """
         Check access and get chat info in single API call.
@@ -268,19 +283,7 @@ class TelegramClient:
 
         try:
             chat = await self.client.get_chat(chat_id)
-
-            info = {
-                "id": chat.id,
-                "title": getattr(chat, "title", "") or "",
-                "username": getattr(chat, "username", "") or "",
-                "type": str(chat.type),
-                "is_bot": getattr(chat, "is_bot", False),
-                "is_self": getattr(chat, "is_self", False),
-                "is_contact": getattr(chat, "is_contact", False),
-                "members_count": getattr(chat, "members_count", 0) or 0,
-                "description": getattr(chat, "description", "") or "",
-            }
-            return (True, info, None)
+            return (True, self._build_chat_info(chat), None)
 
         except BadRequest as e:
             error_str = str(e)
@@ -303,19 +306,8 @@ class TelegramClient:
                 try:
                     await self.client.get_dialogs()
                     chat = await self.client.get_chat(chat_id)
-                    info = {
-                        "id": chat.id,
-                        "title": getattr(chat, "title", "") or "",
-                        "username": getattr(chat, "username", "") or "",
-                        "type": str(chat.type),
-                        "is_bot": getattr(chat, "is_bot", False),
-                        "is_self": getattr(chat, "is_self", False),
-                        "is_contact": getattr(chat, "is_contact", False),
-                        "members_count": getattr(chat, "members_count", 0) or 0,
-                        "description": getattr(chat, "description", "") or "",
-                    }
-                    logger.info(f"✅ Successfully resolved chat {chat_id} after cache sync")
-                    return (True, info, None)
+                    logger.info(f"Successfully resolved chat {chat_id} after cache sync")
+                    return (True, self._build_chat_info(chat), None)
 
                 except Exception as retry_error:
                     logger.error(f"Cache sync retry failed for chat {chat_id}: {retry_error}")
@@ -344,71 +336,6 @@ class TelegramClient:
                 f"Error accessing chat {chat_id}: {type(e).__name__}: {e}"
             )
             return (False, None, "UNKNOWN")
-
-    async def set_incremental_state(self, chat_id: Union[int, str], newest_message_id: int, user_id: Union[int, str]) -> None:
-        """
-        Save incremental export state to Redis for resumption on re-export.
-
-        Stores the NEWEST exported message ID (messages[0]) so next export
-        fetches only messages newer than this point.
-
-        Args:
-            chat_id: Telegram chat ID
-            newest_message_id: ID of the NEWEST exported message
-            user_id: Telegram user ID (state is per-user-per-chat)
-        """
-        if not redis:
-            logger.debug("Redis not available, skipping state persistence")
-            return
-
-        try:
-            if not self.redis_client:
-                self.redis_client = redis.Redis(
-                    host=settings.REDIS_HOST,
-                    port=settings.REDIS_PORT,
-                    decode_responses=True,
-                )
-
-            key = f"state:export:{user_id}:{chat_id}:last_message_id"
-            await self.redis_client.set(key, newest_message_id, ex=30 * 24 * 3600)  # 30 days
-            logger.debug(f"Saved incremental state for user {user_id} chat {chat_id}: newest_message_id={newest_message_id}")
-
-        except Exception as e:
-            logger.warning(f"Could not save incremental state to Redis: {e}")
-
-    async def get_incremental_state(self, chat_id: Union[int, str], user_id: Union[int, str]) -> Optional[int]:
-        """
-        Get newest exported message ID for incremental export.
-
-        Args:
-            chat_id: Telegram chat ID
-            user_id: Telegram user ID (state is per-user-per-chat)
-
-        Returns:
-            Newest message ID from last export if available, None otherwise
-        """
-        if not redis:
-            return None
-
-        try:
-            if not self.redis_client:
-                self.redis_client = redis.Redis(
-                    host=settings.REDIS_HOST,
-                    port=settings.REDIS_PORT,
-                    decode_responses=True,
-                )
-
-            key = f"state:export:{user_id}:{chat_id}:last_message_id"
-            value = await self.redis_client.get(key)
-            if value:
-                message_id = int(value)
-                logger.info(f"Found incremental state for user {user_id} chat {chat_id}: newest_message_id={message_id}")
-                return message_id
-            return None
-
-        except Exception as e:
-            logger.warning(f"Could not read incremental state from Redis: {e}")
-            return None
 
     async def __aenter__(self):
         """Async context manager entry."""
