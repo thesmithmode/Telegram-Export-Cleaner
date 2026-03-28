@@ -23,6 +23,14 @@ docker-compose up -d
 docker-compose down
 ```
 
+### Development & Debugging
+
+⚠️ **ВАЖНО — Развертывание**:
+- Проект развернут на этом же сервере (Docker контейнеры + процессы)
+- Credentials загружены через GitHub Secrets
+- Работай с исходным кодом в текущей папке: `/root/Projects/Telegram-Export-Cleaner`
+- Смотри логи и состояние проекта для диагностики
+
 ### Local Development
 
 ```bash
@@ -299,6 +307,12 @@ project.build.sourceEncoding=UTF-8
 ```
 
 ## Important Conventions
+
+### Git Workflow
+
+**ВАЖНО: Пушить ТОЛЬКО в `dev` ветку, если не сказано явно пушить в другую ветку.**
+- По умолчанию: `git push origin dev`
+- В production (main) только если явно сказано: "пушить в main"
 
 ### Commit Messages
 
