@@ -19,5 +19,8 @@ pydantic-settings==2.2.0
 # Logging and monitoring
 psutil==5.9.8
 
+# Serialization (cache)
+msgpack==1.0.7
+
 # Environment management
 python-dotenv==1.0.0

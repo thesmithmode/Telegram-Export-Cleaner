@@ -23,6 +23,9 @@ from models import ExportRequest
 logger = logging.getLogger(__name__)
 
 
+JOB_MARKER_TTL = 3600  # 1 hour — TTL for completed/failed job markers in Redis
+
+
 class QueueConsumer:
     """Consumer for Redis-backed job queue."""
 
@@ -236,7 +239,7 @@ class QueueConsumer:
             # Set completed marker
             await self.redis_client.setex(
                 completed_key,
-                3600,  # Keep for 1 hour
+                JOB_MARKER_TTL,
                 str(datetime.now().isoformat())
             )
 
@@ -271,7 +274,7 @@ class QueueConsumer:
             # Set failed marker
             await self.redis_client.setex(
                 failed_key,
-                3600,  # Keep for 1 hour
+                JOB_MARKER_TTL,
                 json.dumps({
                     "error": error,
                     "timestamp": datetime.now().isoformat()
