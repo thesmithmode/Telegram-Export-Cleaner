@@ -185,89 +185,27 @@ class ExportWorker:
                 logger.info(f"  Chat: {chat_info.get('title')} (type: {chat_info.get('type')})")
 
             # --- Cache-aware export ---
-            # 1. Check cache for already-fetched messages
+            # Both full and date-range exports use cache:
+            # 1. Check cache for already-fetched messages (by ID or by date)
             # 2. Fetch only missing ranges from Telegram API
             # 3. Store fresh messages in cache
             # 4. Merge cached + fresh for the final result
 
             has_date_filter = job.from_date is not None or job.to_date is not None
-            cached_messages: list[ExportedMessage] = []
-            fresh_messages: list[ExportedMessage] = []
+            messages: Optional[list[ExportedMessage]] = None
 
-            # For full exports (no date filter), use cache gap detection
-            if not has_date_filter and self.message_cache:
-                cached_ranges = await self.message_cache.get_cached_ranges(job.chat_id)
-                if cached_ranges:
-                    # Get the highest known message ID from cache
-                    cache_max_id = max(r[1] for r in cached_ranges)
-                    logger.info(f"  Cache hit for chat {job.chat_id}: ranges={cached_ranges}")
-
-                    # Fetch only messages NEWER than cache (offset_id=0 gets newest first)
-                    # Then fetch gaps within cached range
-                    # Step 1: fetch newest messages not yet cached
-                    # Pyrogram iterates newest→oldest, so min_id=cache_max_id gets only newer
-                    try:
-                        async for msg in self.telegram_client.get_chat_history(
-                            chat_id=job.chat_id,
-                            limit=job.limit,
-                            offset_id=0,
-                            min_id=cache_max_id,
-                        ):
-                            fresh_messages.append(msg)
-                    except Exception as e:
-                        logger.warning(f"Failed fetching new messages above cache: {e}")
-                        # Fall through to full fetch below
-
-                    if fresh_messages:
-                        logger.info(f"  Fetched {len(fresh_messages)} new messages above cache max {cache_max_id}")
-                        await self.message_cache.store_messages(job.chat_id, fresh_messages)
-
-                    # Step 2: fill gaps within known range
-                    full_min = 1
-                    full_max = max(cache_max_id, fresh_messages[0].id if fresh_messages else cache_max_id)
-                    missing = await self.message_cache.get_missing_ranges(job.chat_id, full_min, full_max)
-
-                    for gap_low, gap_high in missing:
-                        gap_msgs: list[ExportedMessage] = []
-                        try:
-                            # offset_id fetches messages OLDER than it; min_id stops at lower bound
-                            async for msg in self.telegram_client.get_chat_history(
-                                chat_id=job.chat_id,
-                                limit=0,
-                                offset_id=gap_high + 1,
-                                min_id=gap_low - 1,
-                            ):
-                                gap_msgs.append(msg)
-                        except Exception as e:
-                            logger.warning(f"Failed fetching gap [{gap_low}-{gap_high}]: {e}")
-
-                        if gap_msgs:
-                            logger.info(f"  Filled gap [{gap_low}-{gap_high}]: {len(gap_msgs)} messages")
-                            await self.message_cache.store_messages(job.chat_id, gap_msgs)
-                            fresh_messages.extend(gap_msgs)
-
-                    # Retrieve all from cache (now complete)
-                    cached_messages = await self.message_cache.get_messages(job.chat_id, full_min, full_max)
-                    messages = self.message_cache.merge_and_sort(cached_messages, fresh_messages)
-                    logger.info(f"  Total after cache merge: {len(messages)} messages")
-
+            if self.message_cache and self.message_cache.enabled:
+                if has_date_filter:
+                    messages = await self._export_with_date_cache(job)
                 else:
-                    # No cache — full fetch, then populate cache
-                    messages = await self._fetch_all_messages(job)
-                    if messages:
-                        await self.message_cache.store_messages(job.chat_id, messages)
-                        await self.message_cache.evict_if_needed()
-            else:
-                # Date-filtered export or no cache: fetch from Telegram, write-through to cache
+                    messages = await self._export_with_id_cache(job)
+
+            # Fallback: no cache or cache disabled
+            if messages is None and not (self.message_cache and self.message_cache.enabled):
                 messages = await self._fetch_all_messages(job)
-                if messages and self.message_cache and not has_date_filter:
-                    await self.message_cache.store_messages(job.chat_id, messages)
-                elif messages and self.message_cache and has_date_filter:
-                    # Write-through: cache these messages even for date-range exports
-                    await self.message_cache.store_messages(job.chat_id, messages)
 
             if messages is None:
-                # _fetch_all_messages returned None → error already reported
+                # _fetch_all_messages / cache export returned None → error already reported
                 return True
 
             # Send results to Java API, deliver cleaned text to user
@@ -302,6 +240,155 @@ class ExportWorker:
             self.log_memory_usage("JOB_ERROR")
             await self.cleanup_temp_files(job.task_id)
             return True
+
+    async def _export_with_date_cache(self, job: ExportRequest) -> Optional[list[ExportedMessage]]:
+        """
+        Date-range export with cache support.
+
+        1. Check which date sub-ranges are already cached
+        2. Fetch only missing date ranges from Telegram
+        3. Store fresh messages in cache
+        4. Merge cached + fresh → return complete result
+        """
+        from_date_str = job.from_date[:10] if job.from_date else None
+        to_date_str = job.to_date[:10] if job.to_date else None
+
+        if not from_date_str or not to_date_str:
+            # Partial date filter — fetch all, write-through to cache
+            messages = await self._fetch_all_messages(job)
+            if messages:
+                await self.message_cache.store_messages(job.chat_id, messages)
+            return messages
+
+        # Find which date ranges we're missing
+        missing = await self.message_cache.get_missing_date_ranges(
+            job.chat_id, from_date_str, to_date_str
+        )
+
+        if not missing:
+            # Everything cached — read directly
+            logger.info(f"  Full date cache hit for {job.chat_id} [{from_date_str} - {to_date_str}]")
+            cached = await self.message_cache.get_messages_by_date(
+                job.chat_id, from_date_str, to_date_str
+            )
+            return self.message_cache.merge_and_sort(cached, [])
+
+        logger.info(f"  Date cache partial hit for {job.chat_id}: missing={missing}")
+
+        # Notify user
+        if job.user_chat_id and self.java_client:
+            await self.java_client.send_progress_update(
+                user_chat_id=job.user_chat_id,
+                task_id=job.task_id,
+                message_count=0,
+                started=True,
+            )
+
+        # Fetch each missing date range from Telegram
+        fresh_messages: list[ExportedMessage] = []
+        for gap_from, gap_to in missing:
+            from datetime import datetime as dt
+            gap_from_dt = dt.fromisoformat(gap_from + "T00:00:00")
+            gap_to_dt = dt.fromisoformat(gap_to + "T23:59:59")
+
+            gap_msgs: list[ExportedMessage] = []
+            try:
+                async for msg in self.telegram_client.get_chat_history(
+                    chat_id=job.chat_id,
+                    limit=0,
+                    offset_id=0,
+                    min_id=0,
+                    from_date=gap_from_dt,
+                    to_date=gap_to_dt,
+                ):
+                    gap_msgs.append(msg)
+            except Exception as e:
+                logger.warning(f"Failed fetching date gap [{gap_from} - {gap_to}]: {e}")
+
+            if gap_msgs:
+                logger.info(f"  Fetched {len(gap_msgs)} messages for [{gap_from} - {gap_to}]")
+                await self.message_cache.store_messages(job.chat_id, gap_msgs)
+                fresh_messages.extend(gap_msgs)
+
+        # Retrieve all messages for the full requested date range from cache
+        cached = await self.message_cache.get_messages_by_date(
+            job.chat_id, from_date_str, to_date_str
+        )
+        messages = self.message_cache.merge_and_sort(cached, fresh_messages)
+        logger.info(f"  Date-range export complete: {len(messages)} messages")
+
+        await self.message_cache.evict_if_needed()
+        return messages
+
+    async def _export_with_id_cache(self, job: ExportRequest) -> Optional[list[ExportedMessage]]:
+        """
+        Full export (no date filter) with cache by message ID.
+
+        1. Check which ID ranges are cached
+        2. Fetch newer messages + fill ID gaps
+        3. Store in cache, merge, return
+        """
+        cached_ranges = await self.message_cache.get_cached_ranges(job.chat_id)
+
+        if not cached_ranges:
+            # No cache — full fetch, populate cache
+            messages = await self._fetch_all_messages(job)
+            if messages:
+                await self.message_cache.store_messages(job.chat_id, messages)
+                await self.message_cache.evict_if_needed()
+            return messages
+
+        cache_max_id = max(r[1] for r in cached_ranges)
+        logger.info(f"  Cache hit for chat {job.chat_id}: ranges={cached_ranges}")
+
+        fresh_messages: list[ExportedMessage] = []
+
+        # Step 1: fetch messages NEWER than cache
+        try:
+            async for msg in self.telegram_client.get_chat_history(
+                chat_id=job.chat_id,
+                limit=job.limit,
+                offset_id=0,
+                min_id=cache_max_id,
+            ):
+                fresh_messages.append(msg)
+        except Exception as e:
+            logger.warning(f"Failed fetching new messages above cache: {e}")
+
+        if fresh_messages:
+            logger.info(f"  Fetched {len(fresh_messages)} new messages above cache max {cache_max_id}")
+            await self.message_cache.store_messages(job.chat_id, fresh_messages)
+
+        # Step 2: fill ID gaps
+        full_min = 1
+        full_max = max(cache_max_id, fresh_messages[0].id if fresh_messages else cache_max_id)
+        missing = await self.message_cache.get_missing_ranges(job.chat_id, full_min, full_max)
+
+        for gap_low, gap_high in missing:
+            gap_msgs: list[ExportedMessage] = []
+            try:
+                async for msg in self.telegram_client.get_chat_history(
+                    chat_id=job.chat_id,
+                    limit=0,
+                    offset_id=gap_high + 1,
+                    min_id=gap_low - 1,
+                ):
+                    gap_msgs.append(msg)
+            except Exception as e:
+                logger.warning(f"Failed fetching gap [{gap_low}-{gap_high}]: {e}")
+
+            if gap_msgs:
+                logger.info(f"  Filled gap [{gap_low}-{gap_high}]: {len(gap_msgs)} messages")
+                await self.message_cache.store_messages(job.chat_id, gap_msgs)
+                fresh_messages.extend(gap_msgs)
+
+        # Retrieve all from cache
+        cached_messages = await self.message_cache.get_messages(job.chat_id, full_min, full_max)
+        messages = self.message_cache.merge_and_sort(cached_messages, fresh_messages)
+        logger.info(f"  Total after cache merge: {len(messages)} messages")
+
+        await self.message_cache.evict_if_needed()
+        return messages
 
     async def _fetch_all_messages(self, job: ExportRequest) -> Optional[list[ExportedMessage]]:
         """
