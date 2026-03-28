@@ -185,7 +185,7 @@ def sample_message_entity():
 def url_message_entity():
     """Fixture: URL MessageEntity"""
     return MessageEntity(
-        type="text_url",
+        type="text_link",
         offset=0,
         length=7,
         url="https://example.com"

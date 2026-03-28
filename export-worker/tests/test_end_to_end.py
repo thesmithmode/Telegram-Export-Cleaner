@@ -46,6 +46,7 @@ class TestExportWorkerE2E:
                 {'title': 'Test Chat', 'type': 'group'},
                 None
             ))
+            worker.telegram_client.get_messages_count = AsyncMock(return_value=5)
 
             # Mock message generator
             test_messages = [
@@ -135,6 +136,7 @@ class TestExportWorkerE2E:
                 {'title': 'Test', 'type': 'group'},
                 None
             ))
+            worker.telegram_client.get_messages_count = AsyncMock(return_value=10)
 
             async def failing_generator():
                 yield ExportedMessage(
@@ -187,6 +189,7 @@ class TestExportWorkerE2E:
                 {'title': 'Test', 'type': 'group'},
                 None
             ))
+            worker.telegram_client.get_messages_count = AsyncMock(return_value=1)
 
             # Create async generator wrapper for get_chat_history
             class AsyncMessageGenerator:

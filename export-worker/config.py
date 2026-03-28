@@ -27,7 +27,6 @@ class Settings(BaseSettings):
 
     # Java Bot API
     JAVA_API_BASE_URL: str = "http://java-bot:8080"
-    JAVA_API_KEY: str = ""
 
     # Telegram API (MTProto - for Pyrogram export)
     TELEGRAM_API_ID: int = 0
@@ -52,9 +51,14 @@ class Settings(BaseSettings):
     RETRY_BASE_DELAY: float = 1.0  # seconds
     RETRY_MAX_DELAY: float = 32.0  # seconds
 
+    # Message Cache
+    CACHE_ENABLED: bool = True
+    CACHE_TTL_SECONDS: int = 7 * 86400  # 7 days
+    CACHE_MAX_MEMORY_MB: int = 120
+    CACHE_MAX_MESSAGES_PER_CHAT: int = 100_000
+
     # Logging
     LOG_LEVEL: str = "INFO"
-    LOG_FORMAT: str = "json"  # "json" or "text"
 
 
 # Global settings instance

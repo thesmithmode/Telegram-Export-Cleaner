@@ -30,7 +30,7 @@ class MessageConverter:
         "code": "code",
         "pre": "pre",
         "url": "link",
-        "text_url": "text_url",
+        "text_link": "text_link",
         "mention": "mention",
         "text_mention": "text_mention",
         "email": "email",
@@ -120,11 +120,11 @@ class MessageConverter:
                 )
 
                 # Add URL for text_url type
-                if entity.type == "text_url" and hasattr(entity, 'url'):
+                if entity_type == "text_link" and hasattr(entity, 'url'):
                     model.url = entity.url
 
                 # Add user ID for text_mention type
-                if entity.type == "text_mention" and hasattr(entity, 'user') and entity.user:
+                if entity_type == "text_mention" and hasattr(entity, 'user') and entity.user:
                     model.user_id = entity.user.id
 
                 result.append(model)
