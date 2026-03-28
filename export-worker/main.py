@@ -21,6 +21,7 @@ import signal
 import sys
 import shutil
 import psutil
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -287,9 +288,8 @@ class ExportWorker:
         # Fetch each missing date range from Telegram
         fresh_messages: list[ExportedMessage] = []
         for gap_from, gap_to in missing:
-            from datetime import datetime as dt
-            gap_from_dt = dt.fromisoformat(gap_from + "T00:00:00")
-            gap_to_dt = dt.fromisoformat(gap_to + "T23:59:59")
+            gap_from_dt = datetime.fromisoformat(gap_from + "T00:00:00")
+            gap_to_dt = datetime.fromisoformat(gap_to + "T23:59:59")
 
             gap_msgs: list[ExportedMessage] = []
             try:
@@ -415,13 +415,11 @@ class ExportWorker:
         from_date = None
         to_date = None
         if job.from_date:
-            from datetime import datetime
             try:
                 from_date = datetime.fromisoformat(job.from_date)
             except ValueError:
                 pass
         if job.to_date:
-            from datetime import datetime
             try:
                 to_date = datetime.fromisoformat(job.to_date)
             except ValueError:

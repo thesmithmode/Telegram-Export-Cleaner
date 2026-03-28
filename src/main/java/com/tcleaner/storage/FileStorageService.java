@@ -1,6 +1,6 @@
 package com.tcleaner.storage;
 
-import com.tcleaner.core.TelegramExporter;
+import com.tcleaner.core.TelegramExporterInterface;
 import com.tcleaner.status.ProcessingResult;
 import com.tcleaner.status.ProcessingStatus;
 import com.tcleaner.status.ProcessingStatusService;
@@ -63,7 +63,7 @@ public class FileStorageService implements FileStorageServiceInterface {
     private final StorageConfig config;
     private final Path importPath;
     private final Path exportPath;
-    private final TelegramExporter exporter;
+    private final TelegramExporterInterface exporter;
     private final ProcessingStatusService statusService;
 
     /**
@@ -73,7 +73,7 @@ public class FileStorageService implements FileStorageServiceInterface {
      * @param exporter      обработчик Telegram JSON-файлов
      * @param statusService сервис хранения статусов обработки в Redis
      */
-    public FileStorageService(StorageConfig config, TelegramExporter exporter,
+    public FileStorageService(StorageConfig config, TelegramExporterInterface exporter,
             ProcessingStatusService statusService) {
         this.config = config;
         this.importPath = Paths.get(config.getImportPath());

@@ -27,7 +27,6 @@ class Settings(BaseSettings):
 
     # Java Bot API
     JAVA_API_BASE_URL: str = "http://java-bot:8080"
-    JAVA_API_KEY: str = ""
 
     # Telegram API (MTProto - for Pyrogram export)
     TELEGRAM_API_ID: int = 0
@@ -60,7 +59,6 @@ class Settings(BaseSettings):
 
     # Logging
     LOG_LEVEL: str = "INFO"
-    LOG_FORMAT: str = "json"  # "json" or "text"
 
 
 # Global settings instance
