@@ -308,11 +308,21 @@ project.build.sourceEncoding=UTF-8
 
 ## Important Conventions
 
-### Git Workflow
+### Git Workflow & Deployment
 
 **ВАЖНО: Пушить ТОЛЬКО в `dev` ветку, если не сказано явно пушить в другую ветку.**
 - По умолчанию: `git push origin dev`
 - В production (main) только если явно сказано: "пушить в main"
+
+**КРИТИЧНО: Все работы с контейнерами — ТОЛЬКО через GitHub Actions CI/CD**
+- **НИКОГДА** не пересобирать контейнеры вручную (`docker-compose build`, `docker build`, etc)
+- **НИКОГДА** не перезапускать контейнеры вручную (`docker-compose up`, etc)
+- Если контейнеры не обновляются после push → проблема в workflow (`.github/workflows/`), исправляй pipeline
+- GitHub Actions должен автоматически:
+  1. Пересобирать образы при push в dev/main
+  2. Заливать в ghcr.io registry
+  3. Запускать deploy скрипт на сервер
+  4. Перезагружать контейнеры на сервере
 
 ### Commit Messages
 
