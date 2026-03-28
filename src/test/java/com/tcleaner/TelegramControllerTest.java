@@ -10,12 +10,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockMultipartFile;
-import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.Writer;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.Map;
 
@@ -41,16 +38,6 @@ class TelegramControllerTest {
 
     private final TelegramExporter exporter = new TelegramExporter();
     private final TelegramController controller = new TelegramController(exporter);
-
-    /**
-     * Выполняет StreamingResponseBody и возвращает результат как строку.
-     */
-    private String readStreamingBody(ResponseEntity<?> response) throws IOException {
-        assertThat(response.getBody()).isInstanceOf(StreamingResponseBody.class);
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        ((StreamingResponseBody) response.getBody()).writeTo(out);
-        return out.toString(StandardCharsets.UTF_8);
-    }
 
     @Test
     @DisplayName("Конструктор принимает интерфейс TelegramExporterInterface")
@@ -110,7 +97,7 @@ class TelegramControllerTest {
         }
 
         @Test
-        @DisplayName("Одно сообщение: streaming-ответ содержит строку с финальным \\n")
+        @DisplayName("Одно сообщение: ответ содержит строку с финальным \\n")
         void returns200WithTrailingNewlineForSingleMessage() throws IOException {
             TelegramExporterInterface mockExporter = mock(TelegramExporterInterface.class);
             doAnswer(inv -> {
@@ -127,7 +114,7 @@ class TelegramControllerTest {
             ResponseEntity<?> response = ctrl.convert(file, null, null, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-            assertThat(readStreamingBody(response)).isEqualTo("20250624 Hello\n");
+            assertThat((String) response.getBody()).isEqualTo("20250624 Hello\n");
         }
 
         @Test
@@ -149,7 +136,7 @@ class TelegramControllerTest {
             ResponseEntity<?> response = ctrl.convert(file, null, null, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-            assertThat(readStreamingBody(response)).isEqualTo("20250624 First\n20250624 Second\n");
+            assertThat((String) response.getBody()).isEqualTo("20250624 First\n20250624 Second\n");
         }
 
         @Test
@@ -167,15 +154,12 @@ class TelegramControllerTest {
             ResponseEntity<?> response = ctrl.convert(file, null, null, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-            assertThat(readStreamingBody(response)).isEqualTo("");
+            assertThat((String) response.getBody()).isEqualTo("");
         }
 
         @Test
-        @DisplayName("TelegramExporterException при невалидном JSON — заголовок 200, стрим обрывается")
-        void exporterException_headersAlreadySent_streamFails() throws IOException {
-            // StreamingResponseBody: заголовки (200 OK) отправляются ДО выполнения лямбды.
-            // Если экспортер бросает исключение внутри стрима — изменить статус уже нельзя.
-            // Соединение просто обрывается. Это штатное поведение Spring StreamingResponseBody.
+        @DisplayName("TelegramExporterException при невалидном JSON — возвращает 400 с кодом ошибки")
+        void exporterException_returns400WithErrorCode() {
             TelegramExporterInterface mockExporter = mock(TelegramExporterInterface.class);
             doAnswer(inv -> {
                 throw new TelegramExporterException("INVALID_JSON", "Невалидный JSON");
@@ -188,9 +172,10 @@ class TelegramControllerTest {
 
             ResponseEntity<?> response = ctrl.convert(file, null, null, null, null);
 
-            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-            org.junit.jupiter.api.Assertions.assertThrows(Exception.class,
-                    () -> readStreamingBody(response));
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            @SuppressWarnings("unchecked")
+            Map<String, String> body = (Map<String, String>) response.getBody();
+            assertThat(body.get("error")).isEqualTo("INVALID_JSON");
         }
 
         @Test
@@ -241,7 +226,7 @@ class TelegramControllerTest {
 
         @Test
         @DisplayName("Реальный экспорт: одно сообщение обрабатывается корректно")
-        void realExport_singleMessage() throws IOException {
+        void realExport_singleMessage() {
             MockMultipartFile file = new MockMultipartFile(
                     "file", "result.json", "application/json",
                     "{\"messages\":[{\"id\":1,\"type\":\"message\",\"date\":\"2025-06-24T10:00:00\",\"text\":\"Hello\"}]}".getBytes());
@@ -249,7 +234,7 @@ class TelegramControllerTest {
             ResponseEntity<?> response = controller.convert(file, null, null, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-            assertThat(readStreamingBody(response)).isEqualTo("20250624 Hello\n");
+            assertThat((String) response.getBody()).isEqualTo("20250624 Hello\n");
         }
     }
 
@@ -271,7 +256,7 @@ class TelegramControllerTest {
         }
 
         @Test
-        @DisplayName("Одно сообщение: streaming-ответ содержит строку с финальным \\n")
+        @DisplayName("Одно сообщение: ответ содержит строку с финальным \\n")
         void returns200WithTrailingNewlineForSingleMessage() throws IOException {
             TelegramExporterInterface mockExporter = mock(TelegramExporterInterface.class);
             doAnswer(inv -> {
@@ -286,12 +271,12 @@ class TelegramControllerTest {
                     "{\"messages\":[]}", null, null, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-            assertThat(readStreamingBody(response)).isEqualTo("20250624 Test\n");
+            assertThat((String) response.getBody()).isEqualTo("20250624 Test\n");
         }
 
         @Test
-        @DisplayName("TelegramExporterException внутри стрима — заголовок 200, стрим обрывается")
-        void exporterException_streamFails() throws IOException {
+        @DisplayName("TelegramExporterException — возвращает 400 с кодом ошибки")
+        void exporterException_returns400() {
             TelegramExporterInterface mockExporter = mock(TelegramExporterInterface.class);
             doAnswer(inv -> {
                 throw new TelegramExporterException("INVALID_JSON", "Невалидный JSON");
@@ -301,9 +286,10 @@ class TelegramControllerTest {
             ResponseEntity<?> response = ctrl.convertJson(
                     "not valid json", null, null, null, null);
 
-            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-            org.junit.jupiter.api.Assertions.assertThrows(Exception.class,
-                    () -> readStreamingBody(response));
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            @SuppressWarnings("unchecked")
+            Map<String, String> body = (Map<String, String>) response.getBody();
+            assertThat(body.get("error")).isEqualTo("INVALID_JSON");
         }
 
         @Test
