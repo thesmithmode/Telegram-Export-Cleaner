@@ -2,17 +2,20 @@
 MessageCache: Redis-backed message cache using sorted sets.
 
 Stores exported messages per chat in Redis sorted sets (score=msg_id).
-Tracks cached ranges to enable gap detection and partial fetching.
+Tracks cached ranges (by ID and by date) to enable gap detection.
 
 Redis keys:
-  cache:msgs:{chat_id}    — sorted set (score=msg_id, value=msgpack'd message)
-  cache:ranges:{chat_id}  — string: JSON array [[low, high], ...]
-  cache:meta:{chat_id}    — hash: {last_access: unix_ts, msg_count: int}
+  cache:msgs:{chat_id}         — sorted set (score=msg_id, value=msgpack'd message)
+  cache:dates:{chat_id}        — sorted set (score=unix_ts, value=msg_id as bytes)
+  cache:ranges:{chat_id}       — string: JSON array [[low_id, high_id], ...]
+  cache:date_ranges:{chat_id}  — string: JSON array [["2025-01-01","2025-01-08"], ...]
+  cache:meta:{chat_id}         — hash: {last_access: unix_ts, msg_count: int}
 """
 
 import json
 import logging
 import time
+from datetime import datetime, date, timedelta
 from typing import List, Tuple, Optional, Union
 
 import msgpack
@@ -55,6 +58,14 @@ class MessageCache:
         return f"cache:ranges:{chat_id}"
 
     @staticmethod
+    def _dates_key(chat_id: Union[int, str]) -> str:
+        return f"cache:dates:{chat_id}"
+
+    @staticmethod
+    def _date_ranges_key(chat_id: Union[int, str]) -> str:
+        return f"cache:date_ranges:{chat_id}"
+
+    @staticmethod
     def _meta_key(chat_id: Union[int, str]) -> str:
         return f"cache:meta:{chat_id}"
 
@@ -81,13 +92,17 @@ class MessageCache:
             return 0
 
         msgs_key = self._msgs_key(chat_id)
-        ranges_key = self._ranges_key(chat_id)
+        dates_key = self._dates_key(chat_id)
         meta_key = self._meta_key(chat_id)
 
         # Add to sorted set: score=msg_id, value=msgpack bytes
+        # Also add to date index: score=unix_timestamp, value=msg_id
         pipe = self.redis.pipeline()
         for msg in messages:
             pipe.zadd(msgs_key, {self._serialize(msg): msg.id})
+            ts = self._parse_date_to_timestamp(msg.date)
+            if ts is not None:
+                pipe.zadd(dates_key, {str(msg.id).encode(): ts})
         await pipe.execute()
 
         # Enforce per-chat cap: keep newest N messages
@@ -96,10 +111,15 @@ class MessageCache:
             trim_count = count - self.max_messages_per_chat
             await self.redis.zremrangebyrank(msgs_key, 0, trim_count - 1)
 
-        # Update ranges
+        # Update ID ranges
         msg_ids = sorted(m.id for m in messages)
         new_range = [msg_ids[0], msg_ids[-1]]
         await self._add_range(chat_id, new_range)
+
+        # Update date ranges
+        dates = sorted(set(self._extract_date_str(m.date) for m in messages if m.date))
+        if dates:
+            await self._add_date_range(chat_id, [dates[0], dates[-1]])
 
         # Update metadata
         final_count = await self.redis.zcard(msgs_key)
@@ -199,6 +219,115 @@ class MessageCache:
             by_id[msg.id] = msg  # fresh overwrites cached (newer data)
         return sorted(by_id.values(), key=lambda m: m.id)
 
+    # --- Date-aware API ---
+
+    async def get_messages_by_date(
+        self, chat_id: Union[int, str], from_date: str, to_date: str
+    ) -> List[ExportedMessage]:
+        """Retrieve cached messages within [from_date, to_date] (inclusive, YYYY-MM-DD)."""
+        if not self.enabled:
+            return []
+
+        dates_key = self._dates_key(chat_id)
+        ts_from = self._date_str_to_timestamp(from_date)
+        # to_date is inclusive: end of day
+        ts_to = self._date_str_to_timestamp(to_date) + 86400 - 1
+
+        # Get msg_ids from date index
+        raw_ids = await self.redis.zrangebyscore(dates_key, ts_from, ts_to)
+        if not raw_ids:
+            return []
+
+        msg_ids = [int(mid) for mid in raw_ids]
+        if not msg_ids:
+            return []
+
+        # Fetch actual messages by ID range
+        min_id = min(msg_ids)
+        max_id = max(msg_ids)
+        all_msgs = await self.get_messages(chat_id, min_id, max_id)
+
+        # Filter to only the msg_ids from the date index (exact match)
+        id_set = set(msg_ids)
+        return [m for m in all_msgs if m.id in id_set]
+
+    async def get_cached_date_ranges(self, chat_id: Union[int, str]) -> List[List[str]]:
+        """Return list of [from_date, to_date] date ranges cached for this chat."""
+        if not self.enabled:
+            return []
+
+        raw = await self.redis.get(self._date_ranges_key(chat_id))
+        if not raw:
+            return []
+
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    async def get_missing_date_ranges(
+        self, chat_id: Union[int, str], from_date: str, to_date: str
+    ) -> List[Tuple[str, str]]:
+        """Given requested [from_date, to_date], return sub-ranges NOT in cache."""
+        if not self.enabled:
+            return [(from_date, to_date)]
+
+        cached = await self.get_cached_date_ranges(chat_id)
+        if not cached:
+            return [(from_date, to_date)]
+
+        return self._compute_missing_date_ranges(cached, from_date, to_date)
+
+    @staticmethod
+    def _compute_missing_date_ranges(
+        cached: List[List[str]], from_date: str, to_date: str
+    ) -> List[Tuple[str, str]]:
+        """Subtract cached date intervals from [from_date, to_date]."""
+        req_start = date.fromisoformat(from_date)
+        req_end = date.fromisoformat(to_date)
+
+        missing = []
+        current = req_start
+
+        for low_s, high_s in cached:
+            low = date.fromisoformat(low_s)
+            high = date.fromisoformat(high_s)
+
+            if low > current:
+                gap_end = min(low - timedelta(days=1), req_end)
+                if gap_end >= current:
+                    missing.append((current.isoformat(), gap_end.isoformat()))
+            current = max(current, high + timedelta(days=1))
+            if current > req_end:
+                break
+
+        if current <= req_end:
+            missing.append((current.isoformat(), req_end.isoformat()))
+
+        return missing
+
+    # --- Date helpers ---
+
+    @staticmethod
+    def _parse_date_to_timestamp(date_str: str) -> Optional[float]:
+        """Parse ISO datetime string to unix timestamp."""
+        try:
+            dt = datetime.fromisoformat(date_str)
+            return dt.timestamp()
+        except (ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def _date_str_to_timestamp(date_str: str) -> float:
+        """Parse YYYY-MM-DD to unix timestamp (start of day)."""
+        dt = datetime.fromisoformat(date_str + "T00:00:00")
+        return dt.timestamp()
+
+    @staticmethod
+    def _extract_date_str(date_iso: str) -> str:
+        """Extract YYYY-MM-DD from ISO datetime string."""
+        return date_iso[:10]
+
     # --- Range management ---
 
     async def _add_range(self, chat_id: Union[int, str], new_range: List[int]):
@@ -227,13 +356,45 @@ class MessageCache:
 
         return merged
 
+    async def _add_date_range(self, chat_id: Union[int, str], new_range: List[str]):
+        """Add a new [from_date, to_date] interval and merge overlapping/adjacent."""
+        ranges = await self.get_cached_date_ranges(chat_id)
+        ranges.append(new_range)
+        merged = self._merge_date_intervals(ranges)
+        await self.redis.set(self._date_ranges_key(chat_id), json.dumps(merged))
+
+    @staticmethod
+    def _merge_date_intervals(intervals: List[List[str]]) -> List[List[str]]:
+        """Merge overlapping and adjacent date intervals (YYYY-MM-DD strings)."""
+        if not intervals:
+            return []
+
+        sorted_intervals = sorted(intervals, key=lambda x: x[0])
+        merged = [sorted_intervals[0][:]]
+
+        for low_s, high_s in sorted_intervals[1:]:
+            last = merged[-1]
+            last_high = date.fromisoformat(last[1])
+            curr_low = date.fromisoformat(low_s)
+
+            # Adjacent (next day) or overlapping
+            if curr_low <= last_high + timedelta(days=1):
+                if high_s > last[1]:
+                    last[1] = high_s
+            else:
+                merged.append([low_s, high_s])
+
+        return merged
+
     # --- TTL & metadata ---
 
     async def _refresh_ttl(self, chat_id: Union[int, str]):
         """Set/refresh TTL on all cache keys for chat."""
         pipe = self.redis.pipeline()
         pipe.expire(self._msgs_key(chat_id), self.ttl)
+        pipe.expire(self._dates_key(chat_id), self.ttl)
         pipe.expire(self._ranges_key(chat_id), self.ttl)
+        pipe.expire(self._date_ranges_key(chat_id), self.ttl)
         pipe.expire(self._meta_key(chat_id), self.ttl)
         await pipe.execute()
 
@@ -286,7 +447,9 @@ class MessageCache:
             # Evict this chat
             pipe = self.redis.pipeline()
             pipe.delete(self._msgs_key(chat_id))
+            pipe.delete(self._dates_key(chat_id))
             pipe.delete(self._ranges_key(chat_id))
+            pipe.delete(self._date_ranges_key(chat_id))
             pipe.delete(self._meta_key(chat_id))
             await pipe.execute()
             evicted += 1
