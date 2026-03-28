@@ -313,3 +313,224 @@ class TestCacheDisabled:
         assert await cache.get_cached_ranges("chat_123") == []
         assert await cache.get_messages("chat_123", 1, 3) == []
         assert await cache.get_missing_ranges("chat_123", 1, 100) == [(1, 100)]
+        assert await cache.get_cached_date_ranges("chat_123") == []
+        assert await cache.get_messages_by_date("chat_123", "2025-01-01", "2025-01-31") == []
+
+
+class TestDateIndex:
+    """Date-based indexing and retrieval."""
+
+    @pytest.mark.asyncio
+    async def test_store_populates_date_index(self, cache, redis_client):
+        """Storing messages creates date index entries."""
+        msgs = [
+            _make_msg(1, date="2025-01-05T10:00:00"),
+            _make_msg(2, date="2025-01-05T12:00:00"),
+            _make_msg(3, date="2025-01-06T09:00:00"),
+        ]
+        await cache.store_messages("chat_123", msgs)
+
+        # Date index sorted set should have 3 entries
+        count = await redis_client.zcard("cache:dates:chat_123")
+        assert count == 3
+
+    @pytest.mark.asyncio
+    async def test_get_messages_by_date_range(self, cache):
+        """Retrieve messages by date range."""
+        msgs = [
+            _make_msg(1, date="2025-01-01T10:00:00"),
+            _make_msg(2, date="2025-01-03T10:00:00"),
+            _make_msg(3, date="2025-01-05T10:00:00"),
+            _make_msg(4, date="2025-01-07T10:00:00"),
+            _make_msg(5, date="2025-01-09T10:00:00"),
+        ]
+        await cache.store_messages("chat_123", msgs)
+
+        # Get Jan 3 - Jan 7
+        retrieved = await cache.get_messages_by_date("chat_123", "2025-01-03", "2025-01-07")
+        assert [m.id for m in retrieved] == [2, 3, 4]
+
+    @pytest.mark.asyncio
+    async def test_get_messages_by_date_empty(self, cache):
+        """Date range with no cached messages returns empty."""
+        msgs = [_make_msg(1, date="2025-01-01T10:00:00")]
+        await cache.store_messages("chat_123", msgs)
+
+        retrieved = await cache.get_messages_by_date("chat_123", "2025-02-01", "2025-02-28")
+        assert retrieved == []
+
+
+class TestDateRanges:
+    """Date range tracking for gap detection."""
+
+    @pytest.mark.asyncio
+    async def test_get_cached_date_ranges_empty(self, cache):
+        """No cache → empty date ranges."""
+        ranges = await cache.get_cached_date_ranges("chat_999")
+        assert ranges == []
+
+    @pytest.mark.asyncio
+    async def test_get_cached_date_ranges_after_store(self, cache):
+        """After storing messages spanning Jan 5-6, date ranges reflect that."""
+        msgs = [
+            _make_msg(1, date="2025-01-05T10:00:00"),
+            _make_msg(2, date="2025-01-06T15:00:00"),
+        ]
+        await cache.store_messages("chat_123", msgs)
+        ranges = await cache.get_cached_date_ranges("chat_123")
+        assert ranges == [["2025-01-05", "2025-01-06"]]
+
+    @pytest.mark.asyncio
+    async def test_date_ranges_merge_adjacent(self, cache):
+        """Store Jan 5-6 then Jan 7-8 → merge to [Jan 5, Jan 8]."""
+        await cache.store_messages("chat_123", [
+            _make_msg(1, date="2025-01-05T10:00:00"),
+            _make_msg(2, date="2025-01-06T10:00:00"),
+        ])
+        await cache.store_messages("chat_123", [
+            _make_msg(3, date="2025-01-07T10:00:00"),
+            _make_msg(4, date="2025-01-08T10:00:00"),
+        ])
+        ranges = await cache.get_cached_date_ranges("chat_123")
+        assert ranges == [["2025-01-05", "2025-01-08"]]
+
+    @pytest.mark.asyncio
+    async def test_date_ranges_disjoint(self, cache):
+        """Store Jan 1-3 and Jan 10-12 → two separate date ranges."""
+        await cache.store_messages("chat_123", [
+            _make_msg(1, date="2025-01-01T10:00:00"),
+            _make_msg(2, date="2025-01-03T10:00:00"),
+        ])
+        await cache.store_messages("chat_123", [
+            _make_msg(3, date="2025-01-10T10:00:00"),
+            _make_msg(4, date="2025-01-12T10:00:00"),
+        ])
+        ranges = await cache.get_cached_date_ranges("chat_123")
+        assert ranges == [["2025-01-01", "2025-01-03"], ["2025-01-10", "2025-01-12"]]
+
+    @pytest.mark.asyncio
+    async def test_date_ranges_overlapping(self, cache):
+        """Store Jan 1-8 then Jan 5-12 → merge to [Jan 1, Jan 12]."""
+        await cache.store_messages("chat_123", [
+            _make_msg(1, date="2025-01-01T10:00:00"),
+            _make_msg(2, date="2025-01-08T10:00:00"),
+        ])
+        await cache.store_messages("chat_123", [
+            _make_msg(3, date="2025-01-05T10:00:00"),
+            _make_msg(4, date="2025-01-12T10:00:00"),
+        ])
+        ranges = await cache.get_cached_date_ranges("chat_123")
+        assert ranges == [["2025-01-01", "2025-01-12"]]
+
+
+class TestMissingDateRanges:
+    """Gap detection by dates."""
+
+    @pytest.mark.asyncio
+    async def test_get_missing_date_ranges_no_cache(self, cache):
+        """No cache → entire date range missing."""
+        missing = await cache.get_missing_date_ranges("chat_999", "2025-01-01", "2025-01-15")
+        assert missing == [("2025-01-01", "2025-01-15")]
+
+    @pytest.mark.asyncio
+    async def test_get_missing_date_ranges_partial(self, cache):
+        """Cached Jan 1-8, request Jan 1-15 → missing Jan 9-15."""
+        await cache.store_messages("chat_123", [
+            _make_msg(1, date="2025-01-01T10:00:00"),
+            _make_msg(2, date="2025-01-08T10:00:00"),
+        ])
+        missing = await cache.get_missing_date_ranges("chat_123", "2025-01-01", "2025-01-15")
+        assert missing == [("2025-01-09", "2025-01-15")]
+
+    @pytest.mark.asyncio
+    async def test_get_missing_date_ranges_full_cache(self, cache):
+        """Cached Jan 1-15, request Jan 1-15 → nothing missing."""
+        await cache.store_messages("chat_123", [
+            _make_msg(1, date="2025-01-01T10:00:00"),
+            _make_msg(2, date="2025-01-15T10:00:00"),
+        ])
+        missing = await cache.get_missing_date_ranges("chat_123", "2025-01-01", "2025-01-15")
+        assert missing == []
+
+    @pytest.mark.asyncio
+    async def test_get_missing_date_ranges_multiple_gaps(self, cache):
+        """Cached Jan 1-8 and Jan 11-13 → gaps at Jan 9-10 and Jan 14-15."""
+        await cache.store_messages("chat_123", [
+            _make_msg(1, date="2025-01-01T10:00:00"),
+            _make_msg(2, date="2025-01-08T10:00:00"),
+        ])
+        await cache.store_messages("chat_123", [
+            _make_msg(3, date="2025-01-11T10:00:00"),
+            _make_msg(4, date="2025-01-13T10:00:00"),
+        ])
+        missing = await cache.get_missing_date_ranges("chat_123", "2025-01-01", "2025-01-15")
+        assert missing == [("2025-01-09", "2025-01-10"), ("2025-01-14", "2025-01-15")]
+
+
+class TestVasyaPetyaKolyaScenario:
+    """Full E2E scenario as described by user.
+
+    1. Vasya exports chat A for Jan 11-13 → cached
+    2. Petya exports chat A for Jan 1-8 → cached
+    3. Kolya exports chat A for Jan 1-15 → uses cache for 1-8 and 11-13,
+       fetches only 9-10 and 14-15, returns complete file
+    """
+
+    @pytest.mark.asyncio
+    async def test_kolya_gets_full_range_from_partial_caches(self, cache):
+        # Vasya: Jan 11-13
+        vasya_msgs = [
+            _make_msg(11, date="2025-01-11T10:00:00"),
+            _make_msg(12, date="2025-01-12T10:00:00"),
+            _make_msg(13, date="2025-01-13T10:00:00"),
+        ]
+        await cache.store_messages("chat_A", vasya_msgs)
+
+        # Petya: Jan 1-8
+        petya_msgs = [
+            _make_msg(1, date="2025-01-01T10:00:00"),
+            _make_msg(2, date="2025-01-02T10:00:00"),
+            _make_msg(3, date="2025-01-03T10:00:00"),
+            _make_msg(4, date="2025-01-04T10:00:00"),
+            _make_msg(5, date="2025-01-05T10:00:00"),
+            _make_msg(6, date="2025-01-06T10:00:00"),
+            _make_msg(7, date="2025-01-07T10:00:00"),
+            _make_msg(8, date="2025-01-08T10:00:00"),
+        ]
+        await cache.store_messages("chat_A", petya_msgs)
+
+        # Verify cached date ranges: [Jan 1-8] and [Jan 11-13]
+        date_ranges = await cache.get_cached_date_ranges("chat_A")
+        assert date_ranges == [["2025-01-01", "2025-01-08"], ["2025-01-11", "2025-01-13"]]
+
+        # Kolya requests Jan 1-15 — find missing date ranges
+        missing = await cache.get_missing_date_ranges("chat_A", "2025-01-01", "2025-01-15")
+        assert missing == [("2025-01-09", "2025-01-10"), ("2025-01-14", "2025-01-15")]
+
+        # Simulate fetching missing ranges from Telegram
+        kolya_fresh = [
+            _make_msg(9, date="2025-01-09T10:00:00"),
+            _make_msg(10, date="2025-01-10T10:00:00"),
+            _make_msg(14, date="2025-01-14T10:00:00"),
+            _make_msg(15, date="2025-01-15T10:00:00"),
+        ]
+        await cache.store_messages("chat_A", kolya_fresh)
+
+        # Get cached messages for full range
+        cached = await cache.get_messages_by_date("chat_A", "2025-01-01", "2025-01-15")
+        all_msgs = cache.merge_and_sort(cached, [])
+
+        # Kolya gets all 15 messages as one monolithic result
+        assert [m.id for m in all_msgs] == list(range(1, 16))
+
+        # Cache now has complete Jan 1-15
+        date_ranges = await cache.get_cached_date_ranges("chat_A")
+        assert date_ranges == [["2025-01-01", "2025-01-15"]]
+
+        # Future user requesting Jan 1-15 → nothing missing
+        missing = await cache.get_missing_date_ranges("chat_A", "2025-01-01", "2025-01-15")
+        assert missing == []
+
+        # Future user requesting Jan 1-20 → only Jan 16-20 missing
+        missing = await cache.get_missing_date_ranges("chat_A", "2025-01-01", "2025-01-20")
+        assert missing == [("2025-01-16", "2025-01-20")]
