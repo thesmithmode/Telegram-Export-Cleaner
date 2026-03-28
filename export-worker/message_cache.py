@@ -97,6 +97,22 @@ class MessageCache:
 
         # Add to sorted set: score=msg_id, value=msgpack bytes
         # Also add to date index: score=unix_timestamp, value=msg_id
+        # First, remove existing entries for these msg_ids to avoid duplicates
+        # (ZADD treats different bytes as different members even with same score)
+        msg_ids = [msg.id for msg in messages]
+        pipe = self.redis.pipeline()
+        for msg_id in msg_ids:
+            pipe.zrangebyscore(msgs_key, msg_id, msg_id)
+        existing = await pipe.execute()
+
+        # Delete old entries for these IDs
+        pipe = self.redis.pipeline()
+        for old_entries in existing:
+            for entry in (old_entries or []):
+                pipe.zrem(msgs_key, entry)
+        await pipe.execute()
+
+        # Now add fresh entries
         pipe = self.redis.pipeline()
         for msg in messages:
             pipe.zadd(msgs_key, {self._serialize(msg): msg.id})
@@ -310,17 +326,21 @@ class MessageCache:
 
     @staticmethod
     def _parse_date_to_timestamp(date_str: str) -> Optional[float]:
-        """Parse ISO datetime string to unix timestamp."""
+        """Parse ISO datetime string to unix timestamp (UTC)."""
         try:
+            from datetime import timezone
             dt = datetime.fromisoformat(date_str)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
             return dt.timestamp()
         except (ValueError, TypeError):
             return None
 
     @staticmethod
     def _date_str_to_timestamp(date_str: str) -> float:
-        """Parse YYYY-MM-DD to unix timestamp (start of day)."""
-        dt = datetime.fromisoformat(date_str + "T00:00:00")
+        """Parse YYYY-MM-DD to unix timestamp (start of day, UTC)."""
+        from datetime import timezone
+        dt = datetime.fromisoformat(date_str + "T00:00:00").replace(tzinfo=timezone.utc)
         return dt.timestamp()
 
     @staticmethod

@@ -200,8 +200,8 @@ class ExportWorker:
                 else:
                     messages = await self._export_with_id_cache(job)
 
-            # Fallback: no cache or cache disabled
-            if messages is None and not (self.message_cache and self.message_cache.enabled):
+            # Fallback: no cache, cache disabled, or cache export failed
+            if messages is None:
                 messages = await self._fetch_all_messages(job)
 
             if messages is None:
@@ -359,8 +359,8 @@ class ExportWorker:
             logger.info(f"  Fetched {len(fresh_messages)} new messages above cache max {cache_max_id}")
             await self.message_cache.store_messages(job.chat_id, fresh_messages)
 
-        # Step 2: fill ID gaps
-        full_min = 1
+        # Step 2: fill ID gaps (use lowest cached range start, not 1)
+        full_min = min(r[0] for r in cached_ranges)
         full_max = max(cache_max_id, fresh_messages[0].id if fresh_messages else cache_max_id)
         missing = await self.message_cache.get_missing_ranges(job.chat_id, full_min, full_max)
 
