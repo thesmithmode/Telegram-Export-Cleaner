@@ -99,7 +99,6 @@ class TestExportWorkerJobProcessing:
                 yield msg
 
         worker.telegram_client.get_chat_history = mock_history
-        worker.telegram_client.get_incremental_state = AsyncMock(return_value=None)
 
         # Mock Java client
         worker.java_client.send_response = AsyncMock(return_value=True)

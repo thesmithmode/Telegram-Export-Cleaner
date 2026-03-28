@@ -174,9 +174,10 @@ class TelegramClient:
                                 logger.debug(f"Skipping duplicate message {message.id}")
                                 continue
 
-                            # Date filtering
+                            # Date filtering (Pyrogram iterates newest→oldest)
                             if from_date and message.date < from_date:
-                                continue
+                                logger.debug(f"Reached message older than from_date ({message.date} < {from_date}), stopping")
+                                return
                             if to_date and message.date > to_date:
                                 continue
 

@@ -167,12 +167,10 @@ class ExportWorker:
             offset_id = job.offset_id
             min_id = 0  # Stop iteration when reaching already-exported messages
 
-            # Check if we have a previous export for this user+chat (incremental: fetch only new)
-            if offset_id == 0:  # Only if user didn't specify explicit offset
-                last_message_id = await self.telegram_client.get_incremental_state(job.chat_id, job.user_chat_id)
-                if last_message_id:
-                    min_id = last_message_id  # Stop when we reach this ID (already exported)
-                    logger.info(f"Incremental export for user {job.user_chat_id}: fetching messages newer than {min_id}")
+            # Incremental export disabled: always fetch full history.
+            # Previous implementation silently stopped at last-exported message ID,
+            # causing "tiny fragment" exports when user expected full history.
+            # TODO: re-enable as opt-in feature with explicit UI toggle in bot.
 
             # Notify user that export has started
             if job.user_chat_id and self.java_client:
@@ -212,9 +210,15 @@ class ExportWorker:
                                     total=total_limit,
                                 )
                     else:
-                        # Unknown total: log every 10k messages, no user notification
-                        if count % 10000 == 0:
+                        # Unknown total: notify user every 5000 messages
+                        if count % 5000 == 0:
                             logger.info(f"  Exported {count} messages...")
+                            if job.user_chat_id and self.java_client:
+                                await self.java_client.send_progress_update(
+                                    user_chat_id=job.user_chat_id,
+                                    task_id=job.task_id,
+                                    message_count=count,
+                                )
 
             except Exception as e:
                 error = f"Export failed: {str(e)}"
