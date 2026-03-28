@@ -159,7 +159,7 @@ class TelegramControllerTest {
 
         @Test
         @DisplayName("TelegramExporterException при невалидном JSON — возвращает 400 с кодом ошибки")
-        void exporterException_returns400WithErrorCode() {
+        void exporterException_returns400WithErrorCode() throws IOException {
             TelegramExporterInterface mockExporter = mock(TelegramExporterInterface.class);
             doAnswer(inv -> {
                 throw new TelegramExporterException("INVALID_JSON", "Невалидный JSON");
@@ -276,7 +276,7 @@ class TelegramControllerTest {
 
         @Test
         @DisplayName("TelegramExporterException — возвращает 400 с кодом ошибки")
-        void exporterException_returns400() {
+        void exporterException_returns400() throws IOException {
             TelegramExporterInterface mockExporter = mock(TelegramExporterInterface.class);
             doAnswer(inv -> {
                 throw new TelegramExporterException("INVALID_JSON", "Невалидный JSON");
