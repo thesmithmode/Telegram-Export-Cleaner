@@ -21,13 +21,17 @@ import signal
 import sys
 import shutil
 import psutil
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+import redis.asyncio as aioredis
 
 from config import settings
 from pyrogram_client import TelegramClient, create_client as create_telegram_client
 from queue_consumer import QueueConsumer, create_queue_consumer
 from java_client import JavaBotClient, create_java_client
+from message_cache import MessageCache
 from models import ExportRequest, ExportedMessage
 
 # Setup logging
@@ -47,6 +51,7 @@ class ExportWorker:
         self.telegram_client: Optional[TelegramClient] = None
         self.queue_consumer: Optional[QueueConsumer] = None
         self.java_client: Optional[JavaBotClient] = None
+        self.message_cache: Optional[MessageCache] = None
         self.running = False
         self.jobs_processed = 0
         self.jobs_failed = 0
@@ -95,6 +100,24 @@ class ExportWorker:
             # 3. Connect to Java Bot API
             logger.info("3️⃣  Connecting to Java Bot API...")
             self.java_client = await create_java_client()
+
+            # 4. Initialize message cache
+            logger.info("4️⃣  Initializing message cache...")
+            cache_redis = aioredis.Redis(
+                host=settings.REDIS_HOST,
+                port=settings.REDIS_PORT,
+                db=settings.REDIS_DB,
+                password=settings.REDIS_PASSWORD,
+                decode_responses=False,
+            )
+            self.message_cache = MessageCache(
+                redis_client=cache_redis,
+                ttl_seconds=settings.CACHE_TTL_SECONDS,
+                max_memory_mb=settings.CACHE_MAX_MEMORY_MB,
+                max_messages_per_chat=settings.CACHE_MAX_MESSAGES_PER_CHAT,
+                enabled=settings.CACHE_ENABLED,
+            )
+            logger.info(f"  Cache: enabled={settings.CACHE_ENABLED}, TTL={settings.CACHE_TTL_SECONDS}s, max_memory={settings.CACHE_MAX_MEMORY_MB}MB")
 
             logger.info("✅ All components initialized successfully")
             return True
@@ -162,78 +185,29 @@ class ExportWorker:
             if chat_info:
                 logger.info(f"  Chat: {chat_info.get('title')} (type: {chat_info.get('type')})")
 
-            # Export messages - try to resume from incremental state if available
-            messages: list[ExportedMessage] = []
-            offset_id = job.offset_id
-            min_id = 0  # Stop iteration when reaching already-exported messages
+            # --- Cache-aware export ---
+            # Both full and date-range exports use cache:
+            # 1. Check cache for already-fetched messages (by ID or by date)
+            # 2. Fetch only missing ranges from Telegram API
+            # 3. Store fresh messages in cache
+            # 4. Merge cached + fresh for the final result
 
-            # Check if we have a previous export for this user+chat (incremental: fetch only new)
-            if offset_id == 0:  # Only if user didn't specify explicit offset
-                last_message_id = await self.telegram_client.get_incremental_state(job.chat_id, job.user_chat_id)
-                if last_message_id:
-                    min_id = last_message_id  # Stop when we reach this ID (already exported)
-                    logger.info(f"Incremental export for user {job.user_chat_id}: fetching messages newer than {min_id}")
+            has_date_filter = job.from_date is not None or job.to_date is not None
+            messages: Optional[list[ExportedMessage]] = None
 
-            # Notify user that export has started
-            if job.user_chat_id and self.java_client:
-                await self.java_client.send_progress_update(
-                    user_chat_id=job.user_chat_id,
-                    task_id=job.task_id,
-                    message_count=0,
-                    total=job.limit if job.limit > 0 else None,
-                    started=True,
-                )
+            if self.message_cache and self.message_cache.enabled:
+                if has_date_filter:
+                    messages = await self._export_with_date_cache(job)
+                else:
+                    messages = await self._export_with_id_cache(job)
 
-            total_limit = job.limit if job.limit > 0 else None
-            last_reported_pct = 0
+            # Fallback: no cache, cache disabled, or cache export failed
+            if messages is None:
+                messages = await self._fetch_all_messages(job)
 
-            try:
-                async for message in self.telegram_client.get_chat_history(
-                    chat_id=job.chat_id,
-                    limit=job.limit,
-                    offset_id=offset_id,
-                    min_id=min_id,
-                ):
-                    messages.append(message)
-                    count = len(messages)
-
-                    # Report progress at every 20% milestone
-                    if total_limit:
-                        pct = count * 100 // total_limit
-                        milestone = (pct // 20) * 20
-                        if milestone > last_reported_pct and milestone < 100:
-                            last_reported_pct = milestone
-                            logger.info(f"  Exported {count}/{total_limit} messages ({milestone}%)...")
-                            if job.user_chat_id and self.java_client:
-                                await self.java_client.send_progress_update(
-                                    user_chat_id=job.user_chat_id,
-                                    task_id=job.task_id,
-                                    message_count=count,
-                                    total=total_limit,
-                                )
-                    else:
-                        # Unknown total: log every 10k messages, no user notification
-                        if count % 10000 == 0:
-                            logger.info(f"  Exported {count} messages...")
-
-            except Exception as e:
-                error = f"Export failed: {str(e)}"
-                logger.error(f"❌ {error}")
-                await self.java_client.send_response(
-                    task_id=job.task_id,
-                    status="failed",
-                    messages=messages,  # Send all messages exported so far
-                    error=error,
-                    error_code="EXPORT_ERROR",
-                    user_chat_id=job.user_chat_id,
-                )
-                await self.queue_consumer.mark_job_failed(job.task_id, error)
+            if messages is None:
+                # _fetch_all_messages / cache export returned None → error already reported
                 return True
-
-            # Save incremental state for next export of same chat (newest message = messages[0])
-            if messages:
-                newest_message_id = messages[0].id  # Pyrogram yields newest→oldest, so [0] is newest
-                await self.telegram_client.set_incremental_state(job.chat_id, newest_message_id, job.user_chat_id)
 
             # Send results to Java API, deliver cleaned text to user
             success = await self.java_client.send_response(
@@ -267,6 +241,240 @@ class ExportWorker:
             self.log_memory_usage("JOB_ERROR")
             await self.cleanup_temp_files(job.task_id)
             return True
+
+    async def _export_with_date_cache(self, job: ExportRequest) -> Optional[list[ExportedMessage]]:
+        """
+        Date-range export with cache support.
+
+        1. Check which date sub-ranges are already cached
+        2. Fetch only missing date ranges from Telegram
+        3. Store fresh messages in cache
+        4. Merge cached + fresh → return complete result
+        """
+        from_date_str = job.from_date[:10] if job.from_date else None
+        to_date_str = job.to_date[:10] if job.to_date else None
+
+        if not from_date_str or not to_date_str:
+            # Partial date filter — fetch all, write-through to cache
+            messages = await self._fetch_all_messages(job)
+            if messages:
+                await self.message_cache.store_messages(job.chat_id, messages)
+            return messages
+
+        # Find which date ranges we're missing
+        missing = await self.message_cache.get_missing_date_ranges(
+            job.chat_id, from_date_str, to_date_str
+        )
+
+        if not missing:
+            # Everything cached — read directly
+            logger.info(f"  Full date cache hit for {job.chat_id} [{from_date_str} - {to_date_str}]")
+            cached = await self.message_cache.get_messages_by_date(
+                job.chat_id, from_date_str, to_date_str
+            )
+            return self.message_cache.merge_and_sort(cached, [])
+
+        logger.info(f"  Date cache partial hit for {job.chat_id}: missing={missing}")
+
+        # Notify user
+        if job.user_chat_id and self.java_client:
+            await self.java_client.send_progress_update(
+                user_chat_id=job.user_chat_id,
+                task_id=job.task_id,
+                message_count=0,
+                started=True,
+            )
+
+        # Fetch each missing date range from Telegram
+        fresh_messages: list[ExportedMessage] = []
+        for gap_from, gap_to in missing:
+            gap_from_dt = datetime.fromisoformat(gap_from + "T00:00:00")
+            gap_to_dt = datetime.fromisoformat(gap_to + "T23:59:59")
+
+            gap_msgs: list[ExportedMessage] = []
+            try:
+                async for msg in self.telegram_client.get_chat_history(
+                    chat_id=job.chat_id,
+                    limit=0,
+                    offset_id=0,
+                    min_id=0,
+                    from_date=gap_from_dt,
+                    to_date=gap_to_dt,
+                ):
+                    gap_msgs.append(msg)
+            except Exception as e:
+                logger.warning(f"Failed fetching date gap [{gap_from} - {gap_to}]: {e}")
+
+            if gap_msgs:
+                logger.info(f"  Fetched {len(gap_msgs)} messages for [{gap_from} - {gap_to}]")
+                await self.message_cache.store_messages(job.chat_id, gap_msgs)
+                fresh_messages.extend(gap_msgs)
+
+        # Retrieve all messages for the full requested date range from cache
+        cached = await self.message_cache.get_messages_by_date(
+            job.chat_id, from_date_str, to_date_str
+        )
+        messages = self.message_cache.merge_and_sort(cached, fresh_messages)
+        logger.info(f"  Date-range export complete: {len(messages)} messages")
+
+        await self.message_cache.evict_if_needed()
+        return messages
+
+    async def _export_with_id_cache(self, job: ExportRequest) -> Optional[list[ExportedMessage]]:
+        """
+        Full export (no date filter) with cache by message ID.
+
+        1. Check which ID ranges are cached
+        2. Fetch newer messages + fill ID gaps
+        3. Store in cache, merge, return
+        """
+        cached_ranges = await self.message_cache.get_cached_ranges(job.chat_id)
+
+        if not cached_ranges:
+            # No cache — full fetch, populate cache
+            messages = await self._fetch_all_messages(job)
+            if messages:
+                await self.message_cache.store_messages(job.chat_id, messages)
+                await self.message_cache.evict_if_needed()
+            return messages
+
+        cache_max_id = max(r[1] for r in cached_ranges)
+        logger.info(f"  Cache hit for chat {job.chat_id}: ranges={cached_ranges}")
+
+        fresh_messages: list[ExportedMessage] = []
+
+        # Step 1: fetch messages NEWER than cache
+        try:
+            async for msg in self.telegram_client.get_chat_history(
+                chat_id=job.chat_id,
+                limit=job.limit,
+                offset_id=0,
+                min_id=cache_max_id,
+            ):
+                fresh_messages.append(msg)
+        except Exception as e:
+            logger.warning(f"Failed fetching new messages above cache: {e}")
+
+        if fresh_messages:
+            logger.info(f"  Fetched {len(fresh_messages)} new messages above cache max {cache_max_id}")
+            await self.message_cache.store_messages(job.chat_id, fresh_messages)
+
+        # Step 2: fill ID gaps (use lowest cached range start, not 1)
+        full_min = min(r[0] for r in cached_ranges)
+        full_max = max(cache_max_id, fresh_messages[0].id if fresh_messages else cache_max_id)
+        missing = await self.message_cache.get_missing_ranges(job.chat_id, full_min, full_max)
+
+        for gap_low, gap_high in missing:
+            gap_msgs: list[ExportedMessage] = []
+            try:
+                async for msg in self.telegram_client.get_chat_history(
+                    chat_id=job.chat_id,
+                    limit=0,
+                    offset_id=gap_high + 1,
+                    min_id=gap_low - 1,
+                ):
+                    gap_msgs.append(msg)
+            except Exception as e:
+                logger.warning(f"Failed fetching gap [{gap_low}-{gap_high}]: {e}")
+
+            if gap_msgs:
+                logger.info(f"  Filled gap [{gap_low}-{gap_high}]: {len(gap_msgs)} messages")
+                await self.message_cache.store_messages(job.chat_id, gap_msgs)
+                fresh_messages.extend(gap_msgs)
+
+        # Retrieve all from cache
+        cached_messages = await self.message_cache.get_messages(job.chat_id, full_min, full_max)
+        messages = self.message_cache.merge_and_sort(cached_messages, fresh_messages)
+        logger.info(f"  Total after cache merge: {len(messages)} messages")
+
+        await self.message_cache.evict_if_needed()
+        return messages
+
+    async def _fetch_all_messages(self, job: ExportRequest) -> Optional[list[ExportedMessage]]:
+        """
+        Fetch all messages from Telegram API with progress reporting.
+
+        Returns list of messages, or None if export failed (error already reported).
+        """
+        messages: list[ExportedMessage] = []
+
+        # Notify user that export has started
+        if job.user_chat_id and self.java_client:
+            await self.java_client.send_progress_update(
+                user_chat_id=job.user_chat_id,
+                task_id=job.task_id,
+                message_count=0,
+                total=job.limit if job.limit > 0 else None,
+                started=True,
+            )
+
+        total_limit = job.limit if job.limit > 0 else None
+        last_reported_pct = 0
+
+        # Parse date filters
+        from_date = None
+        to_date = None
+        if job.from_date:
+            try:
+                from_date = datetime.fromisoformat(job.from_date)
+            except ValueError:
+                pass
+        if job.to_date:
+            try:
+                to_date = datetime.fromisoformat(job.to_date)
+            except ValueError:
+                pass
+
+        try:
+            async for message in self.telegram_client.get_chat_history(
+                chat_id=job.chat_id,
+                limit=job.limit,
+                offset_id=job.offset_id,
+                min_id=0,
+                from_date=from_date,
+                to_date=to_date,
+            ):
+                messages.append(message)
+                count = len(messages)
+
+                if total_limit:
+                    pct = count * 100 // total_limit
+                    milestone = (pct // 20) * 20
+                    if milestone > last_reported_pct and milestone < 100:
+                        last_reported_pct = milestone
+                        logger.info(f"  Exported {count}/{total_limit} messages ({milestone}%)...")
+                        if job.user_chat_id and self.java_client:
+                            await self.java_client.send_progress_update(
+                                user_chat_id=job.user_chat_id,
+                                task_id=job.task_id,
+                                message_count=count,
+                                total=total_limit,
+                            )
+                else:
+                    if count % 5000 == 0:
+                        logger.info(f"  Exported {count} messages...")
+                        if job.user_chat_id and self.java_client:
+                            await self.java_client.send_progress_update(
+                                user_chat_id=job.user_chat_id,
+                                task_id=job.task_id,
+                                message_count=count,
+                            )
+
+        except Exception as e:
+            error = f"Export failed: {str(e)}"
+            logger.error(f"❌ {error}")
+            await self.java_client.send_response(
+                task_id=job.task_id,
+                status="failed",
+                messages=messages,
+                error=error,
+                error_code="EXPORT_ERROR",
+                user_chat_id=job.user_chat_id,
+            )
+            await self.queue_consumer.mark_job_failed(job.task_id, error)
+            return None
+
+        return messages
 
     async def run(self):
         """
@@ -321,6 +529,9 @@ class ExportWorker:
 
         if self.java_client:
             await self.java_client.aclose()
+
+        if self.message_cache and self.message_cache.redis:
+            await self.message_cache.redis.aclose()
 
         logger.info(
             f"📊 Final stats: {self.jobs_processed} processed, "
