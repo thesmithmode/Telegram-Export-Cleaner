@@ -302,6 +302,7 @@ class ExportWorker:
         fresh_messages: list[ExportedMessage] = []
         fetched_count = 0
         last_reported_pct = 0
+        export_start = datetime.now()
         for gap_from, gap_to in missing:
             gap_from_dt = datetime.fromisoformat(gap_from + "T00:00:00")
             gap_to_dt = datetime.fromisoformat(gap_to + "T23:59:59")
@@ -330,6 +331,7 @@ class ExportWorker:
                                     task_id=job.task_id,
                                     message_count=fetched_count,
                                     total=total,
+                                    elapsed_seconds=(datetime.now() - export_start).total_seconds(),
                                 )
             except Exception as e:
                 logger.warning(f"Failed fetching date gap [{gap_from} - {gap_to}]: {e}")
@@ -388,6 +390,7 @@ class ExportWorker:
         fresh_messages: list[ExportedMessage] = []
         fetched_count = 0
         last_reported_pct = 0
+        export_start = datetime.now()
 
         # Step 1: fetch messages NEWER than cache
         try:
@@ -411,6 +414,7 @@ class ExportWorker:
                                 task_id=job.task_id,
                                 message_count=fetched_count,
                                 total=total,
+                                elapsed_seconds=(datetime.now() - export_start).total_seconds(),
                             )
         except Exception as e:
             logger.warning(f"Failed fetching new messages above cache: {e}")
@@ -447,6 +451,7 @@ class ExportWorker:
                                     task_id=job.task_id,
                                     message_count=fetched_count,
                                     total=total,
+                                    elapsed_seconds=(datetime.now() - export_start).total_seconds(),
                                 )
             except Exception as e:
                 logger.warning(f"Failed fetching gap [{gap_low}-{gap_high}]: {e}")
@@ -504,6 +509,7 @@ class ExportWorker:
             )
 
         last_reported_pct = 0
+        export_start = datetime.now()
 
         try:
             async for message in self.telegram_client.get_chat_history(
@@ -530,6 +536,7 @@ class ExportWorker:
                                 task_id=job.task_id,
                                 message_count=count,
                                 total=total,
+                                elapsed_seconds=(datetime.now() - export_start).total_seconds(),
                             )
                 else:
                     # Fallback: только логи, юзера не спамим
