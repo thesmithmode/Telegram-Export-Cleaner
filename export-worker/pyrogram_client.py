@@ -20,7 +20,7 @@ from pyrogram import Client, types as pyrogram_types
 from pyrogram.raw import functions, types as raw_types
 from pyrogram.errors import (
     FloodWait, Unauthorized, BadRequest, ChannelPrivate, ChatAdminRequired,
-    UserDeactivated, AuthKeyUnregistered, SessionExpired, PeerFlood,
+    UserDeactivated, AuthKeyUnregistered, SessionExpired, PeerFlood, PeerIdInvalid,
 )
 
 from config import settings
@@ -262,13 +262,15 @@ class TelegramClient:
         to_date: datetime,
     ) -> Optional[int]:
         """
-        Get message count in a date range via raw MTProto messages.Search.
+        Get message count in a date range.
 
-        Uses min_date/max_date with limit=1 to get count in single API call.
+        Strategy: use messages.Search with min_date/max_date directly.
+        Uses 1 lightweight API call (limit=1).
         Returns None on failure.
         """
         try:
             peer = await self.client.resolve_peer(chat_id)
+
             result = await self.client.invoke(
                 functions.messages.Search(
                     peer=peer,
@@ -287,7 +289,6 @@ class TelegramClient:
             count = getattr(result, "count", None)
             if count is not None and count > 0:
                 return count
-            # ChannelMessages/Messages without count — count messages list
             if hasattr(result, "messages"):
                 return len(result.messages) or None
             return None
@@ -307,8 +308,10 @@ class TelegramClient:
         Without dates: fast get_chat_history_count (1 API call).
         With dates: raw MTProto messages.Search with min_date/max_date (1 API call).
         """
-        if from_date and to_date:
-            return await self.get_date_range_count(chat_id, from_date, to_date)
+        if from_date or to_date:
+            effective_from = from_date or datetime(2000, 1, 1)
+            effective_to = to_date or datetime.now()
+            return await self.get_date_range_count(chat_id, effective_from, effective_to)
         return await self.get_chat_messages_count(chat_id)
 
     @staticmethod
@@ -326,15 +329,73 @@ class TelegramClient:
             "description": getattr(chat, "description", "") or "",
         }
 
+    async def _resolve_numeric_chat_id(
+        self, chat_id: int
+    ) -> tuple[bool, Optional[dict], Optional[str]]:
+        """
+        Resolve a numeric chat_id that is not in the Pyrogram local peer cache.
+
+        Strategy:
+          1. Sync dialog list (get_dialogs) — works if worker is a member of the chat.
+          2. Raw MTProto channels.GetChannels with access_hash=0 — works for public
+             channels even when the worker is not a member.
+
+        Returns the same (is_accessible, chat_info, error_reason) tuple as verify_and_get_info.
+        """
+        logger.warning(f"Chat {chat_id} not in cache. Syncing dialog list and retrying...")
+        try:
+            async for _ in self.client.get_dialogs():
+                pass
+            chat = await self.client.get_chat(chat_id)
+            logger.info(f"Successfully resolved chat {chat_id} after cache sync")
+            return (True, self._build_chat_info(chat), None)
+
+        except Exception as retry_error:
+            logger.error(f"Cache sync retry failed for chat {chat_id}: {retry_error}")
+            # Последний fallback: raw MTProto с access_hash=0 для публичных каналов.
+            # Telegram принимает access_hash=0 для публичных сущностей и возвращает
+            # реальный access_hash, который Pyrogram кэширует локально.
+            if chat_id < -1000000000000:
+                try:
+                    channel_id = abs(chat_id) - 1000000000000
+                    logger.warning(
+                        f"Trying raw MTProto access_hash=0 for channel {channel_id}..."
+                    )
+                    await self.client.invoke(
+                        functions.channels.GetChannels(
+                            id=[raw_types.InputChannel(
+                                channel_id=channel_id, access_hash=0
+                            )]
+                        )
+                    )
+                    chat = await self.client.get_chat(chat_id)
+                    logger.info(f"Resolved public channel {chat_id} via raw MTProto")
+                    return (True, self._build_chat_info(chat), None)
+                except ChannelPrivate:
+                    logger.error(f"❌ Channel {chat_id} is private (raw MTProto)")
+                    return (False, None, "CHANNEL_PRIVATE")
+                except Exception as raw_error:
+                    logger.error(
+                        f"Raw MTProto fallback failed for channel {chat_id}: {raw_error}"
+                    )
+            return (False, None, "CHAT_NOT_ACCESSIBLE")
+
     async def verify_and_get_info(self, chat_id: Union[int, str]) -> tuple[bool, Optional[dict], Optional[str]]:
         """
         Check access and get chat info in single API call.
 
-        FALLBACK CACHE SYNC: For numeric IDs, Pyrogram caches entity access_hash
+        FALLBACK 1 — CACHE SYNC: For numeric IDs, Pyrogram caches entity access_hash
         locally. If the ID isn't cached, get_chat() fails with PeerIdInvalidError.
         Solution: call get_dialogs() to sync the cache, then retry.
         For string usernames this fallback is skipped — Pyrogram resolves them
         via contacts.resolveUsername API directly.
+
+        FALLBACK 2 — RAW MTPROTO (публичные каналы по числовому ID из picker):
+        Когда picker передаёт числовой ID (-100...) публичного канала,
+        воркер не состоит в нём и get_dialogs() не помогает.
+        Telegram принимает channels.GetChannels с access_hash=0 для публичных
+        сущностей и возвращает реальный access_hash, который Pyrogram кэширует.
+        После этого get_chat() работает без проблем.
 
         Args:
             chat_id: Telegram chat ID or username
@@ -362,24 +423,24 @@ class TelegramClient:
                 return (False, None, "USERNAME_NOT_FOUND")
 
             # Numeric ID not in cache — sync dialogs and retry (only for numeric IDs)
-            if isinstance(chat_id, int) and (
-                "Could not find the input entity" in error_str
-                or "PeerIdInvalid" in error_str
-            ):
-                logger.warning(
-                    f"Chat {chat_id} not in cache. Syncing dialog list and retrying..."
-                )
-                try:
-                    await self.client.get_dialogs()
-                    chat = await self.client.get_chat(chat_id)
-                    logger.info(f"Successfully resolved chat {chat_id} after cache sync")
-                    return (True, self._build_chat_info(chat), None)
-
-                except Exception as retry_error:
-                    logger.error(f"Cache sync retry failed for chat {chat_id}: {retry_error}")
-                    return (False, None, "CHAT_NOT_ACCESSIBLE")
+            if isinstance(chat_id, int) and isinstance(e, PeerIdInvalid):
+                return await self._resolve_numeric_chat_id(chat_id)
 
             return (False, None, "CHAT_NOT_ACCESSIBLE")
+
+        except ValueError as e:
+            # Pyrogram raises ValueError("Peer id invalid: ...") when the peer is not
+            # in the local session cache — before making any API call.
+            # This is distinct from the BadRequest/PeerIdInvalid API error path above.
+            error_str = str(e)
+            if isinstance(chat_id, int) and "Peer id invalid" in error_str:
+                logger.warning(
+                    f"Chat {chat_id} not in Pyrogram cache (ValueError). "
+                    f"Attempting cache sync + raw MTProto fallback..."
+                )
+                return await self._resolve_numeric_chat_id(chat_id)
+            logger.error(f"ValueError accessing chat {chat_id}: {error_str}")
+            return (False, None, "UNKNOWN")
 
         except ChannelPrivate:
             logger.error(f"❌ Channel {chat_id} is private")

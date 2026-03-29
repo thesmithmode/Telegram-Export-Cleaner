@@ -7,6 +7,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
+import org.telegram.telegrambots.meta.api.methods.groupadministration.GetChat;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText;
 import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
@@ -21,6 +22,10 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.Keyboard
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
+import org.springframework.scheduling.annotation.Scheduled;
+
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
@@ -75,6 +80,7 @@ public class ExportBot extends TelegramLongPollingBot {
     static final String CB_BACK_TO_MAIN = "back_main";
     static final String CB_BACK_TO_DATE_CHOICE = "back_date_choice";
     static final String CB_BACK_TO_FROM_DATE = "back_from_date";
+    static final String CB_CANCEL_EXPORT = "cancel_export";
 
     private final String botUsername;
     private final ExportJobProducer jobProducer;
@@ -182,6 +188,22 @@ public class ExportBot extends TelegramLongPollingBot {
     private void handleExportDirect(long chatId, long userId, String input) {
         UserSession session = getSession(userId);
 
+        // Проверяем активный экспорт ДО выбора дат
+        String activeTaskId = jobProducer.getActiveExport(userId);
+        if (activeTaskId != null) {
+            String text = "⏳ У вас уже есть активный экспорт (" + activeTaskId
+                    + ").\nДождитесь его завершения или отмените.";
+            InlineKeyboardMarkup cancelKeyboard = InlineKeyboardMarkup.builder()
+                    .keyboardRow(List.of(
+                            InlineKeyboardButton.builder()
+                                    .text("❌ Отменить текущий экспорт")
+                                    .callbackData(CB_CANCEL_EXPORT)
+                                    .build()))
+                    .build();
+            sendWithInlineKeyboard(chatId, text, cancelKeyboard);
+            return;
+        }
+
         try {
             String username = extractUsername(input);
             if (username != null) {
@@ -209,11 +231,43 @@ public class ExportBot extends TelegramLongPollingBot {
      * Обрабатывает выбор чата из нативного Telegram picker.
      */
     private void handleChatShared(long chatId, long userId, ChatShared chatShared) {
+        // Проверяем активный экспорт ДО начала wizard
+        String activeTaskId = jobProducer.getActiveExport(userId);
+        if (activeTaskId != null) {
+            String text = "⏳ У вас уже есть активный экспорт (" + activeTaskId
+                    + ").\nДождитесь его завершения или отмените.";
+            InlineKeyboardMarkup cancelKeyboard = InlineKeyboardMarkup.builder()
+                    .keyboardRow(List.of(
+                            InlineKeyboardButton.builder()
+                                    .text("❌ Отменить текущий экспорт")
+                                    .callbackData(CB_CANCEL_EXPORT)
+                                    .build()))
+                    .build();
+            sendWithInlineKeyboard(chatId, text, cancelKeyboard);
+            return;
+        }
+
         long sharedChatId = chatShared.getChatId();
         UserSession session = getSession(userId);
 
-        session.setChatId(sharedChatId);
-        session.setChatDisplay(String.valueOf(sharedChatId));
+        // Для публичных каналов получаем username через Bot API getChat,
+        // чтобы воркер мог разрезолвить канал без членства.
+        Object targetId = sharedChatId;
+        String displayName = String.valueOf(sharedChatId);
+        try {
+            org.telegram.telegrambots.meta.api.objects.Chat fullChat =
+                    execute(new GetChat(String.valueOf(sharedChatId)));
+            String username = fullChat.getUserName();
+            if (username != null && !username.isBlank()) {
+                targetId = username;
+                displayName = "@" + username;
+            }
+        } catch (Exception e) {
+            log.warn("Не удалось получить username для чата {}: {}", sharedChatId, e.getMessage());
+        }
+
+        session.setChatId(targetId);
+        session.setChatDisplay(displayName);
         session.setFromDate(null);
         session.setToDate(null);
         session.setState(UserSession.State.AWAITING_DATE_CHOICE);
@@ -287,6 +341,12 @@ public class ExportBot extends TelegramLongPollingBot {
                         + "\nНапример: 01.01.2024",
                         buildFromDateKeyboard());
             }
+            case CB_CANCEL_EXPORT -> {
+                jobProducer.cancelExport(userId);
+                editMessage(chatId, messageId,
+                        "🛑 Отмена запрошена. Уже скачанные сообщения сохранены в кэш.",
+                        null);
+            }
             default -> log.warn("Неизвестный callback: {}", data);
         }
     }
@@ -338,6 +398,27 @@ public class ExportBot extends TelegramLongPollingBot {
      */
     private void startExport(long chatId, long userId, int editMessageId) {
         UserSession session = getSession(userId);
+
+        // Проверяем, нет ли активного экспорта
+        String activeTaskId = jobProducer.getActiveExport(userId);
+        if (activeTaskId != null) {
+            String text = "⏳ У вас уже есть активный экспорт (" + activeTaskId
+                    + ").\nДождитесь его завершения или отмените.";
+            InlineKeyboardMarkup cancelKeyboard = InlineKeyboardMarkup.builder()
+                    .keyboardRow(List.of(
+                            InlineKeyboardButton.builder()
+                                    .text("❌ Отменить текущий экспорт")
+                                    .callbackData(CB_CANCEL_EXPORT)
+                                    .build()))
+                    .build();
+            if (editMessageId > 0) {
+                editMessage(chatId, editMessageId, text, cancelKeyboard);
+            } else {
+                sendWithInlineKeyboard(chatId, text, cancelKeyboard);
+            }
+            return;
+        }
+
         String taskId;
         Object targetChatId = session.getChatId();
 
@@ -349,6 +430,11 @@ public class ExportBot extends TelegramLongPollingBot {
                 taskId = jobProducer.enqueue(userId, chatId, (Long) targetChatId,
                         session.getFromDate(), session.getToDate());
             }
+        } catch (IllegalStateException e) {
+            // Экспорт уже активен — race condition побеждён на уровне SET NX
+            log.warn("Попытка дублирующего экспорта от пользователя {}: {}", userId, e.getMessage());
+            sendText(chatId, "⏳ У вас уже есть активный экспорт. Дождитесь его завершения или отмените.");
+            return;
         } catch (Exception e) {
             log.error("Ошибка при постановке задачи в очередь: {}", e.getMessage(), e);
             sendText(chatId, "Произошла ошибка при добавлении задачи. Попробуйте позже.");
@@ -357,15 +443,37 @@ public class ExportBot extends TelegramLongPollingBot {
         }
 
         String dateInfo = buildDateInfoText(session);
-        String resultText = String.format(
-                "⏳ Задача принята!\n\nID: %s\nЧат: %s%s\n\n"
-                + "Когда воркер обработает — вы получите файл здесь.",
-                taskId, session.getChatDisplay(), dateInfo);
 
-        if (editMessageId > 0) {
-            editMessage(chatId, editMessageId, resultText, null);
+        long queueLength = jobProducer.getQueueLength();
+        String queueInfo;
+        if (queueLength <= 1) {
+            queueInfo = "\n\n⚙️ Задача поставлена в работу, ожидайте...";
         } else {
-            sendText(chatId, resultText);
+            long position = queueLength;
+            queueInfo = String.format("\n\n📋 Вы в очереди: позиция %d\nВпереди %d задач(и)", position, position - 1);
+        }
+
+        String resultText = String.format(
+                "⏳ Задача принята!\n\nID: %s\nЧат: %s%s%s",
+                taskId, session.getChatDisplay(), dateInfo, queueInfo);
+
+        InlineKeyboardMarkup cancelKeyboard = InlineKeyboardMarkup.builder()
+                .keyboardRow(List.of(
+                        InlineKeyboardButton.builder()
+                                .text("❌ Отменить экспорт")
+                                .callbackData(CB_CANCEL_EXPORT)
+                                .build()))
+                .build();
+
+        int sentMsgId;
+        if (editMessageId > 0) {
+            editMessage(chatId, editMessageId, resultText, cancelKeyboard);
+            sentMsgId = editMessageId;
+        } else {
+            sentMsgId = sendWithInlineKeyboardGetId(chatId, resultText, cancelKeyboard);
+        }
+        if (sentMsgId > 0) {
+            jobProducer.storeQueueMsgId(taskId, chatId, sentMsgId);
         }
 
         log.info("Пользователь {} запросил экспорт чата {}, taskId={}, from={}, to={}",
@@ -484,7 +592,24 @@ public class ExportBot extends TelegramLongPollingBot {
     // === Helpers ===
 
     private UserSession getSession(long userId) {
-        return sessions.computeIfAbsent(userId, k -> new UserSession());
+        UserSession session = sessions.computeIfAbsent(userId, k -> new UserSession());
+        session.touch();
+        return session;
+    }
+
+    /**
+     * Вытесняет сессии, к которым не обращались более 2 часов.
+     * Запускается каждые 30 минут, предотвращает утечку памяти при большом числе пользователей.
+     */
+    @Scheduled(fixedDelay = 30 * 60 * 1000)
+    public void evictStaleSessions() {
+        Instant threshold = Instant.now().minus(Duration.ofHours(2));
+        int before = sessions.size();
+        sessions.entrySet().removeIf(e -> e.getValue().getLastAccess().isBefore(threshold));
+        int removed = before - sessions.size();
+        if (removed > 0) {
+            log.info("Вытеснено {} неактивных сессий (осталось: {})", removed, sessions.size());
+        }
     }
 
     /**
@@ -540,6 +665,20 @@ public class ExportBot extends TelegramLongPollingBot {
             sb.append(" — До: сегодня");
         }
         return sb.toString();
+    }
+
+    private int sendWithInlineKeyboardGetId(long chatId, String text, InlineKeyboardMarkup keyboard) {
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+        message.setText(text);
+        message.setReplyMarkup(keyboard);
+        try {
+            Message sent = execute(message);
+            return sent != null ? sent.getMessageId() : 0;
+        } catch (TelegramApiException e) {
+            log.error("Не удалось отправить сообщение с кнопками в chat {}: {}", chatId, e.getMessage());
+            return 0;
+        }
     }
 
     private void sendText(long chatId, String text) {
