@@ -450,6 +450,50 @@ class TestSendFileToUserSplit:
                         mock_notify.assert_called_once()
 
 
+class TestBuildFilename:
+    """Test filename generation from chat title and dates."""
+
+    def test_full_export_with_title(self):
+        """Chat title with no dates → title_all.txt."""
+        result = JavaBotClient._build_filename("Pavel Durov")
+        assert result == "Pavel_Durov_all.txt"
+
+    def test_date_range_export(self):
+        """Chat title with date range."""
+        result = JavaBotClient._build_filename(
+            "Pavel Durov", "2025-01-01T00:00:00", "2025-12-31T23:59:59"
+        )
+        assert result == "Pavel_Durov_2025-01-01_2025-12-31.txt"
+
+    def test_no_title_fallback(self):
+        """No title → export_all.txt."""
+        result = JavaBotClient._build_filename(None)
+        assert result == "export_all.txt"
+
+    def test_from_date_only(self):
+        """Only from_date."""
+        result = JavaBotClient._build_filename("Chat", "2025-06-01T00:00:00")
+        assert result == "Chat_from_2025-06-01.txt"
+
+    def test_to_date_only(self):
+        """Only to_date."""
+        result = JavaBotClient._build_filename("Chat", None, "2025-06-01T00:00:00")
+        assert result == "Chat_to_2025-06-01.txt"
+
+    def test_sanitize_special_chars(self):
+        """Special characters removed from filename."""
+        result = JavaBotClient._build_filename("Chat/Name: (test)")
+        assert "/" not in result
+        assert ":" not in result
+
+    def test_sanitize_long_title(self):
+        """Long title truncated."""
+        long_title = "A" * 200
+        result = JavaBotClient._build_filename(long_title)
+        # Base name limited to 80 chars + _all.txt
+        assert len(result) <= 90
+
+
 class TestEntityTransformation:
     """Test text entity transformation from Bot API to Desktop export format."""
 
