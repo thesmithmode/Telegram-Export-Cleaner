@@ -218,11 +218,15 @@ class ExportWorker:
                 return True
 
             # Send results to Java API, deliver cleaned text to user
+            chat_title = chat_info.get('title') or chat_info.get('username') if chat_info else None
             success = await self.java_client.send_response(
                 task_id=job.task_id,
                 status="completed",
                 messages=messages,
                 user_chat_id=job.user_chat_id,
+                chat_title=chat_title,
+                from_date=job.from_date,
+                to_date=job.to_date,
             )
 
             if success:
@@ -419,8 +423,33 @@ class ExportWorker:
                 await self.message_cache.store_messages(job.chat_id, gap_msgs)
                 fresh_messages.extend(gap_msgs)
 
-        # Retrieve all from cache
-        cached_messages = await self.message_cache.get_messages(job.chat_id, full_min, full_max)
+        # Step 3: fetch messages OLDER than cache minimum (full export only)
+        if not job.limit or job.limit <= 0:
+            cache_min_id = min(r[0] for r in cached_ranges)
+            if cache_min_id > 1:
+                older_msgs: list[ExportedMessage] = []
+                try:
+                    async for msg in self.telegram_client.get_chat_history(
+                        chat_id=job.chat_id,
+                        limit=0,
+                        offset_id=cache_min_id,
+                        min_id=0,
+                    ):
+                        older_msgs.append(msg)
+                        fetched_count += 1
+                        if tracker:
+                            await tracker.track(fetched_count)
+                except Exception as e:
+                    logger.warning(f"Failed fetching older messages below cache min {cache_min_id}: {e}")
+
+                if older_msgs:
+                    logger.info(f"  Fetched {len(older_msgs)} older messages below cache min {cache_min_id}")
+                    await self.message_cache.store_messages(job.chat_id, older_msgs)
+                    fresh_messages.extend(older_msgs)
+
+        # Retrieve all from cache (use ID 0 as lower bound to include everything)
+        actual_min = 0 if (not job.limit or job.limit <= 0) else full_min
+        cached_messages = await self.message_cache.get_messages(job.chat_id, actual_min, full_max)
         messages = self.message_cache.merge_and_sort(cached_messages, fresh_messages)
         logger.info(f"  Total after cache merge: {len(messages)} messages")
 
