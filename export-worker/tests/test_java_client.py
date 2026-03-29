@@ -334,6 +334,122 @@ class TestJavaClientNotifications:
                 assert "test_1" in str(call_args)
 
 
+class TestSplitTextBySize:
+    """Test file splitting for large exports."""
+
+    def test_small_text_single_part(self):
+        """Text under limit stays as single part."""
+        text = "Hello\nWorld\n"
+        parts = JavaBotClient._split_text_by_size(text, max_bytes=1000)
+        assert len(parts) == 1
+        assert parts[0] == "Hello\nWorld\n"
+
+    def test_split_on_line_boundaries(self):
+        """Split respects line boundaries."""
+        # Each line ~10 bytes
+        lines = [f"Line {i:04d}" for i in range(100)]
+        text = "\n".join(lines)
+        # Max 50 bytes per part → ~5 lines per part
+        parts = JavaBotClient._split_text_by_size(text, max_bytes=50)
+        assert len(parts) > 1
+        # Reassembled text matches original
+        reassembled = "\n".join(parts)
+        assert reassembled == text
+
+    def test_empty_text(self):
+        """Empty text returns single empty part."""
+        parts = JavaBotClient._split_text_by_size("", max_bytes=100)
+        assert len(parts) == 1
+
+    def test_single_long_line_exceeds_limit(self):
+        """A single line longer than limit still gets included."""
+        text = "A" * 200
+        parts = JavaBotClient._split_text_by_size(text, max_bytes=100)
+        # Single line can't be split, so it goes into one part
+        assert len(parts) == 1
+        assert parts[0] == text
+
+    def test_exact_boundary(self):
+        """Lines exactly at boundary don't create empty parts."""
+        text = "12345\n12345\n12345"  # 3 lines, ~6 bytes each
+        parts = JavaBotClient._split_text_by_size(text, max_bytes=12)
+        assert all(len(p) > 0 for p in parts)
+        assert "\n".join(parts) == text
+
+    def test_utf8_multibyte_characters(self):
+        """Split correctly handles UTF-8 multibyte (Russian text)."""
+        # "Привет" = 12 bytes in UTF-8
+        lines = ["Привет"] * 10
+        text = "\n".join(lines)
+        parts = JavaBotClient._split_text_by_size(text, max_bytes=30)
+        assert len(parts) > 1
+        reassembled = "\n".join(parts)
+        assert reassembled == text
+
+
+@pytest.mark.asyncio
+class TestSendFileToUserSplit:
+    """Test file delivery with splitting."""
+
+    async def test_send_small_file_no_split(self):
+        """Small file sent as single document."""
+        with patch('java_client.settings') as mock_settings:
+            mock_settings.TELEGRAM_BOT_TOKEN = "test_token"
+            with patch('java_client.httpx.AsyncClient') as mock_client_class:
+                mock_response = AsyncMock()
+                mock_response.status_code = 200
+                mock_client = AsyncMock()
+                mock_client.post = AsyncMock(return_value=mock_response)
+                mock_client_class.return_value = mock_client
+
+                client = JavaBotClient()
+                result = await client._send_file_to_user(123, "task_1", "small text")
+
+                assert result is True
+                assert mock_client.post.call_count == 1
+
+    async def test_send_large_file_splits(self):
+        """File > 45MB is split into multiple parts."""
+        with patch('java_client.settings') as mock_settings:
+            mock_settings.TELEGRAM_BOT_TOKEN = "test_token"
+            with patch('java_client.httpx.AsyncClient') as mock_client_class:
+                mock_response = AsyncMock()
+                mock_response.status_code = 200
+                mock_client = AsyncMock()
+                mock_client.post = AsyncMock(return_value=mock_response)
+                mock_client_class.return_value = mock_client
+
+                client = JavaBotClient()
+                # Create text > 45MB
+                line = "A" * 1000 + "\n"
+                big_text = line * 50000  # ~50MB
+                result = await client._send_file_to_user(123, "task_1", big_text)
+
+                assert result is True
+                assert mock_client.post.call_count >= 2  # At least 2 parts
+
+    async def test_send_response_returns_false_on_delivery_failure(self):
+        """send_response returns False if file delivery fails."""
+        messages = [
+            ExportedMessage(id=1, type="message", date="2025-01-01T00:00:00", text="Test")
+        ]
+        with patch('java_client.settings'):
+            with patch.object(JavaBotClient, '_upload_to_java', new_callable=AsyncMock) as mock_upload:
+                with patch.object(JavaBotClient, '_send_file_to_user', new_callable=AsyncMock) as mock_send:
+                    with patch.object(JavaBotClient, '_notify_user_failure', new_callable=AsyncMock) as mock_notify:
+                        mock_upload.return_value = "cleaned text"
+                        mock_send.return_value = False  # Delivery failed
+
+                        client = JavaBotClient()
+                        result = await client.send_response(
+                            task_id="test_1", status="completed",
+                            messages=messages, user_chat_id=123
+                        )
+
+                        assert result is False
+                        mock_notify.assert_called_once()
+
+
 class TestEntityTransformation:
     """Test text entity transformation from Bot API to Desktop export format."""
 
