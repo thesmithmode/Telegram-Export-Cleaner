@@ -17,6 +17,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 from pyrogram import Client, types as pyrogram_types
+from pyrogram.raw import functions, types as raw_types
 from pyrogram.errors import (
     FloodWait, Unauthorized, BadRequest, ChannelPrivate, ChatAdminRequired,
     UserDeactivated, AuthKeyUnregistered, SessionExpired, PeerFlood,
@@ -244,6 +245,71 @@ class TelegramClient:
         except Exception as e:
             logger.error(f"❌ Error fetching history for chat {chat_id}: {e}", exc_info=True)
             raise
+
+    async def get_chat_messages_count(self, chat_id: Union[int, str]) -> Optional[int]:
+        """Get total message count in a chat. Returns None on failure."""
+        try:
+            count = await self.client.get_chat_history_count(chat_id)
+            return count if count > 0 else None
+        except Exception as e:
+            logger.warning(f"Could not get message count for chat {chat_id}: {e}")
+            return None
+
+    async def get_date_range_count(
+        self,
+        chat_id: Union[int, str],
+        from_date: datetime,
+        to_date: datetime,
+    ) -> Optional[int]:
+        """
+        Get message count in a date range via raw MTProto messages.Search.
+
+        Uses min_date/max_date with limit=1 to get count in single API call.
+        Returns None on failure.
+        """
+        try:
+            peer = await self.client.resolve_peer(chat_id)
+            result = await self.client.invoke(
+                functions.messages.Search(
+                    peer=peer,
+                    q="",
+                    filter=raw_types.InputMessagesFilterEmpty(),
+                    min_date=int(from_date.timestamp()),
+                    max_date=int(to_date.timestamp()),
+                    offset_id=0,
+                    add_offset=0,
+                    limit=1,
+                    max_id=0,
+                    min_id=0,
+                    hash=0,
+                )
+            )
+            count = getattr(result, "count", None)
+            if count is not None and count > 0:
+                return count
+            # ChannelMessages/Messages without count — count messages list
+            if hasattr(result, "messages"):
+                return len(result.messages) or None
+            return None
+        except Exception as e:
+            logger.warning(f"Could not get date range count for chat {chat_id}: {e}")
+            return None
+
+    async def get_messages_count(
+        self,
+        chat_id: Union[int, str],
+        from_date: Optional[datetime] = None,
+        to_date: Optional[datetime] = None,
+    ) -> Optional[int]:
+        """
+        Get message count — universal method.
+
+        Without dates: fast get_chat_history_count (1 API call).
+        With dates: raw MTProto messages.Search with min_date/max_date (1 API call).
+        """
+        if from_date and to_date:
+            return await self.get_date_range_count(chat_id, from_date, to_date)
+        return await self.get_chat_messages_count(chat_id)
 
     @staticmethod
     def _build_chat_info(chat) -> dict:
