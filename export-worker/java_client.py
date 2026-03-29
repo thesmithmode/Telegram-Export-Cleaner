@@ -14,6 +14,7 @@ Java API endpoints used:
 import json
 import logging
 import asyncio
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -44,6 +45,9 @@ class JavaBotClient:
         error: Optional[str] = None,
         error_code: Optional[str] = None,
         user_chat_id: Optional[int] = None,
+        chat_title: Optional[str] = None,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
     ) -> bool:
         """
         Process export result:
@@ -85,7 +89,10 @@ class JavaBotClient:
 
         # Deliver cleaned text to user via Telegram Bot API
         if user_chat_id and self.bot_token:
-            sent = await self._send_file_to_user(user_chat_id, task_id, cleaned_text)
+            filename = self._build_filename(chat_title, from_date, to_date)
+            sent = await self._send_file_to_user(
+                user_chat_id, task_id, cleaned_text, filename=filename
+            )
             if not sent:
                 await self._notify_user_failure(
                     user_chat_id, task_id,
@@ -135,6 +142,41 @@ class JavaBotClient:
             "message_count": len(messages),
             "messages": transformed_messages,
         }
+
+    @staticmethod
+    def _sanitize_filename(name: str) -> str:
+        """Sanitize string for use as filename."""
+        # Replace spaces/special chars with underscores
+        name = re.sub(r'[^\w\s\-.]', '', name)
+        name = re.sub(r'\s+', '_', name.strip())
+        # Limit length
+        return name[:80] if name else "export"
+
+    @staticmethod
+    def _build_filename(
+        chat_title: Optional[str] = None,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+    ) -> str:
+        """Build descriptive filename from chat title and date range.
+
+        Examples:
+            Pavel_Durov_all.txt
+            Pavel_Durov_2025-01-01_2025-12-31.txt
+        """
+        base = JavaBotClient._sanitize_filename(chat_title) if chat_title else "export"
+
+        if from_date and to_date:
+            # Extract YYYY-MM-DD part
+            f = from_date[:10]
+            t = to_date[:10]
+            return f"{base}_{f}_{t}.txt"
+        elif from_date:
+            return f"{base}_from_{from_date[:10]}.txt"
+        elif to_date:
+            return f"{base}_to_{to_date[:10]}.txt"
+        else:
+            return f"{base}_all.txt"
 
     @staticmethod
     def _transform_entities(text: str, entities: list[dict]) -> list[dict]:
@@ -270,20 +312,23 @@ class JavaBotClient:
     MAX_FILE_SIZE_BYTES = 45 * 1024 * 1024
 
     async def _send_file_to_user(
-        self, user_chat_id: int, task_id: str, cleaned_text: str
+        self, user_chat_id: int, task_id: str, cleaned_text: str,
+        filename: Optional[str] = None,
     ) -> bool:
         """Send cleaned text as .txt file(s) to user via Telegram Bot API.
 
         If the file exceeds 45MB, splits into multiple parts by lines.
         """
+        if not filename:
+            filename = f"export_{task_id}.txt"
         text_bytes = cleaned_text.encode("utf-8")
         file_size = len(text_bytes)
 
         if file_size <= self.MAX_FILE_SIZE_BYTES:
             return await self._send_single_file(
                 user_chat_id, task_id, text_bytes,
-                f"export_{task_id}.txt",
-                f"✅ Экспорт завершён ({task_id})",
+                filename,
+                "✅ Экспорт завершён",
             )
 
         # Split into parts
@@ -292,13 +337,14 @@ class JavaBotClient:
         )
         parts = self._split_text_by_size(cleaned_text, self.MAX_FILE_SIZE_BYTES)
         total_parts = len(parts)
+        base_name = filename.rsplit(".", 1)[0]
 
         for i, part in enumerate(parts, 1):
             part_bytes = part.encode("utf-8")
-            filename = f"export_{task_id}_part{i}.txt"
+            part_filename = f"{base_name}_part{i}.txt"
             caption = f"✅ Экспорт завершён — часть {i}/{total_parts}"
             success = await self._send_single_file(
-                user_chat_id, task_id, part_bytes, filename, caption
+                user_chat_id, task_id, part_bytes, part_filename, caption
             )
             if not success:
                 logger.error(f"Failed to send part {i}/{total_parts}")
