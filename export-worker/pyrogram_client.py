@@ -307,8 +307,10 @@ class TelegramClient:
         Without dates: fast get_chat_history_count (1 API call).
         With dates: raw MTProto messages.Search with min_date/max_date (1 API call).
         """
-        if from_date and to_date:
-            return await self.get_date_range_count(chat_id, from_date, to_date)
+        if from_date or to_date:
+            effective_from = from_date or datetime(2000, 1, 1)
+            effective_to = to_date or datetime.now()
+            return await self.get_date_range_count(chat_id, effective_from, effective_to)
         return await self.get_chat_messages_count(chat_id)
 
     @staticmethod
