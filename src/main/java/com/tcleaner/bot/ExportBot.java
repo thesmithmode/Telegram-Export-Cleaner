@@ -183,6 +183,22 @@ public class ExportBot extends TelegramLongPollingBot {
     private void handleExportDirect(long chatId, long userId, String input) {
         UserSession session = getSession(userId);
 
+        // Проверяем активный экспорт ДО выбора дат
+        String activeTaskId = jobProducer.getActiveExport(userId);
+        if (activeTaskId != null) {
+            String text = "⏳ У вас уже есть активный экспорт (" + activeTaskId
+                    + ").\nДождитесь его завершения или отмените.";
+            InlineKeyboardMarkup cancelKeyboard = InlineKeyboardMarkup.builder()
+                    .keyboardRow(List.of(
+                            InlineKeyboardButton.builder()
+                                    .text("❌ Отменить текущий экспорт")
+                                    .callbackData(CB_CANCEL_EXPORT)
+                                    .build()))
+                    .build();
+            sendWithInlineKeyboard(chatId, text, cancelKeyboard);
+            return;
+        }
+
         try {
             String username = extractUsername(input);
             if (username != null) {
@@ -210,6 +226,22 @@ public class ExportBot extends TelegramLongPollingBot {
      * Обрабатывает выбор чата из нативного Telegram picker.
      */
     private void handleChatShared(long chatId, long userId, ChatShared chatShared) {
+        // Проверяем активный экспорт ДО начала wizard
+        String activeTaskId = jobProducer.getActiveExport(userId);
+        if (activeTaskId != null) {
+            String text = "⏳ У вас уже есть активный экспорт (" + activeTaskId
+                    + ").\nДождитесь его завершения или отмените.";
+            InlineKeyboardMarkup cancelKeyboard = InlineKeyboardMarkup.builder()
+                    .keyboardRow(List.of(
+                            InlineKeyboardButton.builder()
+                                    .text("❌ Отменить текущий экспорт")
+                                    .callbackData(CB_CANCEL_EXPORT)
+                                    .build()))
+                    .build();
+            sendWithInlineKeyboard(chatId, text, cancelKeyboard);
+            return;
+        }
+
         long sharedChatId = chatShared.getChatId();
         UserSession session = getSession(userId);
 
