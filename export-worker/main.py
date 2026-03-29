@@ -370,20 +370,6 @@ class ExportWorker:
         if job.limit and job.limit > 0 and (total is None or job.limit < total):
             total = job.limit
 
-        # If total exceeds cache capacity, skip cache and fetch directly
-        effective_total = total or 0
-        if effective_total > self.message_cache.max_messages_per_chat:
-            logger.info(
-                f"  Chat {job.chat_id} has {effective_total} messages, "
-                f"exceeds cache cap {self.message_cache.max_messages_per_chat}. "
-                f"Fetching directly."
-            )
-            messages = await self._fetch_all_messages(job)
-            if messages:
-                await self.message_cache.store_messages(job.chat_id, messages)
-                await self.message_cache.evict_if_needed()
-            return messages
-
         # Прогресс-трекер
         tracker = self._create_tracker(job)
         if tracker:
