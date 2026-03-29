@@ -10,11 +10,18 @@ import org.springframework.stereotype.Service;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Кладёт задачи на экспорт в Redis-очередь.
  *
  * <p>Python-воркер читает очередь через BLPOP и обрабатывает задачи по одной.</p>
+ *
+ * <h3>Защита от параллельных экспортов</h3>
+ * <p>Каждый вызов {@code enqueue()} атомарно резервирует слот через Redis SET NX EX
+ * (ключ {@code active_export:<userId>}). Если ключ уже существует —
+ * метод бросает {@link IllegalStateException} вместо добавления дублирующей задачи.
+ * Это устраняет race condition между {@link #getActiveExport(long)} и {@code enqueue()}.</p>
  *
  * <p>Формат JSON-задачи:</p>
  * <pre>
@@ -57,11 +64,15 @@ public class ExportJobProducer {
     /**
      * Добавляет задачу на экспорт в конец Redis-очереди (RPUSH).
      *
+     * <p>Атомарно резервирует слот через Redis SET NX перед добавлением в очередь.
+     * Если у пользователя уже есть активный экспорт — бросает {@link IllegalStateException}.</p>
+     *
      * @param userId     Telegram user ID пользователя, сделавшего запрос
      * @param userChatId Telegram chat ID — куда вернуть результат (обычно равен userId)
      * @param chatId     ID чата, историю которого нужно экспортировать
      * @return task_id созданной задачи
-     * @throws RuntimeException если не удалось сериализовать задачу или записать в Redis
+     * @throws IllegalStateException если у пользователя уже есть активный экспорт
+     * @throws RuntimeException      если не удалось сериализовать задачу или записать в Redis
      */
     public String enqueue(long userId, long userChatId, long chatId) {
         return enqueue(userId, userChatId, (Object) chatId, null, null);
@@ -108,6 +119,10 @@ public class ExportJobProducer {
         return enqueue(userId, userChatId, (Object) chatIdentifier, fromDate, toDate);
     }
 
+    private static final String ACTIVE_EXPORT_PREFIX = "active_export:";
+    private static final String CANCEL_EXPORT_PREFIX = "cancel_export:";
+    private static final long ACTIVE_EXPORT_TTL_MINUTES = 60;
+
     private String enqueue(long userId, long userChatId, Object chatId, String fromDate, String toDate) {
         String taskId = "export_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
 
@@ -127,12 +142,107 @@ public class ExportJobProducer {
 
         try {
             String json = objectMapper.writeValueAsString(job);
+            // Атомарно помечаем экспорт активным (SET NX EX).
+            // Если ключ уже существует — другой запрос уже прошёл, бросаем исключение.
+            Boolean reserved = redis.opsForValue().setIfAbsent(
+                    ACTIVE_EXPORT_PREFIX + userId, taskId,
+                    ACTIVE_EXPORT_TTL_MINUTES, TimeUnit.MINUTES
+            );
+            if (!Boolean.TRUE.equals(reserved)) {
+                String existing = redis.opsForValue().get(ACTIVE_EXPORT_PREFIX + userId);
+                throw new IllegalStateException("Экспорт уже активен: " + existing);
+            }
             redis.opsForList().rightPush(queueName, json);
             log.info("Задача {} добавлена в очередь {} (chat_id={})", taskId, queueName, chatId);
             return taskId;
+        } catch (IllegalStateException e) {
+            throw e;
         } catch (Exception e) {
             log.error("Не удалось добавить задачу в очередь: {}", e.getMessage(), e);
             throw new RuntimeException("Ошибка добавления задачи в очередь", e);
+        }
+    }
+
+    /**
+     * Возвращает текущую длину очереди (количество ожидающих задач).
+     *
+     * @return количество задач в очереди
+     */
+    public long getQueueLength() {
+        Long size = redis.opsForList().size(queueName);
+        return size != null ? size : 0L;
+    }
+
+    /**
+     * Сохраняет message_id сообщения о позиции в очереди для последующего редактирования воркером.
+     *
+     * @param taskId     ID задачи
+     * @param userChatId Telegram chat ID пользователя
+     * @param msgId      ID отправленного сообщения с позицией
+     */
+    public void storeQueueMsgId(String taskId, long userChatId, int msgId) {
+        redis.opsForValue().set(
+                "queue_msg:" + taskId,
+                userChatId + ":" + msgId,
+                2, TimeUnit.HOURS
+        );
+    }
+
+    /**
+     * Проверяет, есть ли у пользователя активный экспорт.
+     * Автоматически очищает протухшие ключи: если задача уже completed/failed
+     * или отсутствует в очереди и не в processing — считается завершённой.
+     *
+     * @return task_id активного экспорта или null
+     */
+    public String getActiveExport(long userId) {
+        String taskId = redis.opsForValue().get(ACTIVE_EXPORT_PREFIX + userId);
+        if (taskId == null) {
+            return null;
+        }
+
+        // Проверяем, реально ли задача ещё активна
+        Boolean isProcessing = redis.hasKey("job:processing:" + taskId);
+        Boolean isCompleted = redis.hasKey("job:completed:" + taskId);
+        Boolean isFailed = redis.hasKey("job:failed:" + taskId);
+
+        if (Boolean.TRUE.equals(isCompleted) || Boolean.TRUE.equals(isFailed)) {
+            // Задача завершена, но ключ не был очищен — чистим
+            log.info("Очищаю протухший active_export для user {} (task {} завершена)", userId, taskId);
+            redis.delete(ACTIVE_EXPORT_PREFIX + userId);
+            return null;
+        }
+
+        if (Boolean.TRUE.equals(isProcessing)) {
+            // Задача в обработке — действительно активна
+            return taskId;
+        }
+
+        // Задача не в processing, не completed, не failed — проверяем очередь
+        Long queueSize = redis.opsForList().size(queueName);
+        if (queueSize != null && queueSize > 0) {
+            // В очереди есть задачи — возможно наша ждёт
+            return taskId;
+        }
+
+        // Нигде не найдена — протухший ключ
+        log.info("Очищаю протухший active_export для user {} (task {} не найдена)", userId, taskId);
+        redis.delete(ACTIVE_EXPORT_PREFIX + userId);
+        return null;
+    }
+
+    /**
+     * Отправляет сигнал отмены экспорта.
+     */
+    public void cancelExport(long userId) {
+        String taskId = getActiveExport(userId);
+        if (taskId != null) {
+            redis.opsForValue().set(
+                    CANCEL_EXPORT_PREFIX + taskId, "1",
+                    ACTIVE_EXPORT_TTL_MINUTES, TimeUnit.MINUTES
+            );
+            redis.delete(ACTIVE_EXPORT_PREFIX + userId);
+            log.info("Запрошена отмена экспорта {} для пользователя {}", taskId, userId);
         }
     }
 }

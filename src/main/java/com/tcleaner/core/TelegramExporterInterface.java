@@ -8,10 +8,8 @@ import java.util.List;
 /**
  * Интерфейс для экспортера Telegram чата.
  *
- * <p>Определяет минимальный контракт для обработки файла экспорта Telegram.
- * Используется в {@link TelegramController} — только методы processFile.</p>
- *
- * <p>Для записи результата в файл см. {@link TelegramFileExporterInterface}.</p>
+ * <p>Определяет контракт для обработки файла экспорта Telegram.
+ * Используется в {@link TelegramController}.</p>
  *
  * @see TelegramExporter
  */

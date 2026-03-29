@@ -53,8 +53,8 @@ class Settings(BaseSettings):
 
     # Message Cache
     CACHE_ENABLED: bool = True
-    CACHE_TTL_SECONDS: int = 7 * 86400  # 7 days
-    CACHE_MAX_MEMORY_MB: int = 120
+    CACHE_TTL_SECONDS: int = 30 * 86400  # 30 days
+    CACHE_MAX_MEMORY_MB: int = 6000
     CACHE_MAX_MESSAGES_PER_CHAT: int = 100_000
 
     # Logging
