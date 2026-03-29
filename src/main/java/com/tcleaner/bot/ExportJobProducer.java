@@ -148,11 +148,45 @@ public class ExportJobProducer {
 
     /**
      * Проверяет, есть ли у пользователя активный экспорт.
+     * Автоматически очищает протухшие ключи: если задача уже completed/failed
+     * или отсутствует в очереди и не в processing — считается завершённой.
      *
      * @return task_id активного экспорта или null
      */
     public String getActiveExport(long userId) {
-        return redis.opsForValue().get(ACTIVE_EXPORT_PREFIX + userId);
+        String taskId = redis.opsForValue().get(ACTIVE_EXPORT_PREFIX + userId);
+        if (taskId == null) {
+            return null;
+        }
+
+        // Проверяем, реально ли задача ещё активна
+        Boolean isProcessing = redis.hasKey("job:processing:" + taskId);
+        Boolean isCompleted = redis.hasKey("job:completed:" + taskId);
+        Boolean isFailed = redis.hasKey("job:failed:" + taskId);
+
+        if (Boolean.TRUE.equals(isCompleted) || Boolean.TRUE.equals(isFailed)) {
+            // Задача завершена, но ключ не был очищен — чистим
+            log.info("Очищаю протухший active_export для user {} (task {} завершена)", userId, taskId);
+            redis.delete(ACTIVE_EXPORT_PREFIX + userId);
+            return null;
+        }
+
+        if (Boolean.TRUE.equals(isProcessing)) {
+            // Задача в обработке — действительно активна
+            return taskId;
+        }
+
+        // Задача не в processing, не completed, не failed — проверяем очередь
+        Long queueSize = redis.opsForList().size(queueName);
+        if (queueSize != null && queueSize > 0) {
+            // В очереди есть задачи — возможно наша ждёт
+            return taskId;
+        }
+
+        // Нигде не найдена — протухший ключ
+        log.info("Очищаю протухший active_export для user {} (task {} не найдена)", userId, taskId);
+        redis.delete(ACTIVE_EXPORT_PREFIX + userId);
+        return null;
     }
 
     /**
