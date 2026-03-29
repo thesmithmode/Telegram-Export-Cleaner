@@ -401,3 +401,140 @@ class TestExportRequestIntegration:
         assert isinstance(job.user_id, int)
         assert isinstance(job.chat_id, int)
         assert isinstance(job.limit, int)
+
+@pytest.mark.asyncio
+class TestGetPendingJobs:
+    """Tests for get_pending_jobs."""
+
+    async def test_returns_parsed_jobs(self):
+        """Should return list of ExportRequest from queue without removing them."""
+        job1 = ExportRequest(task_id="t1", user_id=1, chat_id=100)
+        job2 = ExportRequest(task_id="t2", user_id=2, chat_id=200)
+
+        with patch('queue_consumer.settings') as mock_settings:
+            mock_settings.REDIS_HOST = "redis"
+            mock_settings.REDIS_PORT = 6379
+            mock_settings.REDIS_DB = 0
+            mock_settings.REDIS_PASSWORD = None
+            mock_settings.REDIS_QUEUE_NAME = "telegram_export"
+
+            consumer = QueueConsumer()
+            mock_client = AsyncMock()
+            mock_client.lrange = AsyncMock(return_value=[
+                json.dumps(job1.model_dump()),
+                json.dumps(job2.model_dump()),
+            ])
+            consumer.redis_client = mock_client
+
+            result = await consumer.get_pending_jobs()
+
+            assert len(result) == 2
+            assert result[0].task_id == "t1"
+            assert result[1].task_id == "t2"
+            mock_client.lrange.assert_called_once_with("telegram_export", 0, -1)
+
+    async def test_returns_empty_on_no_client(self):
+        """Should return empty list if not connected."""
+        with patch('queue_consumer.settings') as mock_settings:
+            mock_settings.REDIS_HOST = "redis"
+            mock_settings.REDIS_PORT = 6379
+            mock_settings.REDIS_DB = 0
+            mock_settings.REDIS_PASSWORD = None
+            mock_settings.REDIS_QUEUE_NAME = "telegram_export"
+
+            consumer = QueueConsumer()
+            # redis_client is None by default
+            result = await consumer.get_pending_jobs()
+            assert result == []
+
+    async def test_skips_invalid_json(self):
+        """Should skip items that fail to parse."""
+        valid_job = ExportRequest(task_id="t1", user_id=1, chat_id=100)
+
+        with patch('queue_consumer.settings') as mock_settings:
+            mock_settings.REDIS_HOST = "redis"
+            mock_settings.REDIS_PORT = 6379
+            mock_settings.REDIS_DB = 0
+            mock_settings.REDIS_PASSWORD = None
+            mock_settings.REDIS_QUEUE_NAME = "telegram_export"
+
+            consumer = QueueConsumer()
+            mock_client = AsyncMock()
+            mock_client.lrange = AsyncMock(return_value=[
+                "not valid json {",
+                json.dumps(valid_job.model_dump()),
+            ])
+            consumer.redis_client = mock_client
+
+            result = await consumer.get_pending_jobs()
+
+            assert len(result) == 1
+            assert result[0].task_id == "t1"
+
+
+@pytest.mark.asyncio
+class TestDeadLetterQueue:
+    """Tests for Dead Letter Queue — невалидные задачи перекладываются в DLQ."""
+
+    def _make_consumer(self, mock_client):
+        with patch('queue_consumer.settings') as mock_settings:
+            mock_settings.REDIS_HOST = "redis"
+            mock_settings.REDIS_PORT = 6379
+            mock_settings.REDIS_DB = 0
+            mock_settings.REDIS_PASSWORD = None
+            mock_settings.REDIS_QUEUE_NAME = "telegram_export"
+            consumer = QueueConsumer()
+        consumer.redis_client = mock_client
+        return consumer
+
+    async def test_invalid_json_moves_to_dlq(self):
+        """Невалидный JSON из очереди должен уходить в DLQ, а не теряться."""
+        mock_client = AsyncMock()
+        mock_client.blpop = AsyncMock(return_value=("telegram_export", "not valid json {"))
+        mock_client.rpush = AsyncMock(return_value=1)
+
+        consumer = self._make_consumer(mock_client)
+        result = await consumer.get_job()
+
+        assert result is None
+        mock_client.rpush.assert_called_once()
+        dlq_call = mock_client.rpush.call_args
+        assert "telegram_export_dead" in dlq_call[0]
+        dlq_entry = json.loads(dlq_call[0][1])
+        assert "JSON parse error" in dlq_entry["reason"]
+        assert dlq_entry["raw"] == "not valid json {"
+
+    async def test_validation_error_moves_to_dlq(self):
+        """ExportRequest с невалидными данными должен уходить в DLQ."""
+        invalid_job = json.dumps({"task_id": "t1"})  # Missing user_id, chat_id
+        mock_client = AsyncMock()
+        mock_client.blpop = AsyncMock(return_value=("telegram_export", invalid_job))
+        mock_client.rpush = AsyncMock(return_value=1)
+
+        consumer = self._make_consumer(mock_client)
+        result = await consumer.get_job()
+
+        assert result is None
+        mock_client.rpush.assert_called_once()
+        dlq_call = mock_client.rpush.call_args
+        assert "telegram_export_dead" in dlq_call[0]
+        dlq_entry = json.loads(dlq_call[0][1])
+        assert "Validation error" in dlq_entry["reason"]
+
+    async def test_valid_job_does_not_go_to_dlq(self):
+        """Валидная задача не должна попадать в DLQ."""
+        valid_job = json.dumps({
+            "task_id": "export_ok",
+            "user_id": 123,
+            "chat_id": -1001234567890
+        })
+        mock_client = AsyncMock()
+        mock_client.blpop = AsyncMock(return_value=("telegram_export", valid_job))
+        mock_client.rpush = AsyncMock()
+
+        consumer = self._make_consumer(mock_client)
+        result = await consumer.get_job()
+
+        assert result is not None
+        assert result.task_id == "export_ok"
+        mock_client.rpush.assert_not_called()

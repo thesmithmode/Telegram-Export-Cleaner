@@ -52,9 +52,37 @@ class ExportWorker:
         self.queue_consumer: Optional[QueueConsumer] = None
         self.java_client: Optional[JavaBotClient] = None
         self.message_cache: Optional[MessageCache] = None
+        self.control_redis: Optional[aioredis.Redis] = None
         self.running = False
         self.jobs_processed = 0
         self.jobs_failed = 0
+
+    async def _check_cancel_and_save(
+        self, job: ExportRequest, messages: list[ExportedMessage], count: int
+    ) -> bool:
+        """Check cancellation every 1000 messages, save to cache if cancelled. Returns True if cancelled."""
+        if count % 1000 != 0:
+            return False
+        if not await self.is_cancelled(job.task_id):
+            return False
+        logger.info(f"🛑 Export {job.task_id} cancelled by user at {count} messages")
+        if self.message_cache and self.message_cache.enabled and messages:
+            await self.message_cache.store_messages(job.chat_id, messages)
+            logger.info(f"  Saved {count} messages to cache before cancel")
+        await self.clear_active_export(job.user_id)
+        return True
+
+    async def is_cancelled(self, task_id: str) -> bool:
+        """Check if export was cancelled by user."""
+        if not self.control_redis:
+            return False
+        val = await self.control_redis.get(f"cancel_export:{task_id}")
+        return val is not None
+
+    async def clear_active_export(self, user_id: int):
+        """Clear active export marker for user."""
+        if self.control_redis:
+            await self.control_redis.delete(f"active_export:{user_id}")
 
     def _create_tracker(self, job: ExportRequest) -> Optional[ProgressTracker]:
         """Create a ProgressTracker if user notifications are possible."""
@@ -109,7 +137,16 @@ class ExportWorker:
             logger.info("3️⃣  Connecting to Java Bot API...")
             self.java_client = await create_java_client()
 
-            # 4. Initialize message cache
+            # 4. Initialize control Redis (for cancel/active export)
+            self.control_redis = aioredis.Redis(
+                host=settings.REDIS_HOST,
+                port=settings.REDIS_PORT,
+                db=settings.REDIS_DB,
+                password=settings.REDIS_PASSWORD,
+                decode_responses=True,
+            )
+
+            # 5. Initialize message cache
             logger.info("4️⃣  Initializing message cache...")
             cache_redis = aioredis.Redis(
                 host=settings.REDIS_HOST,
@@ -188,10 +225,20 @@ class ExportWorker:
                     user_chat_id=job.user_chat_id,
                 )
                 await self.queue_consumer.mark_job_failed(job.task_id, error)
+                await self.clear_active_export(job.user_id)
                 return True
 
             if chat_info:
                 logger.info(f"  Chat: {chat_info.get('title')} (type: {chat_info.get('type')})")
+                # Нормализуем chat_id до канонического числового ID.
+                # Пикер может передать числовой ID (-100...), ссылка — username.
+                # Оба варианта должны использовать один и тот же ключ кэша.
+                canonical_id = chat_info.get("id")
+                if canonical_id and canonical_id != job.chat_id:
+                    logger.info(
+                        f"  Normalizing chat_id: {job.chat_id!r} → {canonical_id}"
+                    )
+                    job = job.model_copy(update={"chat_id": canonical_id})
 
             # --- Cache-aware export ---
             # Both full and date-range exports use cache:
@@ -235,6 +282,7 @@ class ExportWorker:
                 self.jobs_processed += 1
                 self.log_memory_usage("JOB_DONE")
                 await self.cleanup_temp_files(job.task_id)
+                await self.clear_active_export(job.user_id)
                 return True
 
             else:
@@ -244,6 +292,7 @@ class ExportWorker:
                 self.jobs_failed += 1
                 self.log_memory_usage("JOB_FAILED")
                 await self.cleanup_temp_files(job.task_id)
+                await self.clear_active_export(job.user_id)
                 return True
 
         except Exception as e:
@@ -257,7 +306,33 @@ class ExportWorker:
             self.jobs_failed += 1
             self.log_memory_usage("JOB_ERROR")
             await self.cleanup_temp_files(job.task_id)
+            await self.clear_active_export(job.user_id)
             return True
+
+    @staticmethod
+    def _compute_cached_ranges(
+        from_date: str, to_date: str, missing: list[tuple[str, str]]
+    ) -> list[tuple[str, str]]:
+        """Compute cached date ranges = [from_date, to_date] minus missing gaps."""
+        from datetime import date as date_cls, timedelta
+        if not missing:
+            return [(from_date, to_date)]
+
+        cached = []
+        current = date_cls.fromisoformat(from_date)
+        req_end = date_cls.fromisoformat(to_date)
+
+        for gap_from, gap_to in sorted(missing):
+            gap_start = date_cls.fromisoformat(gap_from)
+            gap_end = date_cls.fromisoformat(gap_to)
+            if gap_start > current:
+                cached.append((current.isoformat(), (gap_start - timedelta(days=1)).isoformat()))
+            current = gap_end + timedelta(days=1)
+
+        if current <= req_end:
+            cached.append((current.isoformat(), req_end.isoformat()))
+
+        return cached
 
     async def _export_with_date_cache(self, job: ExportRequest) -> Optional[list[ExportedMessage]]:
         """
@@ -271,12 +346,11 @@ class ExportWorker:
         from_date_str = job.from_date[:10] if job.from_date else None
         to_date_str = job.to_date[:10] if job.to_date else None
 
-        if not from_date_str or not to_date_str:
-            # Partial date filter — fetch all, write-through to cache
-            messages = await self._fetch_all_messages(job)
-            if messages:
-                await self.message_cache.store_messages(job.chat_id, messages)
-            return messages
+        # Fill defaults for partial date filters
+        if not from_date_str and to_date_str:
+            from_date_str = "2000-01-01"
+        if from_date_str and not to_date_str:
+            to_date_str = datetime.now().strftime("%Y-%m-%d")
 
         # Find which date ranges we're missing
         missing = await self.message_cache.get_missing_date_ranges(
@@ -291,9 +365,23 @@ class ExportWorker:
             )
             return self.message_cache.merge_and_sort(cached, [])
 
-        logger.info(f"  Date cache partial hit for {job.chat_id}: missing={missing}")
+        # Вычисляем закэшированные диапазоны (всё что НЕ в missing)
+        cached_date_ranges = self._compute_cached_ranges(
+            from_date_str, to_date_str, missing
+        )
+        logger.info(f"  Date cache partial hit for {job.chat_id}: "
+                     f"missing={missing}, cached={cached_date_ranges}")
 
-        # Получаем total для прогресса
+        # Читаем закэшированные сообщения (только нужные диапазоны, не всё)
+        cached_messages: list[ExportedMessage] = []
+        for c_from, c_to in cached_date_ranges:
+            chunk = await self.message_cache.get_messages_by_date(
+                job.chat_id, c_from, c_to
+            )
+            cached_messages.extend(chunk)
+        logger.info(f"  Loaded {len(cached_messages)} messages from cache")
+
+        # Получаем total для прогресса (только для запрошенного диапазона)
         from_dt = datetime.fromisoformat(from_date_str + "T00:00:00")
         to_dt = datetime.fromisoformat(to_date_str + "T23:59:59")
         total = await self.telegram_client.get_messages_count(
@@ -307,7 +395,7 @@ class ExportWorker:
 
         # Fetch each missing date range from Telegram
         fresh_messages: list[ExportedMessage] = []
-        fetched_count = 0
+        fetched_count = len(cached_messages)  # Считаем cached в прогресс
         for gap_from, gap_to in missing:
             gap_from_dt = datetime.fromisoformat(gap_from + "T00:00:00")
             gap_to_dt = datetime.fromisoformat(gap_to + "T23:59:59")
@@ -324,6 +412,8 @@ class ExportWorker:
                 ):
                     gap_msgs.append(msg)
                     fetched_count += 1
+                    if await self._check_cancel_and_save(job, gap_msgs, fetched_count):
+                        return None
                     if tracker:
                         await tracker.track(fetched_count)
             except Exception as e:
@@ -334,11 +424,8 @@ class ExportWorker:
                 await self.message_cache.store_messages(job.chat_id, gap_msgs)
                 fresh_messages.extend(gap_msgs)
 
-        # Retrieve all messages for the full requested date range from cache
-        cached = await self.message_cache.get_messages_by_date(
-            job.chat_id, from_date_str, to_date_str
-        )
-        messages = self.message_cache.merge_and_sort(cached, fresh_messages)
+        # Merge cached + fresh (не перечитываем из Redis — всё уже в памяти)
+        messages = self.message_cache.merge_and_sort(cached_messages, fresh_messages)
         logger.info(f"  Date-range export complete: {len(messages)} messages")
 
         await self.message_cache.evict_if_needed()
@@ -388,6 +475,8 @@ class ExportWorker:
             ):
                 fresh_messages.append(msg)
                 fetched_count += 1
+                if await self._check_cancel_and_save(job, fresh_messages, fetched_count):
+                    return None
                 if tracker:
                     await tracker.track(fetched_count)
         except Exception as e:
@@ -413,6 +502,8 @@ class ExportWorker:
                 ):
                     gap_msgs.append(msg)
                     fetched_count += 1
+                    if await self._check_cancel_and_save(job, gap_msgs, fetched_count):
+                        return None
                     if tracker:
                         await tracker.track(fetched_count)
             except Exception as e:
@@ -437,6 +528,8 @@ class ExportWorker:
                     ):
                         older_msgs.append(msg)
                         fetched_count += 1
+                        if await self._check_cancel_and_save(job, older_msgs, fetched_count):
+                            return None
                         if tracker:
                             await tracker.track(fetched_count)
                 except Exception as e:
@@ -502,6 +595,9 @@ class ExportWorker:
                 messages.append(message)
                 count = len(messages)
 
+                if await self._check_cancel_and_save(job, messages, count):
+                    return None
+
                 if tracker:
                     await tracker.track(count)
                 elif count % 10000 == 0:
@@ -523,6 +619,37 @@ class ExportWorker:
 
         return messages
 
+    async def _update_all_queue_positions(self, current_task_id: str) -> None:
+        """
+        Notify each queued user of their updated position.
+
+        Called right before processing a job: the job being processed gets
+        position=0 ("started"), the rest get their 1-based queue position.
+        """
+        if not self.control_redis or not self.java_client:
+            return
+        try:
+            pending = await self.queue_consumer.get_pending_jobs()
+            total = len(pending)
+            # Notify the job that is about to start
+            val = await self.control_redis.get(f"queue_msg:{current_task_id}")
+            if val:
+                user_chat_id_str, msg_id_str = val.split(":", 1)
+                await self.java_client.update_queue_position(
+                    int(user_chat_id_str), int(msg_id_str), 0, total
+                )
+            # Notify remaining queued jobs of their new position
+            for i, job in enumerate(pending):
+                val = await self.control_redis.get(f"queue_msg:{job.task_id}")
+                if not val:
+                    continue
+                user_chat_id_str, msg_id_str = val.split(":", 1)
+                await self.java_client.update_queue_position(
+                    int(user_chat_id_str), int(msg_id_str), i + 1, total
+                )
+        except Exception as e:
+            logger.warning(f"Could not update queue positions: {e}")
+
     async def run(self):
         """
         Main worker loop.
@@ -542,6 +669,7 @@ class ExportWorker:
                     job = await self.queue_consumer.get_job()
 
                     if job:
+                        await self._update_all_queue_positions(job.task_id)
                         await self.process_job(job)
                     else:
                         # No job - should not happen with BLPOP timeout=0
@@ -576,6 +704,9 @@ class ExportWorker:
 
         if self.java_client:
             await self.java_client.aclose()
+
+        if self.control_redis:
+            await self.control_redis.aclose()
 
         if self.message_cache and self.message_cache.redis:
             await self.message_cache.redis.aclose()
