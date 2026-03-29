@@ -12,6 +12,15 @@ import tempfile
 import os
 
 from models import ExportRequest, ExportResponse, ExportedMessage
+from java_client import ProgressTracker
+
+
+def _make_mock_java_client():
+    """Create AsyncMock java_client with working ProgressTracker support."""
+    client = AsyncMock()
+    client.send_progress_update = AsyncMock(return_value=12345)
+    client.create_progress_tracker = lambda uid, tid: ProgressTracker(client, uid, tid)
+    return client
 
 
 @pytest.mark.asyncio
@@ -38,7 +47,7 @@ class TestExportWorkerE2E:
             worker = ExportWorker()
             worker.telegram_client = AsyncMock()
             worker.queue_consumer = AsyncMock()
-            worker.java_client = AsyncMock()
+            worker.java_client = _make_mock_java_client()
 
             # Setup mock behavior
             worker.telegram_client.verify_and_get_info = AsyncMock(return_value=(
@@ -95,7 +104,7 @@ class TestExportWorkerE2E:
             worker = ExportWorker()
             worker.telegram_client = AsyncMock()
             worker.queue_consumer = AsyncMock()
-            worker.java_client = AsyncMock()
+            worker.java_client = _make_mock_java_client()
 
             # Setup: no access to chat
             worker.telegram_client.verify_and_get_info = AsyncMock(return_value=(False, None, "CHAT_NOT_ACCESSIBLE"))
@@ -128,7 +137,7 @@ class TestExportWorkerE2E:
             worker = ExportWorker()
             worker.telegram_client = AsyncMock()
             worker.queue_consumer = AsyncMock()
-            worker.java_client = AsyncMock()
+            worker.java_client = _make_mock_java_client()
 
             # Setup: access OK but export fails
             worker.telegram_client.verify_and_get_info = AsyncMock(return_value=(
@@ -182,7 +191,7 @@ class TestExportWorkerE2E:
             # Setup mocks for successful job
             worker.telegram_client = AsyncMock()
             worker.queue_consumer = AsyncMock()
-            worker.java_client = AsyncMock()
+            worker.java_client = _make_mock_java_client()
 
             worker.telegram_client.verify_and_get_info = AsyncMock(return_value=(
                 True,

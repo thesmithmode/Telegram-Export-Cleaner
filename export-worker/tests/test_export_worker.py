@@ -10,8 +10,17 @@ from unittest.mock import AsyncMock, MagicMock, patch, call
 from datetime import datetime
 
 from main import ExportWorker
+from java_client import ProgressTracker
 from message_cache import MessageCache
 from models import ExportRequest, ExportedMessage
+
+
+def _make_mock_java_client():
+    """Create AsyncMock java_client with working ProgressTracker support."""
+    client = AsyncMock()
+    client.send_progress_update = AsyncMock(return_value=12345)
+    client.create_progress_tracker = lambda uid, tid: ProgressTracker(client, uid, tid)
+    return client
 
 
 class TestExportWorkerInitialization:
@@ -69,7 +78,7 @@ class TestExportWorkerJobProcessing:
         worker = ExportWorker()
         worker.queue_consumer = AsyncMock()
         worker.telegram_client = AsyncMock()
-        worker.java_client = AsyncMock()
+        worker.java_client = _make_mock_java_client()
         worker.telegram_client.get_messages_count = AsyncMock(return_value=100)
         # Disabled cache — tests exercise direct Telegram fetch path
         worker.message_cache = MessageCache(
@@ -228,7 +237,7 @@ class TestExportWorkerProgressReporting:
         worker = ExportWorker()
         worker.queue_consumer = AsyncMock()
         worker.telegram_client = AsyncMock()
-        worker.java_client = AsyncMock()
+        worker.java_client = _make_mock_java_client()
         worker.telegram_client.get_messages_count = AsyncMock(return_value=100)
         worker.message_cache = MessageCache(
             redis_client=AsyncMock(),
@@ -326,7 +335,7 @@ class TestExportWorkerCleanup:
         worker.running = True
         worker.queue_consumer = AsyncMock()
         worker.telegram_client = AsyncMock()
-        worker.java_client = AsyncMock()
+        worker.java_client = _make_mock_java_client()
 
         await worker.cleanup()
 
@@ -365,7 +374,7 @@ class TestExportWorkerWithCache:
         worker = ExportWorker()
         worker.queue_consumer = AsyncMock()
         worker.telegram_client = AsyncMock()
-        worker.java_client = AsyncMock()
+        worker.java_client = _make_mock_java_client()
         worker.telegram_client.get_messages_count = AsyncMock(return_value=100)
         worker.message_cache = MessageCache(
             redis_client=redis_client,
@@ -478,7 +487,7 @@ class TestExportWorkerDateCache:
         worker = ExportWorker()
         worker.queue_consumer = AsyncMock()
         worker.telegram_client = AsyncMock()
-        worker.java_client = AsyncMock()
+        worker.java_client = _make_mock_java_client()
         worker.telegram_client.get_messages_count = AsyncMock(return_value=100)
         worker.message_cache = MessageCache(
             redis_client=redis_client,
