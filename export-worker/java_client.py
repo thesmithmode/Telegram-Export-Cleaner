@@ -14,6 +14,8 @@ Java API endpoints used:
 import json
 import logging
 import asyncio
+import re
+from datetime import datetime
 from typing import Optional
 
 import httpx
@@ -43,6 +45,9 @@ class JavaBotClient:
         error: Optional[str] = None,
         error_code: Optional[str] = None,
         user_chat_id: Optional[int] = None,
+        chat_title: Optional[str] = None,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
     ) -> bool:
         """
         Process export result:
@@ -84,7 +89,10 @@ class JavaBotClient:
 
         # Deliver cleaned text to user via Telegram Bot API
         if user_chat_id and self.bot_token:
-            sent = await self._send_file_to_user(user_chat_id, task_id, cleaned_text)
+            filename = self._build_filename(chat_title, from_date, to_date)
+            sent = await self._send_file_to_user(
+                user_chat_id, task_id, cleaned_text, filename=filename
+            )
             if not sent:
                 await self._notify_user_failure(
                     user_chat_id, task_id,
@@ -134,6 +142,41 @@ class JavaBotClient:
             "message_count": len(messages),
             "messages": transformed_messages,
         }
+
+    @staticmethod
+    def _sanitize_filename(name: str) -> str:
+        """Sanitize string for use as filename."""
+        # Replace spaces/special chars with underscores
+        name = re.sub(r'[^\w\s\-.]', '', name)
+        name = re.sub(r'\s+', '_', name.strip())
+        # Limit length
+        return name[:80] if name else "export"
+
+    @staticmethod
+    def _build_filename(
+        chat_title: Optional[str] = None,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+    ) -> str:
+        """Build descriptive filename from chat title and date range.
+
+        Examples:
+            Pavel_Durov_all.txt
+            Pavel_Durov_2025-01-01_2025-12-31.txt
+        """
+        base = JavaBotClient._sanitize_filename(chat_title) if chat_title else "export"
+
+        if from_date and to_date:
+            # Extract YYYY-MM-DD part
+            f = from_date[:10]
+            t = to_date[:10]
+            return f"{base}_{f}_{t}.txt"
+        elif from_date:
+            return f"{base}_from_{from_date[:10]}.txt"
+        elif to_date:
+            return f"{base}_to_{to_date[:10]}.txt"
+        else:
+            return f"{base}_all.txt"
 
     @staticmethod
     def _transform_entities(text: str, entities: list[dict]) -> list[dict]:
@@ -269,20 +312,23 @@ class JavaBotClient:
     MAX_FILE_SIZE_BYTES = 45 * 1024 * 1024
 
     async def _send_file_to_user(
-        self, user_chat_id: int, task_id: str, cleaned_text: str
+        self, user_chat_id: int, task_id: str, cleaned_text: str,
+        filename: Optional[str] = None,
     ) -> bool:
         """Send cleaned text as .txt file(s) to user via Telegram Bot API.
 
         If the file exceeds 45MB, splits into multiple parts by lines.
         """
+        if not filename:
+            filename = f"export_{task_id}.txt"
         text_bytes = cleaned_text.encode("utf-8")
         file_size = len(text_bytes)
 
         if file_size <= self.MAX_FILE_SIZE_BYTES:
             return await self._send_single_file(
                 user_chat_id, task_id, text_bytes,
-                f"export_{task_id}.txt",
-                f"✅ Экспорт завершён ({task_id})",
+                filename,
+                "✅ Экспорт завершён",
             )
 
         # Split into parts
@@ -291,13 +337,14 @@ class JavaBotClient:
         )
         parts = self._split_text_by_size(cleaned_text, self.MAX_FILE_SIZE_BYTES)
         total_parts = len(parts)
+        base_name = filename.rsplit(".", 1)[0]
 
         for i, part in enumerate(parts, 1):
             part_bytes = part.encode("utf-8")
-            filename = f"export_{task_id}_part{i}.txt"
+            part_filename = f"{base_name}_part{i}.txt"
             caption = f"✅ Экспорт завершён — часть {i}/{total_parts}"
             success = await self._send_single_file(
-                user_chat_id, task_id, part_bytes, filename, caption
+                user_chat_id, task_id, part_bytes, part_filename, caption
             )
             if not success:
                 logger.error(f"Failed to send part {i}/{total_parts}")
@@ -369,9 +416,10 @@ class JavaBotClient:
         total: Optional[int] = None,
         started: bool = False,
         elapsed_seconds: float = 0,
-    ) -> bool:
+        progress_message_id: Optional[int] = None,
+    ) -> Optional[int]:
         """
-        Send progress update to user during long export.
+        Send or edit progress update to user during long export.
 
         Args:
             user_chat_id: User's Telegram chat ID
@@ -380,15 +428,14 @@ class JavaBotClient:
             total: Total messages expected (if known)
             started: True if this is the initial "started" notification
             elapsed_seconds: Seconds elapsed since export start (for ETA)
+            progress_message_id: Message ID to edit (None = send new message)
 
         Returns:
-            True if message sent, False otherwise
+            Message ID on success (for subsequent edits), None on failure
         """
-        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-
         if started:
             if total:
-                text = f"⏳ Экспорт начался — будет обработано до {total} сообщений"
+                text = f"⏳ Экспорт начался — {total} сообщений"
             else:
                 text = "⏳ Экспорт начался, ожидайте..."
         elif total:
@@ -402,13 +449,31 @@ class JavaBotClient:
             text = f"📊 Экспортировано {message_count} сообщений..."
 
         try:
-            response = await self._http_client.post(
-                url, data={"chat_id": user_chat_id, "text": text}
-            )
-            return response.status_code == 200
+            if progress_message_id:
+                url = f"https://api.telegram.org/bot{self.bot_token}/editMessageText"
+                response = await self._http_client.post(
+                    url,
+                    data={
+                        "chat_id": user_chat_id,
+                        "message_id": progress_message_id,
+                        "text": text,
+                    },
+                )
+                if response.status_code == 200:
+                    return progress_message_id
+                return None
+            else:
+                url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+                response = await self._http_client.post(
+                    url, data={"chat_id": user_chat_id, "text": text}
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    return data.get("result", {}).get("message_id")
+                return None
         except Exception as e:
             logger.warning(f"Could not send progress update to user: {e}")
-            return False
+            return None
 
     @staticmethod
     def _build_progress_bar(percentage: int, width: int = 10) -> str:
@@ -427,6 +492,12 @@ class JavaBotClient:
             return f"{int(remaining)} сек"
         minutes = int(remaining) // 60
         return f"{minutes} мин"
+
+    def create_progress_tracker(
+        self, user_chat_id: int, task_id: str
+    ) -> "ProgressTracker":
+        """Create a ProgressTracker for a specific export job."""
+        return ProgressTracker(self, user_chat_id, task_id)
 
     async def _notify_user_failure(
         self, user_chat_id: int, task_id: str, error: str
@@ -456,6 +527,58 @@ class JavaBotClient:
         except Exception as e:
             logger.error(f"Failed to connect to Java API: {e}")
             return False
+
+
+class ProgressTracker:
+    """Tracks export progress and edits a single Telegram message.
+
+    Encapsulates message_id, total, timing, and milestone logic
+    so callers just call start() and track(count).
+    """
+
+    def __init__(self, client: JavaBotClient, user_chat_id: int, task_id: str):
+        self._client = client
+        self._user_chat_id = user_chat_id
+        self._task_id = task_id
+        self._message_id: Optional[int] = None
+        self._total: Optional[int] = None
+        self._last_reported_pct = 0
+        self._start_time: Optional[datetime] = None
+
+    async def start(self, total: Optional[int] = None) -> None:
+        """Send initial progress message and remember its ID."""
+        self._total = total
+        self._start_time = datetime.now()
+        self._last_reported_pct = 0
+        self._message_id = await self._client.send_progress_update(
+            user_chat_id=self._user_chat_id,
+            task_id=self._task_id,
+            message_count=0,
+            total=total,
+            started=True,
+        )
+
+    async def track(self, count: int) -> None:
+        """Report progress if a new 10% milestone is reached."""
+        if not self._total or self._total <= 0:
+            return
+        pct = count * 100 // self._total
+        milestone = (pct // 10) * 10
+        if milestone <= self._last_reported_pct or milestone >= 100:
+            return
+        self._last_reported_pct = milestone
+        elapsed = (datetime.now() - self._start_time).total_seconds() if self._start_time else 0
+        logger.info(f"  Progress: {count}/{self._total} ({milestone}%)")
+        result = await self._client.send_progress_update(
+            user_chat_id=self._user_chat_id,
+            task_id=self._task_id,
+            message_count=count,
+            total=self._total,
+            elapsed_seconds=elapsed,
+            progress_message_id=self._message_id,
+        )
+        if result:
+            self._message_id = result
 
 
 async def create_java_client() -> JavaBotClient:

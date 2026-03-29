@@ -125,14 +125,22 @@ class MessageCache:
 
         # Enforce per-chat cap: keep newest N messages
         count = await self.redis.zcard(msgs_key)
+        trimmed = False
         if count > self.max_messages_per_chat:
             trim_count = count - self.max_messages_per_chat
             await self.redis.zremrangebyrank(msgs_key, 0, trim_count - 1)
+            # Also trim the dates index to match
+            await self.redis.zremrangebyrank(dates_key, 0, trim_count - 1)
+            trimmed = True
 
         # Update ID ranges
         msg_ids = sorted(m.id for m in messages)
         new_range = [msg_ids[0], msg_ids[-1]]
         await self._add_range(chat_id, new_range)
+
+        # After trim, fix ranges to reflect actual min ID in cache
+        if trimmed:
+            await self._fix_ranges_after_trim(chat_id, msgs_key, dates_key)
 
         # Update date ranges
         dates = sorted(set(self._extract_date_str(m.date) for m in messages if m.date))
@@ -351,6 +359,48 @@ class MessageCache:
         return date_iso[:10]
 
     # --- Range management ---
+
+    async def _fix_ranges_after_trim(self, chat_id: Union[int, str], msgs_key: str, dates_key: str):
+        """After per-chat cap trim, update ranges to reflect actual cache content.
+
+        The trim removes oldest messages, so ranges must be corrected to start
+        from the actual minimum ID still in cache.
+        """
+        # Get actual min ID from sorted set (first element = lowest score = lowest ID)
+        lowest = await self.redis.zrange(msgs_key, 0, 0, withscores=True)
+        if not lowest:
+            return
+
+        actual_min_id = int(lowest[0][1])  # score = msg_id
+
+        # Get actual max ID
+        highest = await self.redis.zrange(msgs_key, -1, -1, withscores=True)
+        actual_max_id = int(highest[0][1]) if highest else actual_min_id
+
+        # Replace all ranges with single [actual_min, actual_max]
+        await self.redis.set(
+            self._ranges_key(chat_id),
+            json.dumps([[actual_min_id, actual_max_id]])
+        )
+
+        # Fix date ranges: get actual min/max dates from date index
+        earliest = await self.redis.zrange(dates_key, 0, 0, withscores=True)
+        latest = await self.redis.zrange(dates_key, -1, -1, withscores=True)
+        if earliest and latest:
+            from datetime import timezone
+            min_ts = earliest[0][1]
+            max_ts = latest[0][1]
+            min_date = datetime.fromtimestamp(min_ts, tz=timezone.utc).strftime("%Y-%m-%d")
+            max_date = datetime.fromtimestamp(max_ts, tz=timezone.utc).strftime("%Y-%m-%d")
+            await self.redis.set(
+                self._date_ranges_key(chat_id),
+                json.dumps([[min_date, max_date]])
+            )
+
+        logger.info(
+            f"Fixed ranges after trim for chat {chat_id}: "
+            f"IDs [{actual_min_id}, {actual_max_id}]"
+        )
 
     async def _add_range(self, chat_id: Union[int, str], new_range: List[int]):
         """Add a new [low, high] interval and merge overlapping/adjacent."""
