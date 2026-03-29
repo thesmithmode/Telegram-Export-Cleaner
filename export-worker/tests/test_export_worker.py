@@ -70,6 +70,7 @@ class TestExportWorkerJobProcessing:
         worker.queue_consumer = AsyncMock()
         worker.telegram_client = AsyncMock()
         worker.java_client = AsyncMock()
+        worker.telegram_client.get_messages_count = AsyncMock(return_value=100)
         # Disabled cache — tests exercise direct Telegram fetch path
         worker.message_cache = MessageCache(
             redis_client=AsyncMock(),
@@ -218,6 +219,103 @@ class TestExportWorkerJobProcessing:
         worker.queue_consumer.mark_job_failed.assert_called()
 
 
+class TestExportWorkerProgressReporting:
+    """Test progress reporting to user."""
+
+    @pytest.fixture
+    def worker(self):
+        """Create worker with mocked components."""
+        worker = ExportWorker()
+        worker.queue_consumer = AsyncMock()
+        worker.telegram_client = AsyncMock()
+        worker.java_client = AsyncMock()
+        worker.telegram_client.get_messages_count = AsyncMock(return_value=100)
+        worker.message_cache = MessageCache(
+            redis_client=AsyncMock(),
+            enabled=False,
+        )
+        return worker
+
+    @pytest.mark.asyncio
+    async def test_fetch_all_sends_started_with_total(self, worker):
+        """_fetch_all_messages sends started notification with total count."""
+        job = ExportRequest(
+            task_id="progress_1", user_id=1, user_chat_id=1,
+            chat_id=456, limit=0, offset_id=0,
+        )
+
+        async def mock_history(*args, **kwargs):
+            yield ExportedMessage(id=1, date="2025-01-01T00:00:00", text="A")
+
+        worker.telegram_client.get_chat_history = mock_history
+        worker.telegram_client.get_messages_count = AsyncMock(return_value=5000)
+        worker.java_client.send_response = AsyncMock(return_value=True)
+
+        await worker.process_job(job)
+
+        # Check started notification
+        calls = worker.java_client.send_progress_update.call_args_list
+        assert len(calls) >= 1
+        first_call = calls[0]
+        assert first_call.kwargs["started"] is True
+        assert first_call.kwargs["total"] == 5000
+
+    @pytest.mark.asyncio
+    async def test_fetch_all_sends_10pct_milestones(self, worker):
+        """_fetch_all_messages sends progress at every 10% milestone."""
+        job = ExportRequest(
+            task_id="progress_2", user_id=1, user_chat_id=1,
+            chat_id=456, limit=0, offset_id=0,
+        )
+
+        # 100 messages, total=100 → should fire at 10%, 20%, ... 90%
+        messages = [
+            ExportedMessage(id=i, date="2025-01-01T00:00:00", text=f"msg{i}")
+            for i in range(1, 101)
+        ]
+
+        async def mock_history(*args, **kwargs):
+            for msg in messages:
+                yield msg
+
+        worker.telegram_client.get_chat_history = mock_history
+        worker.telegram_client.get_messages_count = AsyncMock(return_value=100)
+        worker.java_client.send_response = AsyncMock(return_value=True)
+
+        await worker.process_job(job)
+
+        # started + 9 milestones (10%..90%)
+        progress_calls = worker.java_client.send_progress_update.call_args_list
+        assert len(progress_calls) == 10  # 1 started + 9 milestones
+
+    @pytest.mark.asyncio
+    async def test_process_job_exception_notifies_user(self, worker):
+        """Exception in process_job sends failure notification to user."""
+        job = ExportRequest(
+            task_id="error_1", user_id=1, user_chat_id=42,
+            chat_id=456, limit=0, offset_id=0,
+        )
+
+        worker.telegram_client.verify_and_get_info = AsyncMock(
+            return_value=(True, {"title": "Test", "type": "private"}, None)
+        )
+        # Make send_response raise to trigger except block
+        worker.java_client.send_response = AsyncMock(side_effect=RuntimeError("OOM"))
+
+        async def mock_history(*args, **kwargs):
+            yield ExportedMessage(id=1, date="2025-01-01T00:00:00", text="msg")
+
+        worker.telegram_client.get_chat_history = mock_history
+
+        result = await worker.process_job(job)
+
+        assert result is True
+        # User should be notified of error
+        worker.java_client._notify_user_failure.assert_called_once()
+        call_args = worker.java_client._notify_user_failure.call_args
+        assert call_args[0][0] == 42  # user_chat_id
+
+
 class TestExportWorkerCleanup:
     """Test cleanup logic."""
 
@@ -268,6 +366,7 @@ class TestExportWorkerWithCache:
         worker.queue_consumer = AsyncMock()
         worker.telegram_client = AsyncMock()
         worker.java_client = AsyncMock()
+        worker.telegram_client.get_messages_count = AsyncMock(return_value=100)
         worker.message_cache = MessageCache(
             redis_client=redis_client,
             ttl_seconds=3600,
@@ -380,6 +479,7 @@ class TestExportWorkerDateCache:
         worker.queue_consumer = AsyncMock()
         worker.telegram_client = AsyncMock()
         worker.java_client = AsyncMock()
+        worker.telegram_client.get_messages_count = AsyncMock(return_value=100)
         worker.message_cache = MessageCache(
             redis_client=redis_client,
             ttl_seconds=3600,
