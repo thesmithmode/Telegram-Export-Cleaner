@@ -30,7 +30,7 @@ import redis.asyncio as aioredis
 from config import settings
 from pyrogram_client import TelegramClient, create_client as create_telegram_client
 from queue_consumer import QueueConsumer, create_queue_consumer
-from java_client import JavaBotClient, create_java_client
+from java_client import JavaBotClient, ProgressTracker, create_java_client
 from message_cache import MessageCache
 from models import ExportRequest, ExportedMessage
 
@@ -55,6 +55,14 @@ class ExportWorker:
         self.running = False
         self.jobs_processed = 0
         self.jobs_failed = 0
+
+    def _create_tracker(self, job: ExportRequest) -> Optional[ProgressTracker]:
+        """Create a ProgressTracker if user notifications are possible."""
+        if job.user_chat_id and self.java_client:
+            return self.java_client.create_progress_tracker(
+                job.user_chat_id, job.task_id
+            )
+        return None
 
     def log_memory_usage(self, stage: str):
         """Log current memory usage for monitoring weak server resources."""
@@ -210,11 +218,15 @@ class ExportWorker:
                 return True
 
             # Send results to Java API, deliver cleaned text to user
+            chat_title = chat_info.get('title') or chat_info.get('username') if chat_info else None
             success = await self.java_client.send_response(
                 task_id=job.task_id,
                 status="completed",
                 messages=messages,
                 user_chat_id=job.user_chat_id,
+                chat_title=chat_title,
+                from_date=job.from_date,
+                to_date=job.to_date,
             )
 
             if success:
@@ -288,21 +300,14 @@ class ExportWorker:
             job.chat_id, from_dt, to_dt
         )
 
-        # Уведомляем юзера о старте с total
-        if job.user_chat_id and self.java_client:
-            await self.java_client.send_progress_update(
-                user_chat_id=job.user_chat_id,
-                task_id=job.task_id,
-                message_count=0,
-                total=total,
-                started=True,
-            )
+        # Прогресс-трекер
+        tracker = self._create_tracker(job)
+        if tracker:
+            await tracker.start(total)
 
         # Fetch each missing date range from Telegram
         fresh_messages: list[ExportedMessage] = []
         fetched_count = 0
-        last_reported_pct = 0
-        export_start = datetime.now()
         for gap_from, gap_to in missing:
             gap_from_dt = datetime.fromisoformat(gap_from + "T00:00:00")
             gap_to_dt = datetime.fromisoformat(gap_to + "T23:59:59")
@@ -319,20 +324,8 @@ class ExportWorker:
                 ):
                     gap_msgs.append(msg)
                     fetched_count += 1
-                    if total and total > 0:
-                        pct = fetched_count * 100 // total
-                        milestone = (pct // 10) * 10
-                        if milestone > last_reported_pct and milestone < 100:
-                            last_reported_pct = milestone
-                            logger.info(f"  Fetched {fetched_count}/{total} ({milestone}%)...")
-                            if job.user_chat_id and self.java_client:
-                                await self.java_client.send_progress_update(
-                                    user_chat_id=job.user_chat_id,
-                                    task_id=job.task_id,
-                                    message_count=fetched_count,
-                                    total=total,
-                                    elapsed_seconds=(datetime.now() - export_start).total_seconds(),
-                                )
+                    if tracker:
+                        await tracker.track(fetched_count)
             except Exception as e:
                 logger.warning(f"Failed fetching date gap [{gap_from} - {gap_to}]: {e}")
 
@@ -377,20 +370,27 @@ class ExportWorker:
         if job.limit and job.limit > 0 and (total is None or job.limit < total):
             total = job.limit
 
-        # Уведомляем юзера о старте
-        if job.user_chat_id and self.java_client:
-            await self.java_client.send_progress_update(
-                user_chat_id=job.user_chat_id,
-                task_id=job.task_id,
-                message_count=0,
-                total=total,
-                started=True,
+        # If total exceeds cache capacity, skip cache and fetch directly
+        effective_total = total or 0
+        if effective_total > self.message_cache.max_messages_per_chat:
+            logger.info(
+                f"  Chat {job.chat_id} has {effective_total} messages, "
+                f"exceeds cache cap {self.message_cache.max_messages_per_chat}. "
+                f"Fetching directly."
             )
+            messages = await self._fetch_all_messages(job)
+            if messages:
+                await self.message_cache.store_messages(job.chat_id, messages)
+                await self.message_cache.evict_if_needed()
+            return messages
+
+        # Прогресс-трекер
+        tracker = self._create_tracker(job)
+        if tracker:
+            await tracker.start(total)
 
         fresh_messages: list[ExportedMessage] = []
         fetched_count = 0
-        last_reported_pct = 0
-        export_start = datetime.now()
 
         # Step 1: fetch messages NEWER than cache
         try:
@@ -402,20 +402,8 @@ class ExportWorker:
             ):
                 fresh_messages.append(msg)
                 fetched_count += 1
-                if total and total > 0:
-                    pct = fetched_count * 100 // total
-                    milestone = (pct // 10) * 10
-                    if milestone > last_reported_pct and milestone < 100:
-                        last_reported_pct = milestone
-                        logger.info(f"  Fetched {fetched_count}/{total} ({milestone}%)...")
-                        if job.user_chat_id and self.java_client:
-                            await self.java_client.send_progress_update(
-                                user_chat_id=job.user_chat_id,
-                                task_id=job.task_id,
-                                message_count=fetched_count,
-                                total=total,
-                                elapsed_seconds=(datetime.now() - export_start).total_seconds(),
-                            )
+                if tracker:
+                    await tracker.track(fetched_count)
         except Exception as e:
             logger.warning(f"Failed fetching new messages above cache: {e}")
 
@@ -439,20 +427,8 @@ class ExportWorker:
                 ):
                     gap_msgs.append(msg)
                     fetched_count += 1
-                    if total and total > 0:
-                        pct = fetched_count * 100 // total
-                        milestone = (pct // 10) * 10
-                        if milestone > last_reported_pct and milestone < 100:
-                            last_reported_pct = milestone
-                            logger.info(f"  Fetched {fetched_count}/{total} ({milestone}%)...")
-                            if job.user_chat_id and self.java_client:
-                                await self.java_client.send_progress_update(
-                                    user_chat_id=job.user_chat_id,
-                                    task_id=job.task_id,
-                                    message_count=fetched_count,
-                                    total=total,
-                                    elapsed_seconds=(datetime.now() - export_start).total_seconds(),
-                                )
+                    if tracker:
+                        await tracker.track(fetched_count)
             except Exception as e:
                 logger.warning(f"Failed fetching gap [{gap_low}-{gap_high}]: {e}")
 
@@ -461,8 +437,33 @@ class ExportWorker:
                 await self.message_cache.store_messages(job.chat_id, gap_msgs)
                 fresh_messages.extend(gap_msgs)
 
-        # Retrieve all from cache
-        cached_messages = await self.message_cache.get_messages(job.chat_id, full_min, full_max)
+        # Step 3: fetch messages OLDER than cache minimum (full export only)
+        if not job.limit or job.limit <= 0:
+            cache_min_id = min(r[0] for r in cached_ranges)
+            if cache_min_id > 1:
+                older_msgs: list[ExportedMessage] = []
+                try:
+                    async for msg in self.telegram_client.get_chat_history(
+                        chat_id=job.chat_id,
+                        limit=0,
+                        offset_id=cache_min_id,
+                        min_id=0,
+                    ):
+                        older_msgs.append(msg)
+                        fetched_count += 1
+                        if tracker:
+                            await tracker.track(fetched_count)
+                except Exception as e:
+                    logger.warning(f"Failed fetching older messages below cache min {cache_min_id}: {e}")
+
+                if older_msgs:
+                    logger.info(f"  Fetched {len(older_msgs)} older messages below cache min {cache_min_id}")
+                    await self.message_cache.store_messages(job.chat_id, older_msgs)
+                    fresh_messages.extend(older_msgs)
+
+        # Retrieve all from cache (use ID 0 as lower bound to include everything)
+        actual_min = 0 if (not job.limit or job.limit <= 0) else full_min
+        cached_messages = await self.message_cache.get_messages(job.chat_id, actual_min, full_max)
         messages = self.message_cache.merge_and_sort(cached_messages, fresh_messages)
         logger.info(f"  Total after cache merge: {len(messages)} messages")
 
@@ -498,18 +499,10 @@ class ExportWorker:
         if job.limit and job.limit > 0 and (total is None or job.limit < total):
             total = job.limit
 
-        # Уведомляем юзера о старте с указанием total
-        if job.user_chat_id and self.java_client:
-            await self.java_client.send_progress_update(
-                user_chat_id=job.user_chat_id,
-                task_id=job.task_id,
-                message_count=0,
-                total=total,
-                started=True,
-            )
-
-        last_reported_pct = 0
-        export_start = datetime.now()
+        # Прогресс-трекер
+        tracker = self._create_tracker(job)
+        if tracker:
+            await tracker.start(total)
 
         try:
             async for message in self.telegram_client.get_chat_history(
@@ -523,25 +516,10 @@ class ExportWorker:
                 messages.append(message)
                 count = len(messages)
 
-                # Прогресс каждые 10%
-                if total and total > 0:
-                    pct = count * 100 // total
-                    milestone = (pct // 10) * 10
-                    if milestone > last_reported_pct and milestone < 100:
-                        last_reported_pct = milestone
-                        logger.info(f"  Exported {count}/{total} messages ({milestone}%)...")
-                        if job.user_chat_id and self.java_client:
-                            await self.java_client.send_progress_update(
-                                user_chat_id=job.user_chat_id,
-                                task_id=job.task_id,
-                                message_count=count,
-                                total=total,
-                                elapsed_seconds=(datetime.now() - export_start).total_seconds(),
-                            )
-                else:
-                    # Fallback: только логи, юзера не спамим
-                    if count % 10000 == 0:
-                        logger.info(f"  Exported {count} messages...")
+                if tracker:
+                    await tracker.track(count)
+                elif count % 10000 == 0:
+                    logger.info(f"  Exported {count} messages...")
 
         except Exception as e:
             error = f"Export failed: {str(e)}"

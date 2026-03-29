@@ -372,7 +372,6 @@ public class ExportBot extends TelegramLongPollingBot {
                 userId, session.getChatDisplay(), taskId, session.getFromDate(), session.getToDate());
 
         session.reset();
-        sendMainMenu(chatId, "Выберите следующий чат для экспорта:");
     }
 
     // === Keyboards ===
