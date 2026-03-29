@@ -84,6 +84,8 @@ class MessageCache:
 
     # --- Core API ---
 
+    STORE_BATCH_SIZE = 5000
+
     async def store_messages(
         self, chat_id: Union[int, str], messages: List[ExportedMessage]
     ) -> int:
@@ -95,31 +97,31 @@ class MessageCache:
         dates_key = self._dates_key(chat_id)
         meta_key = self._meta_key(chat_id)
 
-        # Add to sorted set: score=msg_id, value=msgpack bytes
-        # Also add to date index: score=unix_timestamp, value=msg_id
-        # First, remove existing entries for these msg_ids to avoid duplicates
-        # (ZADD treats different bytes as different members even with same score)
-        msg_ids = [msg.id for msg in messages]
-        pipe = self.redis.pipeline()
-        for msg_id in msg_ids:
-            pipe.zrangebyscore(msgs_key, msg_id, msg_id)
-        existing = await pipe.execute()
+        # Батчинг: разбиваем на чанки чтобы не убить Redis одним пайплайном
+        for i in range(0, len(messages), self.STORE_BATCH_SIZE):
+            batch = messages[i:i + self.STORE_BATCH_SIZE]
 
-        # Delete old entries for these IDs
-        pipe = self.redis.pipeline()
-        for old_entries in existing:
-            for entry in (old_entries or []):
-                pipe.zrem(msgs_key, entry)
-        await pipe.execute()
+            # Проверка дупликатов: получаем существующие записи по msg_id
+            pipe = self.redis.pipeline()
+            for msg in batch:
+                pipe.zrangebyscore(msgs_key, msg.id, msg.id)
+            existing = await pipe.execute()
 
-        # Now add fresh entries
-        pipe = self.redis.pipeline()
-        for msg in messages:
-            pipe.zadd(msgs_key, {self._serialize(msg): msg.id})
-            ts = self._parse_date_to_timestamp(msg.date)
-            if ts is not None:
-                pipe.zadd(dates_key, {str(msg.id).encode(): ts})
-        await pipe.execute()
+            # Удаляем старые записи
+            pipe = self.redis.pipeline()
+            for old_entries in existing:
+                for entry in (old_entries or []):
+                    pipe.zrem(msgs_key, entry)
+            await pipe.execute()
+
+            # Добавляем свежие записи
+            pipe = self.redis.pipeline()
+            for msg in batch:
+                pipe.zadd(msgs_key, {self._serialize(msg): msg.id})
+                ts = self._parse_date_to_timestamp(msg.date)
+                if ts is not None:
+                    pipe.zadd(dates_key, {str(msg.id).encode(): ts})
+            await pipe.execute()
 
         # Enforce per-chat cap: keep newest N messages
         count = await self.redis.zcard(msgs_key)
