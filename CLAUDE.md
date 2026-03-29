@@ -103,10 +103,11 @@ export-worker/
 ├── message_cache.py        # Redis-кэш сообщений: sorted sets, range tracking, gap detection,
 │                           #   msgpack сериализация, TTL 7 дней, LRU eviction, per-chat cap
 ├── pyrogram_client.py      # Pyrogram MTProto клиент: экспорт сообщений, FloodWait handling,
-│                           #   кэш-синхронизация Pyrogram entity access_hash
+│                           #   кэш-синхронизация Pyrogram entity access_hash,
+│                           #   get_messages_count() — universal count (raw MTProto для date-range)
 ├── queue_consumer.py       # Redis BRPOP consumer: получение задач из очереди, таймауты, retry
 ├── java_client.py          # HTTP-клиент к Java API: отправка сообщений на конвертацию,
-│                           #   UTF-16 entity offset handling для корректной работы с emoji
+│                           #   UTF-16 entity offset handling, split файлов > 45МБ на части
 ├── json_converter.py       # Конвертация Pyrogram Message → Telegram JSON export format
 ├── get_session.py          # Утилита: генерация Pyrogram string session для production
 ├── requirements.txt        # Production-зависимости
@@ -132,6 +133,13 @@ export-worker/
 - **Retry с backoff**: FloodWait от Telegram API обрабатывается с экспоненциальным backoff и дедупликацией
 - **Кэш сообщений (MessageCache)**: Redis sorted sets для кэширования per-chat. Два индекса: по msg_id (`cache:msgs`) и по дате (`cache:dates`). Трекинг кэшированных диапазонов по ID (`cache:ranges`) и по датам (`cache:date_ranges`). При повторном экспорте — gap detection по датам или ID → fetch только недостающего → merge с кэшем → монолитный файл. Пример: Вася экспортирует 11-13.01, Петя 01-08.01, Коля запрашивает 01-15.01 → из кэша 01-08 и 11-13, fetch только 09-10 и 14-15. TTL 7 дней, лимит 100K/чат, LRU eviction 120MB. `CACHE_ENABLED=true`.
 - **Graceful shutdown**: Обработка SIGTERM/SIGINT, завершение текущей задачи перед остановкой
+- **Прогресс-репортинг (ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА)**:
+  - **ВСЕГДА** получать total количество сообщений перед началом экспорта: `get_messages_count(chat_id, from_date?, to_date?)` — для полного экспорта через `get_chat_history_count`, для date-range через raw MTProto `messages.Search` с `min_date`/`max_date`
+  - При старте уведомлять юзера с указанием total: "⏳ Экспорт начался — всего ~N сообщений"
+  - Прогресс каждые **10%** с процент-баром, **НИКОГДА** не спамить абсолютными числами каждые N сообщений
+  - При **любой** ошибке (исключение, таймаут, failed upload) — **ВСЕГДА** уведомлять юзера через `_notify_user_failure`
+  - Файлы > 45МБ: разбивать на части по строкам и отправлять пронумерованными `_part1.txt`, `_part2.txt`
+  - Прогресс должен работать во ВСЕХ путях экспорта: `_fetch_all_messages`, `_export_with_id_cache`, `_export_with_date_cache`
 - **Memory monitoring**: psutil отслеживает потребление памяти (оптимизация для слабых серверов)
 - **MAX_WORKERS**: По умолчанию 1, настраивается через env var. Каждый worker — отдельный Pyrogram клиент
 
