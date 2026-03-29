@@ -1,10 +1,15 @@
 package com.tcleaner.bot;
 
+import java.time.Instant;
+
 /**
  * Состояние диалога пользователя с ботом.
  *
  * <p>Хранится in-memory в {@code ConcurrentHashMap<Long, UserSession>} внутри {@link ExportBot}.
  * Сбрасывается при рестарте — допустимо, пользователь просто начнёт заново.</p>
+ *
+ * <p>Содержит временну́ю метку последнего обращения ({@link #getLastAccess()}) для
+ * периодического вытеснения неактивных сессий и предотвращения утечки памяти.</p>
  */
 public class UserSession {
 
@@ -27,6 +32,7 @@ public class UserSession {
     private String chatDisplay;
     private String fromDate;
     private String toDate;
+    private Instant lastAccess = Instant.now();
 
     public State getState() {
         return state;
@@ -69,6 +75,20 @@ public class UserSession {
     }
 
     /**
+     * Возвращает метку времени последнего обращения к сессии.
+     *
+     * @return {@link Instant} последнего обращения
+     */
+    public Instant getLastAccess() {
+        return lastAccess;
+    }
+
+    /** Обновляет метку последнего обращения до текущего момента. */
+    public void touch() {
+        this.lastAccess = Instant.now();
+    }
+
+    /**
      * Сбрасывает сессию в начальное состояние.
      */
     public void reset() {
@@ -77,5 +97,6 @@ public class UserSession {
         this.chatDisplay = null;
         this.fromDate = null;
         this.toDate = null;
+        this.lastAccess = Instant.now();
     }
 }

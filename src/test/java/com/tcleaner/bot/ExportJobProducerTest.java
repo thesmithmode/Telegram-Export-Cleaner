@@ -18,6 +18,7 @@ import java.nio.file.Path;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Тесты для ExportJobProducer — проверяет добавление задач в Redis.
@@ -54,8 +55,10 @@ class ExportJobProducerTest {
     private static final String QUEUE = "telegram_export";
 
     @BeforeEach
-    void clearQueue() {
+    void clearRedis() {
         redisTemplate.delete(QUEUE);
+        // Очищаем active_export ключи всех тестовых пользователей
+        redisTemplate.keys("active_export:*").forEach(redisTemplate::delete);
     }
 
     @Test
@@ -91,21 +94,30 @@ class ExportJobProducerTest {
     }
 
     @Test
-    @DisplayName("каждый enqueue создаёт уникальный task_id")
+    @DisplayName("каждый enqueue создаёт уникальный task_id для разных пользователей")
     void enqueueGeneratesUniqueTaskIds() {
         String id1 = producer.enqueue(1L, 1L, -100L);
-        String id2 = producer.enqueue(1L, 1L, -100L);
+        String id2 = producer.enqueue(2L, 2L, -100L);
         assertThat(id1).isNotEqualTo(id2);
     }
 
     @Test
-    @DisplayName("несколько задач добавляются в правильном порядке")
+    @DisplayName("enqueue бросает IllegalStateException если у пользователя уже есть активный экспорт")
+    void enqueueThrowsWhenUserHasActiveExport() {
+        producer.enqueue(777L, 777L, -100L);
+        assertThatThrownBy(() -> producer.enqueue(777L, 777L, -200L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Экспорт уже активен");
+    }
+
+    @Test
+    @DisplayName("несколько задач от разных пользователей добавляются в правильном порядке")
     void multipleJobsOrderedCorrectly() throws Exception {
         long chatId1 = -100111L;
         long chatId2 = -100222L;
 
         producer.enqueue(1L, 1L, chatId1);
-        producer.enqueue(1L, 1L, chatId2);
+        producer.enqueue(2L, 2L, chatId2);
 
         assertThat(redisTemplate.opsForList().size(QUEUE)).isEqualTo(2L);
 
@@ -118,5 +130,29 @@ class ExportJobProducerTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> job2 = objectMapper.readValue(second, Map.class);
         assertThat(((Number) job2.get("chat_id")).longValue()).isEqualTo(chatId2);
+    }
+
+    @Test
+    @DisplayName("storeQueueMsgId сохраняет ключ queue_msg:{taskId} в Redis")
+    void storeQueueMsgIdSavesKey() {
+        String taskId = "export_abc123";
+        long userChatId = 987654L;
+        int msgId = 42;
+
+        producer.storeQueueMsgId(taskId, userChatId, msgId);
+
+        String stored = redisTemplate.opsForValue().get("queue_msg:" + taskId);
+        assertThat(stored).isEqualTo(userChatId + ":" + msgId);
+    }
+
+    @Test
+    @DisplayName("getQueueLength возвращает текущую длину очереди")
+    void getQueueLengthReturnsCorrectCount() {
+        assertThat(producer.getQueueLength()).isZero();
+
+        producer.enqueue(1L, 1L, -100L);
+        producer.enqueue(2L, 2L, -200L);
+
+        assertThat(producer.getQueueLength()).isEqualTo(2L);
     }
 }

@@ -11,7 +11,6 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -28,16 +27,13 @@ import java.util.Map;
 /**
  * REST контроллер для синхронной конвертации Telegram экспорта.
  *
- * <p>Предоставляет endpoint'ы для немедленной (синхронной) обработки файлов —
- * принял файл, вернул результат в теле ответа. Это отличает данный контроллер
- * от {@link FileController}, который работает асинхронно через очередь
- * Import → Export с опросом статуса.</p>
+ * <p>Предоставляет endpoint'ы для синхронной обработки файлов —
+ * принял файл, вернул результат в теле ответа.</p>
  *
  * <h2>Endpoints</h2>
  * <ul>
- *   <li>{@code POST /api/convert}      — загрузка файла {@code result.json} (multipart)</li>
- *   <li>{@code POST /api/convert/json} — передача JSON-содержимого напрямую в теле запроса</li>
- *   <li>{@code GET  /api/health}       — проверка доступности сервиса</li>
+ *   <li>{@code POST /api/convert} — загрузка файла {@code result.json} (multipart)</li>
+ *   <li>{@code GET  /api/health}  — проверка доступности сервиса</li>
  * </ul>
  *
  * <h2>Память</h2>
@@ -50,9 +46,6 @@ import java.util.Map;
 public class TelegramController {
 
     private static final Logger log = LoggerFactory.getLogger(TelegramController.class);
-
-    /** Максимальный размер JSON-тела для {@code /api/convert/json} (символы, не байты). */
-    private static final int MAX_JSON_BODY_CHARS = 10 * 1024 * 1024; // 10 MB
 
     private final TelegramExporterInterface exporter;
 
@@ -106,46 +99,6 @@ public class TelegramController {
     }
 
     /**
-     * Конвертирует JSON-содержимое, переданное напрямую в теле запроса.
-     *
-     * <p>Принимает строку с содержимым {@code result.json} и возвращает обработанный
-     * текст. Максимальный размер тела ограничен {@value #MAX_JSON_BODY_CHARS} символами
-     * (лимит multipart на {@code /api/convert} к телу запроса не применяется).</p>
-     *
-     * @param jsonContent     содержимое {@code result.json} в виде строки
-     * @param startDate       начальная дата фильтра в формате {@code YYYY-MM-DD}, или {@code null}
-     * @param endDate         конечная дата фильтра в формате {@code YYYY-MM-DD}, или {@code null}
-     * @param keywords        ключевые слова для включения сообщений, через запятую, или {@code null}
-     * @param excludeKeywords ключевые слова для исключения сообщений, через запятую, или {@code null}
-     * @return 200 с текстом, 400 при ошибке валидации или превышении размера, 500 при внутренней ошибке
-     */
-    @PostMapping("/convert/json")
-    public ResponseEntity<?> convertJson(
-            @RequestBody String jsonContent,
-            @RequestParam(value = "startDate", required = false) String startDate,
-            @RequestParam(value = "endDate", required = false) String endDate,
-            @RequestParam(value = "keywords", required = false) String keywords,
-            @RequestParam(value = "excludeKeywords", required = false) String excludeKeywords) {
-
-        if (jsonContent == null || jsonContent.isBlank()) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", "Пустое содержимое"));
-        }
-
-        if (jsonContent.length() > MAX_JSON_BODY_CHARS) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", "Содержимое превышает максимально допустимый размер 10MB"));
-        }
-
-        try {
-            MessageFilter filter = MessageFilterFactory.build(startDate, endDate, keywords, excludeKeywords);
-            return processJsonWithTempDir(jsonContent, filter);
-        } catch (Exception ex) {
-            return handleConvertException(ex);
-        }
-    }
-
-    /**
      * Проверяет доступность сервиса.
      *
      * @return 200 со статусом {@code {"status": "UP"}}
@@ -179,33 +132,6 @@ public class TelegramController {
 
             return ResponseEntity.ok()
                     .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=output.txt")
-                    .contentType(MediaType.TEXT_PLAIN)
-                    .body(sw.toString());
-        }
-    }
-
-    /**
-     * Обрабатывает JSON-строку и возвращает результат как строку.
-     *
-     * <p>JSON сохраняется во временный файл, затем читается через Jackson Streaming API.</p>
-     *
-     * @param jsonContent содержимое {@code result.json}
-     * @param filter      фильтр сообщений, или {@code null}
-     * @return текстовый ответ с обработанными сообщениями
-     * @throws IOException при ошибках ввода-вывода
-     */
-    private ResponseEntity<?> processJsonWithTempDir(
-            String jsonContent, MessageFilter filter) throws IOException {
-        try (TempDirectory tempDir = new TempDirectory()) {
-            Path inputFile = tempDir.resolve("result.json");
-            Files.writeString(inputFile, jsonContent);
-
-            StringWriter sw = new StringWriter();
-            try (BufferedWriter writer = new BufferedWriter(sw)) {
-                exporter.processFileStreaming(inputFile, filter, writer);
-            }
-
-            return ResponseEntity.ok()
                     .contentType(MediaType.TEXT_PLAIN)
                     .body(sw.toString());
         }
