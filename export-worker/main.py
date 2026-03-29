@@ -52,9 +52,37 @@ class ExportWorker:
         self.queue_consumer: Optional[QueueConsumer] = None
         self.java_client: Optional[JavaBotClient] = None
         self.message_cache: Optional[MessageCache] = None
+        self.control_redis: Optional[aioredis.Redis] = None
         self.running = False
         self.jobs_processed = 0
         self.jobs_failed = 0
+
+    async def _check_cancel_and_save(
+        self, job: ExportRequest, messages: list[ExportedMessage], count: int
+    ) -> bool:
+        """Check cancellation every 1000 messages, save to cache if cancelled. Returns True if cancelled."""
+        if count % 1000 != 0:
+            return False
+        if not await self.is_cancelled(job.task_id):
+            return False
+        logger.info(f"🛑 Export {job.task_id} cancelled by user at {count} messages")
+        if self.message_cache and self.message_cache.enabled and messages:
+            await self.message_cache.store_messages(job.chat_id, messages)
+            logger.info(f"  Saved {count} messages to cache before cancel")
+        await self.clear_active_export(job.user_id)
+        return True
+
+    async def is_cancelled(self, task_id: str) -> bool:
+        """Check if export was cancelled by user."""
+        if not self.control_redis:
+            return False
+        val = await self.control_redis.get(f"cancel_export:{task_id}")
+        return val is not None
+
+    async def clear_active_export(self, user_id: int):
+        """Clear active export marker for user."""
+        if self.control_redis:
+            await self.control_redis.delete(f"active_export:{user_id}")
 
     def _create_tracker(self, job: ExportRequest) -> Optional[ProgressTracker]:
         """Create a ProgressTracker if user notifications are possible."""
@@ -109,7 +137,16 @@ class ExportWorker:
             logger.info("3️⃣  Connecting to Java Bot API...")
             self.java_client = await create_java_client()
 
-            # 4. Initialize message cache
+            # 4. Initialize control Redis (for cancel/active export)
+            self.control_redis = aioredis.Redis(
+                host=settings.REDIS_HOST,
+                port=settings.REDIS_PORT,
+                db=settings.REDIS_DB,
+                password=settings.REDIS_PASSWORD,
+                decode_responses=True,
+            )
+
+            # 5. Initialize message cache
             logger.info("4️⃣  Initializing message cache...")
             cache_redis = aioredis.Redis(
                 host=settings.REDIS_HOST,
@@ -188,6 +225,7 @@ class ExportWorker:
                     user_chat_id=job.user_chat_id,
                 )
                 await self.queue_consumer.mark_job_failed(job.task_id, error)
+                await self.clear_active_export(job.user_id)
                 return True
 
             if chat_info:
@@ -235,6 +273,7 @@ class ExportWorker:
                 self.jobs_processed += 1
                 self.log_memory_usage("JOB_DONE")
                 await self.cleanup_temp_files(job.task_id)
+                await self.clear_active_export(job.user_id)
                 return True
 
             else:
@@ -244,6 +283,7 @@ class ExportWorker:
                 self.jobs_failed += 1
                 self.log_memory_usage("JOB_FAILED")
                 await self.cleanup_temp_files(job.task_id)
+                await self.clear_active_export(job.user_id)
                 return True
 
         except Exception as e:
@@ -257,6 +297,7 @@ class ExportWorker:
             self.jobs_failed += 1
             self.log_memory_usage("JOB_ERROR")
             await self.cleanup_temp_files(job.task_id)
+            await self.clear_active_export(job.user_id)
             return True
 
     async def _export_with_date_cache(self, job: ExportRequest) -> Optional[list[ExportedMessage]]:
@@ -271,12 +312,11 @@ class ExportWorker:
         from_date_str = job.from_date[:10] if job.from_date else None
         to_date_str = job.to_date[:10] if job.to_date else None
 
-        if not from_date_str or not to_date_str:
-            # Partial date filter — fetch all, write-through to cache
-            messages = await self._fetch_all_messages(job)
-            if messages:
-                await self.message_cache.store_messages(job.chat_id, messages)
-            return messages
+        # Fill defaults for partial date filters
+        if not from_date_str and to_date_str:
+            from_date_str = "2000-01-01"
+        if from_date_str and not to_date_str:
+            to_date_str = datetime.now().strftime("%Y-%m-%d")
 
         # Find which date ranges we're missing
         missing = await self.message_cache.get_missing_date_ranges(
@@ -324,6 +364,8 @@ class ExportWorker:
                 ):
                     gap_msgs.append(msg)
                     fetched_count += 1
+                    if await self._check_cancel_and_save(job, gap_msgs, fetched_count):
+                        return None
                     if tracker:
                         await tracker.track(fetched_count)
             except Exception as e:
@@ -388,6 +430,8 @@ class ExportWorker:
             ):
                 fresh_messages.append(msg)
                 fetched_count += 1
+                if await self._check_cancel_and_save(job, fresh_messages, fetched_count):
+                    return None
                 if tracker:
                     await tracker.track(fetched_count)
         except Exception as e:
@@ -413,6 +457,8 @@ class ExportWorker:
                 ):
                     gap_msgs.append(msg)
                     fetched_count += 1
+                    if await self._check_cancel_and_save(job, gap_msgs, fetched_count):
+                        return None
                     if tracker:
                         await tracker.track(fetched_count)
             except Exception as e:
@@ -437,6 +483,8 @@ class ExportWorker:
                     ):
                         older_msgs.append(msg)
                         fetched_count += 1
+                        if await self._check_cancel_and_save(job, older_msgs, fetched_count):
+                            return None
                         if tracker:
                             await tracker.track(fetched_count)
                 except Exception as e:
@@ -501,6 +549,9 @@ class ExportWorker:
             ):
                 messages.append(message)
                 count = len(messages)
+
+                if await self._check_cancel_and_save(job, messages, count):
+                    return None
 
                 if tracker:
                     await tracker.track(count)
@@ -576,6 +627,9 @@ class ExportWorker:
 
         if self.java_client:
             await self.java_client.aclose()
+
+        if self.control_redis:
+            await self.control_redis.aclose()
 
         if self.message_cache and self.message_cache.redis:
             await self.message_cache.redis.aclose()
