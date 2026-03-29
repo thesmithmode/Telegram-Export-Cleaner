@@ -333,7 +333,7 @@ class ExportWorker:
 
         logger.info(f"  Date cache partial hit for {job.chat_id}: missing={missing}")
 
-        # Получаем total для прогресса
+        # Получаем total для прогресса (только для запрошенного диапазона)
         from_dt = datetime.fromisoformat(from_date_str + "T00:00:00")
         to_dt = datetime.fromisoformat(to_date_str + "T23:59:59")
         total = await self.telegram_client.get_messages_count(

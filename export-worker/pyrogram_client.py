@@ -255,6 +255,24 @@ class TelegramClient:
             logger.warning(f"Could not get message count for chat {chat_id}: {e}")
             return None
 
+    async def _get_history_count_before_date(
+        self, peer, offset_date: int
+    ) -> Optional[int]:
+        """Get count of messages before a given date via GetHistory with offset_date."""
+        result = await self.client.invoke(
+            functions.messages.GetHistory(
+                peer=peer,
+                offset_id=0,
+                offset_date=offset_date,
+                add_offset=0,
+                limit=1,
+                max_id=0,
+                min_id=0,
+                hash=0,
+            )
+        )
+        return getattr(result, "count", None)
+
     async def get_date_range_count(
         self,
         chat_id: Union[int, str],
@@ -262,34 +280,32 @@ class TelegramClient:
         to_date: datetime,
     ) -> Optional[int]:
         """
-        Get message count in a date range via raw MTProto messages.Search.
+        Get message count in a date range via GetHistory offset_date trick.
 
-        Uses min_date/max_date with limit=1 to get count in single API call.
+        count_before(to_date) - count_before(from_date) = messages in range.
+        Uses 2 lightweight API calls (limit=1 each).
         Returns None on failure.
         """
         try:
             peer = await self.client.resolve_peer(chat_id)
-            result = await self.client.invoke(
-                functions.messages.Search(
-                    peer=peer,
-                    q="",
-                    filter=raw_types.InputMessagesFilterEmpty(),
-                    min_date=int(from_date.timestamp()),
-                    max_date=int(to_date.timestamp()),
-                    offset_id=0,
-                    add_offset=0,
-                    limit=1,
-                    max_id=0,
-                    min_id=0,
-                    hash=0,
-                )
-            )
-            count = getattr(result, "count", None)
-            if count is not None and count > 0:
+
+            # count of messages BEFORE to_date (offset_date returns older messages)
+            # +1 day to make to_date inclusive
+            to_ts = int(to_date.timestamp()) + 86400
+            count_before_to = await self._get_history_count_before_date(peer, to_ts)
+
+            from_ts = int(from_date.timestamp())
+            count_before_from = await self._get_history_count_before_date(peer, from_ts)
+
+            if count_before_to is None or count_before_from is None:
+                logger.warning(f"GetHistory count returned None for chat {chat_id}")
+                return None
+
+            count = count_before_to - count_before_from
+            if count > 0:
                 return count
-            # ChannelMessages/Messages without count — count messages list
-            if hasattr(result, "messages"):
-                return len(result.messages) or None
+
+            # Fallback: if difference is 0 or negative, return None
             return None
         except Exception as e:
             logger.warning(f"Could not get date range count for chat {chat_id}: {e}")
