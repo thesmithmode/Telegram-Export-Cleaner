@@ -103,10 +103,11 @@ export-worker/
 ├── message_cache.py        # Redis-кэш сообщений: sorted sets, range tracking, gap detection,
 │                           #   msgpack сериализация, TTL 7 дней, LRU eviction, per-chat cap
 ├── pyrogram_client.py      # Pyrogram MTProto клиент: экспорт сообщений, FloodWait handling,
-│                           #   кэш-синхронизация Pyrogram entity access_hash
+│                           #   кэш-синхронизация Pyrogram entity access_hash,
+│                           #   get_messages_count() — universal count (raw MTProto для date-range)
 ├── queue_consumer.py       # Redis BRPOP consumer: получение задач из очереди, таймауты, retry
 ├── java_client.py          # HTTP-клиент к Java API: отправка сообщений на конвертацию,
-│                           #   UTF-16 entity offset handling для корректной работы с emoji
+│                           #   UTF-16 entity offset handling, split файлов > 45МБ на части
 ├── json_converter.py       # Конвертация Pyrogram Message → Telegram JSON export format
 ├── get_session.py          # Утилита: генерация Pyrogram string session для production
 ├── requirements.txt        # Production-зависимости

@@ -507,6 +507,135 @@ class TestTelegramClientFloodWait:
                     pass
 
 
+class TestTelegramClientMessageCount:
+    """Test message count methods."""
+
+    @pytest.mark.asyncio
+    async def test_get_chat_messages_count_success(self):
+        """Test total count for full chat."""
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.get_chat_history_count = AsyncMock(return_value=5000)
+        client.client = mock_pyrogram
+
+        result = await client.get_chat_messages_count(123)
+
+        assert result == 5000
+
+    @pytest.mark.asyncio
+    async def test_get_chat_messages_count_zero_returns_none(self):
+        """Test that zero count returns None."""
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.get_chat_history_count = AsyncMock(return_value=0)
+        client.client = mock_pyrogram
+
+        result = await client.get_chat_messages_count(123)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_chat_messages_count_error_returns_none(self):
+        """Test that API error returns None."""
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.get_chat_history_count = AsyncMock(side_effect=Exception("API error"))
+        client.client = mock_pyrogram
+
+        result = await client.get_chat_messages_count(123)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_date_range_count_success(self):
+        """Test date range count via raw MTProto."""
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+
+        # Mock resolve_peer and invoke
+        mock_pyrogram.resolve_peer = AsyncMock(return_value=MagicMock())
+        mock_result = MagicMock()
+        mock_result.count = 1500
+        mock_pyrogram.invoke = AsyncMock(return_value=mock_result)
+        client.client = mock_pyrogram
+
+        result = await client.get_date_range_count(
+            123, datetime(2025, 1, 1), datetime(2025, 1, 31)
+        )
+
+        assert result == 1500
+        mock_pyrogram.invoke.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_date_range_count_no_count_attr(self):
+        """Test fallback to messages list length when count attr missing."""
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.resolve_peer = AsyncMock(return_value=MagicMock())
+
+        mock_result = MagicMock(spec=[])  # no count attr
+        mock_result.messages = [MagicMock(), MagicMock()]
+        mock_pyrogram.invoke = AsyncMock(return_value=mock_result)
+        client.client = mock_pyrogram
+
+        result = await client.get_date_range_count(
+            123, datetime(2025, 1, 1), datetime(2025, 1, 31)
+        )
+
+        assert result == 2
+
+    @pytest.mark.asyncio
+    async def test_get_date_range_count_error_returns_none(self):
+        """Test that error returns None."""
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.resolve_peer = AsyncMock(side_effect=Exception("API error"))
+        client.client = mock_pyrogram
+
+        result = await client.get_date_range_count(
+            123, datetime(2025, 1, 1), datetime(2025, 1, 31)
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_messages_count_without_dates_uses_fast_path(self):
+        """Without dates, uses get_chat_history_count (fast path)."""
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.get_chat_history_count = AsyncMock(return_value=10000)
+        client.client = mock_pyrogram
+
+        result = await client.get_messages_count(123)
+
+        assert result == 10000
+        mock_pyrogram.get_chat_history_count.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_messages_count_with_dates_uses_raw_api(self):
+        """With dates, uses raw MTProto search."""
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.resolve_peer = AsyncMock(return_value=MagicMock())
+        mock_result = MagicMock()
+        mock_result.count = 500
+        mock_pyrogram.invoke = AsyncMock(return_value=mock_result)
+        client.client = mock_pyrogram
+
+        result = await client.get_messages_count(
+            123, datetime(2025, 1, 1), datetime(2025, 1, 31)
+        )
+
+        assert result == 500
+        mock_pyrogram.invoke.assert_called_once()
+        mock_pyrogram.get_chat_history_count.assert_not_called()
+
+
 class TestTelegramClientContextManager:
     """Test context manager protocol."""
 
