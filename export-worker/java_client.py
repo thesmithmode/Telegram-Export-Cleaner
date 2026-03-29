@@ -368,6 +368,7 @@ class JavaBotClient:
         message_count: int,
         total: Optional[int] = None,
         started: bool = False,
+        elapsed_seconds: float = 0,
     ) -> bool:
         """
         Send progress update to user during long export.
@@ -378,6 +379,7 @@ class JavaBotClient:
             message_count: Number of messages exported so far
             total: Total messages expected (if known)
             started: True if this is the initial "started" notification
+            elapsed_seconds: Seconds elapsed since export start (for ETA)
 
         Returns:
             True if message sent, False otherwise
@@ -392,7 +394,10 @@ class JavaBotClient:
         elif total:
             percentage = message_count * 100 // total
             progress_bar = self._build_progress_bar(percentage)
+            eta_str = self._format_eta(elapsed_seconds, percentage)
             text = f"📊 {progress_bar} {percentage}% ({message_count}/{total})"
+            if eta_str:
+                text += f"\n⏱ Осталось ~{eta_str}"
         else:
             text = f"📊 Экспортировано {message_count} сообщений..."
 
@@ -411,6 +416,17 @@ class JavaBotClient:
         filled = int(width * percentage / 100)
         empty = width - filled
         return "▓" * filled + "░" * empty
+
+    @staticmethod
+    def _format_eta(elapsed_seconds: float, percentage: int) -> str:
+        """Вычислить примерное оставшееся время на основе прошедшего и процента."""
+        if percentage <= 0 or elapsed_seconds <= 0:
+            return ""
+        remaining = elapsed_seconds * (100 - percentage) / percentage
+        if remaining < 60:
+            return f"{int(remaining)} сек"
+        minutes = int(remaining) // 60
+        return f"{minutes} мин"
 
     async def _notify_user_failure(
         self, user_chat_id: int, task_id: str, error: str
