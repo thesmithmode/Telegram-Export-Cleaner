@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Кладёт задачи на экспорт в Redis-очередь.
@@ -108,6 +109,10 @@ public class ExportJobProducer {
         return enqueue(userId, userChatId, (Object) chatIdentifier, fromDate, toDate);
     }
 
+    private static final String ACTIVE_EXPORT_PREFIX = "active_export:";
+    private static final String CANCEL_EXPORT_PREFIX = "cancel_export:";
+    private static final long ACTIVE_EXPORT_TTL_MINUTES = 60;
+
     private String enqueue(long userId, long userChatId, Object chatId, String fromDate, String toDate) {
         String taskId = "export_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
 
@@ -128,11 +133,40 @@ public class ExportJobProducer {
         try {
             String json = objectMapper.writeValueAsString(job);
             redis.opsForList().rightPush(queueName, json);
+            // Mark user as having active export
+            redis.opsForValue().set(
+                    ACTIVE_EXPORT_PREFIX + userId, taskId,
+                    ACTIVE_EXPORT_TTL_MINUTES, TimeUnit.MINUTES
+            );
             log.info("Задача {} добавлена в очередь {} (chat_id={})", taskId, queueName, chatId);
             return taskId;
         } catch (Exception e) {
             log.error("Не удалось добавить задачу в очередь: {}", e.getMessage(), e);
             throw new RuntimeException("Ошибка добавления задачи в очередь", e);
+        }
+    }
+
+    /**
+     * Проверяет, есть ли у пользователя активный экспорт.
+     *
+     * @return task_id активного экспорта или null
+     */
+    public String getActiveExport(long userId) {
+        return redis.opsForValue().get(ACTIVE_EXPORT_PREFIX + userId);
+    }
+
+    /**
+     * Отправляет сигнал отмены экспорта.
+     */
+    public void cancelExport(long userId) {
+        String taskId = getActiveExport(userId);
+        if (taskId != null) {
+            redis.opsForValue().set(
+                    CANCEL_EXPORT_PREFIX + taskId, "1",
+                    ACTIVE_EXPORT_TTL_MINUTES, TimeUnit.MINUTES
+            );
+            redis.delete(ACTIVE_EXPORT_PREFIX + userId);
+            log.info("Запрошена отмена экспорта {} для пользователя {}", taskId, userId);
         }
     }
 }
