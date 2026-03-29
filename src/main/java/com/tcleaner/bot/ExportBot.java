@@ -75,6 +75,7 @@ public class ExportBot extends TelegramLongPollingBot {
     static final String CB_BACK_TO_MAIN = "back_main";
     static final String CB_BACK_TO_DATE_CHOICE = "back_date_choice";
     static final String CB_BACK_TO_FROM_DATE = "back_from_date";
+    static final String CB_CANCEL_EXPORT = "cancel_export";
 
     private final String botUsername;
     private final ExportJobProducer jobProducer;
@@ -287,6 +288,12 @@ public class ExportBot extends TelegramLongPollingBot {
                         + "\nНапример: 01.01.2024",
                         buildFromDateKeyboard());
             }
+            case CB_CANCEL_EXPORT -> {
+                jobProducer.cancelExport(userId);
+                editMessage(chatId, messageId,
+                        "🛑 Отмена запрошена. Уже скачанные сообщения сохранены в кэш.",
+                        null);
+            }
             default -> log.warn("Неизвестный callback: {}", data);
         }
     }
@@ -338,6 +345,27 @@ public class ExportBot extends TelegramLongPollingBot {
      */
     private void startExport(long chatId, long userId, int editMessageId) {
         UserSession session = getSession(userId);
+
+        // Проверяем, нет ли активного экспорта
+        String activeTaskId = jobProducer.getActiveExport(userId);
+        if (activeTaskId != null) {
+            String text = "⏳ У вас уже есть активный экспорт (" + activeTaskId
+                    + ").\nДождитесь его завершения или отмените.";
+            InlineKeyboardMarkup cancelKeyboard = InlineKeyboardMarkup.builder()
+                    .keyboardRow(List.of(
+                            InlineKeyboardButton.builder()
+                                    .text("❌ Отменить текущий экспорт")
+                                    .callbackData(CB_CANCEL_EXPORT)
+                                    .build()))
+                    .build();
+            if (editMessageId > 0) {
+                editMessage(chatId, editMessageId, text, cancelKeyboard);
+            } else {
+                sendWithInlineKeyboard(chatId, text, cancelKeyboard);
+            }
+            return;
+        }
+
         String taskId;
         Object targetChatId = session.getChatId();
 
@@ -362,10 +390,18 @@ public class ExportBot extends TelegramLongPollingBot {
                 + "Когда воркер обработает — вы получите файл здесь.",
                 taskId, session.getChatDisplay(), dateInfo);
 
+        InlineKeyboardMarkup cancelKeyboard = InlineKeyboardMarkup.builder()
+                .keyboardRow(List.of(
+                        InlineKeyboardButton.builder()
+                                .text("❌ Отменить экспорт")
+                                .callbackData(CB_CANCEL_EXPORT)
+                                .build()))
+                .build();
+
         if (editMessageId > 0) {
-            editMessage(chatId, editMessageId, resultText, null);
+            editMessage(chatId, editMessageId, resultText, cancelKeyboard);
         } else {
-            sendText(chatId, resultText);
+            sendWithInlineKeyboard(chatId, resultText, cancelKeyboard);
         }
 
         log.info("Пользователь {} запросил экспорт чата {}, taskId={}, from={}, to={}",
