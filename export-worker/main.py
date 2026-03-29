@@ -300,6 +300,31 @@ class ExportWorker:
             await self.clear_active_export(job.user_id)
             return True
 
+    @staticmethod
+    def _compute_cached_ranges(
+        from_date: str, to_date: str, missing: list[tuple[str, str]]
+    ) -> list[tuple[str, str]]:
+        """Compute cached date ranges = [from_date, to_date] minus missing gaps."""
+        from datetime import date as date_cls, timedelta
+        if not missing:
+            return [(from_date, to_date)]
+
+        cached = []
+        current = date_cls.fromisoformat(from_date)
+        req_end = date_cls.fromisoformat(to_date)
+
+        for gap_from, gap_to in sorted(missing):
+            gap_start = date_cls.fromisoformat(gap_from)
+            gap_end = date_cls.fromisoformat(gap_to)
+            if gap_start > current:
+                cached.append((current.isoformat(), (gap_start - timedelta(days=1)).isoformat()))
+            current = gap_end + timedelta(days=1)
+
+        if current <= req_end:
+            cached.append((current.isoformat(), req_end.isoformat()))
+
+        return cached
+
     async def _export_with_date_cache(self, job: ExportRequest) -> Optional[list[ExportedMessage]]:
         """
         Date-range export with cache support.
@@ -331,7 +356,21 @@ class ExportWorker:
             )
             return self.message_cache.merge_and_sort(cached, [])
 
-        logger.info(f"  Date cache partial hit for {job.chat_id}: missing={missing}")
+        # Вычисляем закэшированные диапазоны (всё что НЕ в missing)
+        cached_date_ranges = self._compute_cached_ranges(
+            from_date_str, to_date_str, missing
+        )
+        logger.info(f"  Date cache partial hit for {job.chat_id}: "
+                     f"missing={missing}, cached={cached_date_ranges}")
+
+        # Читаем закэшированные сообщения (только нужные диапазоны, не всё)
+        cached_messages: list[ExportedMessage] = []
+        for c_from, c_to in cached_date_ranges:
+            chunk = await self.message_cache.get_messages_by_date(
+                job.chat_id, c_from, c_to
+            )
+            cached_messages.extend(chunk)
+        logger.info(f"  Loaded {len(cached_messages)} messages from cache")
 
         # Получаем total для прогресса (только для запрошенного диапазона)
         from_dt = datetime.fromisoformat(from_date_str + "T00:00:00")
@@ -347,7 +386,7 @@ class ExportWorker:
 
         # Fetch each missing date range from Telegram
         fresh_messages: list[ExportedMessage] = []
-        fetched_count = 0
+        fetched_count = len(cached_messages)  # Считаем cached в прогресс
         for gap_from, gap_to in missing:
             gap_from_dt = datetime.fromisoformat(gap_from + "T00:00:00")
             gap_to_dt = datetime.fromisoformat(gap_to + "T23:59:59")
@@ -376,11 +415,8 @@ class ExportWorker:
                 await self.message_cache.store_messages(job.chat_id, gap_msgs)
                 fresh_messages.extend(gap_msgs)
 
-        # Retrieve all messages for the full requested date range from cache
-        cached = await self.message_cache.get_messages_by_date(
-            job.chat_id, from_date_str, to_date_str
-        )
-        messages = self.message_cache.merge_and_sort(cached, fresh_messages)
+        # Merge cached + fresh (не перечитываем из Redis — всё уже в памяти)
+        messages = self.message_cache.merge_and_sort(cached_messages, fresh_messages)
         logger.info(f"  Date-range export complete: {len(messages)} messages")
 
         await self.message_cache.evict_if_needed()
