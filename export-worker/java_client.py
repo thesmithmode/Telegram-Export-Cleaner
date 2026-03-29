@@ -14,6 +14,7 @@ Java API endpoints used:
 import json
 import logging
 import asyncio
+from datetime import datetime
 from typing import Optional
 
 import httpx
@@ -369,9 +370,10 @@ class JavaBotClient:
         total: Optional[int] = None,
         started: bool = False,
         elapsed_seconds: float = 0,
-    ) -> bool:
+        progress_message_id: Optional[int] = None,
+    ) -> Optional[int]:
         """
-        Send progress update to user during long export.
+        Send or edit progress update to user during long export.
 
         Args:
             user_chat_id: User's Telegram chat ID
@@ -380,15 +382,14 @@ class JavaBotClient:
             total: Total messages expected (if known)
             started: True if this is the initial "started" notification
             elapsed_seconds: Seconds elapsed since export start (for ETA)
+            progress_message_id: Message ID to edit (None = send new message)
 
         Returns:
-            True if message sent, False otherwise
+            Message ID on success (for subsequent edits), None on failure
         """
-        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-
         if started:
             if total:
-                text = f"⏳ Экспорт начался — будет обработано до {total} сообщений"
+                text = f"⏳ Экспорт начался — {total} сообщений"
             else:
                 text = "⏳ Экспорт начался, ожидайте..."
         elif total:
@@ -402,13 +403,31 @@ class JavaBotClient:
             text = f"📊 Экспортировано {message_count} сообщений..."
 
         try:
-            response = await self._http_client.post(
-                url, data={"chat_id": user_chat_id, "text": text}
-            )
-            return response.status_code == 200
+            if progress_message_id:
+                url = f"https://api.telegram.org/bot{self.bot_token}/editMessageText"
+                response = await self._http_client.post(
+                    url,
+                    data={
+                        "chat_id": user_chat_id,
+                        "message_id": progress_message_id,
+                        "text": text,
+                    },
+                )
+                if response.status_code == 200:
+                    return progress_message_id
+                return None
+            else:
+                url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+                response = await self._http_client.post(
+                    url, data={"chat_id": user_chat_id, "text": text}
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    return data.get("result", {}).get("message_id")
+                return None
         except Exception as e:
             logger.warning(f"Could not send progress update to user: {e}")
-            return False
+            return None
 
     @staticmethod
     def _build_progress_bar(percentage: int, width: int = 10) -> str:
@@ -427,6 +446,12 @@ class JavaBotClient:
             return f"{int(remaining)} сек"
         minutes = int(remaining) // 60
         return f"{minutes} мин"
+
+    def create_progress_tracker(
+        self, user_chat_id: int, task_id: str
+    ) -> "ProgressTracker":
+        """Create a ProgressTracker for a specific export job."""
+        return ProgressTracker(self, user_chat_id, task_id)
 
     async def _notify_user_failure(
         self, user_chat_id: int, task_id: str, error: str
@@ -456,6 +481,58 @@ class JavaBotClient:
         except Exception as e:
             logger.error(f"Failed to connect to Java API: {e}")
             return False
+
+
+class ProgressTracker:
+    """Tracks export progress and edits a single Telegram message.
+
+    Encapsulates message_id, total, timing, and milestone logic
+    so callers just call start() and track(count).
+    """
+
+    def __init__(self, client: JavaBotClient, user_chat_id: int, task_id: str):
+        self._client = client
+        self._user_chat_id = user_chat_id
+        self._task_id = task_id
+        self._message_id: Optional[int] = None
+        self._total: Optional[int] = None
+        self._last_reported_pct = 0
+        self._start_time: Optional[datetime] = None
+
+    async def start(self, total: Optional[int] = None) -> None:
+        """Send initial progress message and remember its ID."""
+        self._total = total
+        self._start_time = datetime.now()
+        self._last_reported_pct = 0
+        self._message_id = await self._client.send_progress_update(
+            user_chat_id=self._user_chat_id,
+            task_id=self._task_id,
+            message_count=0,
+            total=total,
+            started=True,
+        )
+
+    async def track(self, count: int) -> None:
+        """Report progress if a new 10% milestone is reached."""
+        if not self._total or self._total <= 0:
+            return
+        pct = count * 100 // self._total
+        milestone = (pct // 10) * 10
+        if milestone <= self._last_reported_pct or milestone >= 100:
+            return
+        self._last_reported_pct = milestone
+        elapsed = (datetime.now() - self._start_time).total_seconds() if self._start_time else 0
+        logger.info(f"  Progress: {count}/{self._total} ({milestone}%)")
+        result = await self._client.send_progress_update(
+            user_chat_id=self._user_chat_id,
+            task_id=self._task_id,
+            message_count=count,
+            total=self._total,
+            elapsed_seconds=elapsed,
+            progress_message_id=self._message_id,
+        )
+        if result:
+            self._message_id = result
 
 
 async def create_java_client() -> JavaBotClient:
