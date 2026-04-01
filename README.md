@@ -131,6 +131,8 @@ Open Telegram and message [@Export_Cleaner_bot](https://t.me/Export_Cleaner_bot)
 /help                               → Show commands
 ```
 
+Или нажмите **«📢 Выбрать канал»** / **«📂 Выбрать группу»** — нативный Telegram picker без ручного ввода. Работает для публичных каналов и групп (включая те, в которых воркер не состоит).
+
 **Example:**
 
 ```
