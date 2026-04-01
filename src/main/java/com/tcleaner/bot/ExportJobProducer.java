@@ -17,6 +17,12 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>Python-воркер читает очередь через BLPOP и обрабатывает задачи по одной.</p>
  *
+ * <h3>Защита от параллельных экспортов</h3>
+ * <p>Каждый вызов {@code enqueue()} атомарно резервирует слот через Redis SET NX EX
+ * (ключ {@code active_export:<userId>}). Если ключ уже существует —
+ * метод бросает {@link IllegalStateException} вместо добавления дублирующей задачи.
+ * Это устраняет race condition между {@link #getActiveExport(long)} и {@code enqueue()}.</p>
+ *
  * <p>Формат JSON-задачи:</p>
  * <pre>
  * {
