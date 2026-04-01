@@ -214,20 +214,37 @@ class TestJavaClientUpload:
 class TestJavaClientSendResponse:
     """Test send_response method."""
 
-    async def test_send_response_no_messages_returns_true(self):
-        """Test that empty messages returns True immediately."""
+    async def test_send_response_no_messages_notifies_user(self):
+        """При пустом результате пользователь должен получить уведомление."""
         with patch('java_client.settings'):
-            with patch.object(JavaBotClient, '_upload_to_java'):
+            with patch.object(JavaBotClient, '_notify_user_empty', new_callable=AsyncMock) as mock_notify:
                 client = JavaBotClient()
+                client.bot_token = "test_token"
                 result = await client.send_response(
                     task_id="test_1",
                     status="completed",
-                    messages=[],  # Empty
+                    messages=[],
                     user_chat_id=123
                 )
 
-                # Should return True (job finished cleanly)
                 assert result is True
+                mock_notify.assert_called_once_with(123, "test_1")
+
+    async def test_send_response_no_messages_no_bot_token_no_notify(self):
+        """Без bot_token уведомление не отправляется (нет куда)."""
+        with patch('java_client.settings'):
+            with patch.object(JavaBotClient, '_notify_user_empty', new_callable=AsyncMock) as mock_notify:
+                client = JavaBotClient()
+                client.bot_token = None
+                result = await client.send_response(
+                    task_id="test_1",
+                    status="completed",
+                    messages=[],
+                    user_chat_id=123
+                )
+
+                assert result is True
+                mock_notify.assert_not_called()
 
     async def test_send_response_failed_status_returns_true(self):
         """Test that failed status returns True."""

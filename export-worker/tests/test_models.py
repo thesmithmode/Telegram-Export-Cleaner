@@ -48,6 +48,62 @@ class TestExportRequest:
         assert req.from_date == "2025-01-01T00:00:00"
         assert req.to_date == "2025-12-31T23:59:59"
 
+    def test_request_with_date_only_format(self):
+        """Should accept YYYY-MM-DD date format"""
+        req = ExportRequest(
+            task_id="export_12345",
+            user_id=123456789,
+            chat_id=-1001234567890,
+            from_date="2025-01-01",
+            to_date="2025-12-31"
+        )
+
+        assert req.from_date == "2025-01-01"
+        assert req.to_date == "2025-12-31"
+
+    def test_request_invalid_from_date_rejects(self):
+        """Should reject invalid from_date (e.g. impossible date)"""
+        with pytest.raises(ValidationError) as exc_info:
+            ExportRequest(
+                task_id="export_12345",
+                user_id=123456789,
+                chat_id=-1001234567890,
+                from_date="2025-01-99"
+            )
+        assert "from_date" in str(exc_info.value) or "Неверный формат" in str(exc_info.value)
+
+    def test_request_invalid_to_date_rejects(self):
+        """Should reject invalid to_date (wrong format)"""
+        with pytest.raises(ValidationError):
+            ExportRequest(
+                task_id="export_12345",
+                user_id=123456789,
+                chat_id=-1001234567890,
+                to_date="31/12/2025"  # wrong format
+            )
+
+    def test_request_invalid_date_garbage_rejects(self):
+        """Should reject completely invalid date strings"""
+        with pytest.raises(ValidationError):
+            ExportRequest(
+                task_id="export_12345",
+                user_id=123456789,
+                chat_id=-1001234567890,
+                from_date="not-a-date"
+            )
+
+    def test_request_none_dates_accepted(self):
+        """Should accept None dates without validation error"""
+        req = ExportRequest(
+            task_id="export_12345",
+            user_id=123456789,
+            chat_id=-1001234567890,
+            from_date=None,
+            to_date=None
+        )
+        assert req.from_date is None
+        assert req.to_date is None
+
     def test_request_missing_required_field(self):
         """Should fail without required fields"""
         with pytest.raises(ValidationError):
