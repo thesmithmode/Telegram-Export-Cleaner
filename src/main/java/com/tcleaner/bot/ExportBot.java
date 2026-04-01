@@ -243,10 +243,20 @@ public class ExportBot extends TelegramLongPollingBot {
         }
 
         long sharedChatId = chatShared.getChatId();
+        String sharedUsername = chatShared.getUsername();
         UserSession session = getSession(userId);
 
-        session.setChatId(sharedChatId);
-        session.setChatDisplay(String.valueOf(sharedChatId));
+        // Публичные каналы/группы имеют username — передаём его воркеру как строку,
+        // чтобы Pyrogram мог разрезолвить access_hash через contacts.ResolveUsername
+        // даже если воркер не является участником канала.
+        // Для чатов без username (приватные группы) оставляем numeric ID.
+        if (sharedUsername != null && !sharedUsername.isBlank()) {
+            session.setChatId(sharedUsername);
+            session.setChatDisplay("@" + sharedUsername);
+        } else {
+            session.setChatId(sharedChatId);
+            session.setChatDisplay(String.valueOf(sharedChatId));
+        }
         session.setFromDate(null);
         session.setToDate(null);
         session.setState(UserSession.State.AWAITING_DATE_CHOICE);
