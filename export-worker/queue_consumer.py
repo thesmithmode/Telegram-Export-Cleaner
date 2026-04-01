@@ -288,6 +288,29 @@ class QueueConsumer:
             logger.error(f"Failed to mark job failed: {e}")
             return False
 
+    async def get_pending_jobs(self) -> list[ExportRequest]:
+        """
+        Return all pending jobs from queue without removing them (LRANGE 0 -1).
+
+        Used to notify users of their updated queue position before processing starts.
+        """
+        if not self.redis_client:
+            return []
+
+        try:
+            items = await self.redis_client.lrange(self.queue_name, 0, -1)
+            jobs = []
+            for item in items:
+                try:
+                    job_data = json.loads(item)
+                    jobs.append(ExportRequest(**job_data))
+                except Exception:
+                    pass
+            return jobs
+        except Exception as e:
+            logger.error(f"Failed to get pending jobs: {e}")
+            return []
+
     async def get_queue_stats(self) -> Optional[dict]:
         """
         Get queue statistics.

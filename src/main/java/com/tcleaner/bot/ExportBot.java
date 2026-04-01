@@ -417,10 +417,19 @@ public class ExportBot extends TelegramLongPollingBot {
         }
 
         String dateInfo = buildDateInfoText(session);
+
+        long queueLength = jobProducer.getQueueLength();
+        String queueInfo;
+        if (queueLength <= 1) {
+            queueInfo = "\n\n⚙️ Задача поставлена в работу, ожидайте...";
+        } else {
+            long position = queueLength;
+            queueInfo = String.format("\n\n📋 Вы в очереди: позиция %d\nВпереди %d задач(и)", position, position - 1);
+        }
+
         String resultText = String.format(
-                "⏳ Задача принята!\n\nID: %s\nЧат: %s%s\n\n"
-                + "Когда воркер обработает — вы получите файл здесь.",
-                taskId, session.getChatDisplay(), dateInfo);
+                "⏳ Задача принята!\n\nID: %s\nЧат: %s%s%s",
+                taskId, session.getChatDisplay(), dateInfo, queueInfo);
 
         InlineKeyboardMarkup cancelKeyboard = InlineKeyboardMarkup.builder()
                 .keyboardRow(List.of(
@@ -430,10 +439,15 @@ public class ExportBot extends TelegramLongPollingBot {
                                 .build()))
                 .build();
 
+        int sentMsgId;
         if (editMessageId > 0) {
             editMessage(chatId, editMessageId, resultText, cancelKeyboard);
+            sentMsgId = editMessageId;
         } else {
-            sendWithInlineKeyboard(chatId, resultText, cancelKeyboard);
+            sentMsgId = sendWithInlineKeyboardGetId(chatId, resultText, cancelKeyboard);
+        }
+        if (sentMsgId > 0) {
+            jobProducer.storeQueueMsgId(taskId, chatId, sentMsgId);
         }
 
         log.info("Пользователь {} запросил экспорт чата {}, taskId={}, from={}, to={}",
@@ -608,6 +622,20 @@ public class ExportBot extends TelegramLongPollingBot {
             sb.append(" — До: сегодня");
         }
         return sb.toString();
+    }
+
+    private int sendWithInlineKeyboardGetId(long chatId, String text, InlineKeyboardMarkup keyboard) {
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+        message.setText(text);
+        message.setReplyMarkup(keyboard);
+        try {
+            Message sent = execute(message);
+            return sent != null ? sent.getMessageId() : 0;
+        } catch (TelegramApiException e) {
+            log.error("Не удалось отправить сообщение с кнопками в chat {}: {}", chatId, e.getMessage());
+            return 0;
+        }
     }
 
     private void sendText(long chatId, String text) {
