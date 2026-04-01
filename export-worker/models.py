@@ -72,8 +72,8 @@ class ExportRequest(BaseModel):
     chat_id: Union[int, str] = Field(..., description="Telegram chat ID or username to export")
     limit: int = Field(default=0, description="Max messages (0=all)")
     offset_id: int = Field(default=0, description="Start from message ID")
-    from_date: Optional[str] = Field(None, description="ISO date filter (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)")
-    to_date: Optional[str] = Field(None, description="ISO date filter (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)")
+    from_date: Optional[str] = Field(None, description="ISO date filter (YYYY-MM-DD, YYYY-MM-DDTHH:MM or YYYY-MM-DDTHH:MM:SS)")
+    to_date: Optional[str] = Field(None, description="ISO date filter (YYYY-MM-DD, YYYY-MM-DDTHH:MM or YYYY-MM-DDTHH:MM:SS)")
 
     @field_validator("from_date", "to_date", mode="before")
     @classmethod
@@ -81,14 +81,14 @@ class ExportRequest(BaseModel):
         """Проверяет, что дата является валидным ISO 8601 значением."""
         if v is None:
             return v
-        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d"):
             try:
                 datetime.strptime(v, fmt)
                 return v
             except ValueError:
                 continue
         raise ValueError(
-            f"Неверный формат даты: '{v}'. Ожидается YYYY-MM-DD или YYYY-MM-DDTHH:MM:SS"
+            f"Неверный формат даты: '{v}'. Ожидается YYYY-MM-DD, YYYY-MM-DDTHH:MM или YYYY-MM-DDTHH:MM:SS"
         )
 
 
