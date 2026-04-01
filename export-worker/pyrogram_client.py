@@ -20,7 +20,7 @@ from pyrogram import Client, types as pyrogram_types
 from pyrogram.raw import functions, types as raw_types
 from pyrogram.errors import (
     FloodWait, Unauthorized, BadRequest, ChannelPrivate, ChatAdminRequired,
-    UserDeactivated, AuthKeyUnregistered, SessionExpired, PeerFlood,
+    UserDeactivated, AuthKeyUnregistered, SessionExpired, PeerFlood, PeerIdInvalid,
 )
 
 from config import settings
@@ -372,10 +372,7 @@ class TelegramClient:
                 return (False, None, "USERNAME_NOT_FOUND")
 
             # Numeric ID not in cache — sync dialogs and retry (only for numeric IDs)
-            if isinstance(chat_id, int) and (
-                "Could not find the input entity" in error_str
-                or "PeerIdInvalid" in error_str
-            ):
+            if isinstance(chat_id, int) and isinstance(e, PeerIdInvalid):
                 logger.warning(
                     f"Chat {chat_id} not in cache. Syncing dialog list and retrying..."
                 )
