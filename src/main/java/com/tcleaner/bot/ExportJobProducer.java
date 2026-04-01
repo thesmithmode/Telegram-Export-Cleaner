@@ -58,11 +58,15 @@ public class ExportJobProducer {
     /**
      * Добавляет задачу на экспорт в конец Redis-очереди (RPUSH).
      *
+     * <p>Атомарно резервирует слот через Redis SET NX перед добавлением в очередь.
+     * Если у пользователя уже есть активный экспорт — бросает {@link IllegalStateException}.</p>
+     *
      * @param userId     Telegram user ID пользователя, сделавшего запрос
      * @param userChatId Telegram chat ID — куда вернуть результат (обычно равен userId)
      * @param chatId     ID чата, историю которого нужно экспортировать
      * @return task_id созданной задачи
-     * @throws RuntimeException если не удалось сериализовать задачу или записать в Redis
+     * @throws IllegalStateException если у пользователя уже есть активный экспорт
+     * @throws RuntimeException      если не удалось сериализовать задачу или записать в Redis
      */
     public String enqueue(long userId, long userChatId, long chatId) {
         return enqueue(userId, userChatId, (Object) chatId, null, null);
@@ -132,14 +136,21 @@ public class ExportJobProducer {
 
         try {
             String json = objectMapper.writeValueAsString(job);
-            redis.opsForList().rightPush(queueName, json);
-            // Mark user as having active export
-            redis.opsForValue().set(
+            // Атомарно помечаем экспорт активным (SET NX EX).
+            // Если ключ уже существует — другой запрос уже прошёл, бросаем исключение.
+            Boolean reserved = redis.opsForValue().setIfAbsent(
                     ACTIVE_EXPORT_PREFIX + userId, taskId,
                     ACTIVE_EXPORT_TTL_MINUTES, TimeUnit.MINUTES
             );
+            if (!Boolean.TRUE.equals(reserved)) {
+                String existing = redis.opsForValue().get(ACTIVE_EXPORT_PREFIX + userId);
+                throw new IllegalStateException("Экспорт уже активен: " + existing);
+            }
+            redis.opsForList().rightPush(queueName, json);
             log.info("Задача {} добавлена в очередь {} (chat_id={})", taskId, queueName, chatId);
             return taskId;
+        } catch (IllegalStateException e) {
+            throw e;
         } catch (Exception e) {
             log.error("Не удалось добавить задачу в очередь: {}", e.getMessage(), e);
             throw new RuntimeException("Ошибка добавления задачи в очередь", e);
