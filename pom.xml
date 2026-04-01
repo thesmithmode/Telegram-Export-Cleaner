@@ -55,13 +55,6 @@
             <artifactId>jackson-datatype-jsr310</artifactId>
         </dependency>
 
-        <!-- JCommander for CLI -->
-        <dependency>
-            <groupId>com.beust</groupId>
-            <artifactId>jcommander</artifactId>
-            <version>1.82</version>
-        </dependency>
-
         <!-- SLF4J + Logback (included in Spring Boot) -->
 
         <!-- JUnit 5 for testing -->

@@ -610,6 +610,37 @@ class ExportWorker:
 
         return messages
 
+    async def _update_all_queue_positions(self, current_task_id: str) -> None:
+        """
+        Notify each queued user of their updated position.
+
+        Called right before processing a job: the job being processed gets
+        position=0 ("started"), the rest get their 1-based queue position.
+        """
+        if not self.control_redis or not self.java_client:
+            return
+        try:
+            pending = await self.queue_consumer.get_pending_jobs()
+            total = len(pending)
+            # Notify the job that is about to start
+            val = await self.control_redis.get(f"queue_msg:{current_task_id}")
+            if val:
+                user_chat_id_str, msg_id_str = val.split(":", 1)
+                await self.java_client.update_queue_position(
+                    int(user_chat_id_str), int(msg_id_str), 0, total
+                )
+            # Notify remaining queued jobs of their new position
+            for i, job in enumerate(pending):
+                val = await self.control_redis.get(f"queue_msg:{job.task_id}")
+                if not val:
+                    continue
+                user_chat_id_str, msg_id_str = val.split(":", 1)
+                await self.java_client.update_queue_position(
+                    int(user_chat_id_str), int(msg_id_str), i + 1, total
+                )
+        except Exception as e:
+            logger.warning(f"Could not update queue positions: {e}")
+
     async def run(self):
         """
         Main worker loop.
@@ -629,6 +660,7 @@ class ExportWorker:
                     job = await self.queue_consumer.get_job()
 
                     if job:
+                        await self._update_all_queue_positions(job.task_id)
                         await self.process_job(job)
                     else:
                         # No job - should not happen with BLPOP timeout=0

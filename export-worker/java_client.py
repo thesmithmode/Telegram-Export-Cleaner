@@ -499,6 +499,27 @@ class JavaBotClient:
         """Create a ProgressTracker for a specific export job."""
         return ProgressTracker(self, user_chat_id, task_id)
 
+    async def update_queue_position(
+        self,
+        user_chat_id: int,
+        msg_id: int,
+        position: int,
+        total: int,
+    ) -> None:
+        """Edit user's queue position message with updated position."""
+        if position == 0:
+            text = "⚙️ Ваша задача начата, ожидайте..."
+        else:
+            text = f"📋 Очередь: позиция {position} из {total}\nВпереди {position - 1} задач(и)"
+        try:
+            url = f"https://api.telegram.org/bot{self.bot_token}/editMessageText"
+            await self._http_client.post(
+                url,
+                data={"chat_id": user_chat_id, "message_id": msg_id, "text": text},
+            )
+        except Exception as e:
+            logger.warning(f"Could not update queue position for chat {user_chat_id}: {e}")
+
     async def _notify_user_failure(
         self, user_chat_id: int, task_id: str, error: str
     ) -> None:
