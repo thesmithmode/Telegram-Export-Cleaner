@@ -1647,6 +1647,14 @@ Future: Add JWT or API key header if needed:
 3. Reject requests without valid token
 ```
 
+### Concurrency & Reliability
+
+- **Duplicate export prevention**: `ExportJobProducer.enqueue()` uses Redis `SET NX EX` — atomic check-and-reserve eliminates race condition between concurrent requests from same user
+- **Session memory management**: `ExportBot` evicts sessions inactive for >2 hours every 30 minutes via `@Scheduled` — prevents OOM with many unique users
+- **Dead Letter Queue**: Malformed jobs (invalid JSON or Pydantic validation error) are moved to `<queue>_dead` Redis list instead of being silently discarded
+- **Redis timeout protection**: `socket_timeout=10s` on all Redis async operations prevents indefinite deadlock on connection hang
+- **Empty export notification**: Users are explicitly notified when export completes with 0 messages
+
 ### Data Retention
 
 - **Messages**: Only in memory (never persisted)
