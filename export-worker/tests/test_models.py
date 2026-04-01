@@ -61,6 +61,19 @@ class TestExportRequest:
         assert req.from_date == "2025-01-01"
         assert req.to_date == "2025-12-31"
 
+    def test_request_with_datetime_no_seconds_format(self):
+        """Should accept YYYY-MM-DDTHH:MM date format (without seconds)"""
+        req = ExportRequest(
+            task_id="export_12345",
+            user_id=123456789,
+            chat_id=-1001234567890,
+            from_date="2026-03-30T00:00",
+            to_date="2026-03-30T23:59"
+        )
+
+        assert req.from_date == "2026-03-30T00:00"
+        assert req.to_date == "2026-03-30T23:59"
+
     def test_request_invalid_from_date_rejects(self):
         """Should reject invalid from_date (e.g. impossible date)"""
         with pytest.raises(ValidationError) as exc_info:
