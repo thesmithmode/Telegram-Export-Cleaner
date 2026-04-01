@@ -215,7 +215,10 @@ class TestTelegramClientVerifyAccess:
             return result
 
         mock_pyrogram.get_chat = get_chat_side_effect
-        mock_pyrogram.get_dialogs = AsyncMock(return_value=[])
+        async def _empty_dialog_gen():
+            return
+            yield  # noqa: make it an async generator
+        mock_pyrogram.get_dialogs = _empty_dialog_gen
         mock_pyrogram.invoke = AsyncMock(return_value=MagicMock())
         client.client = mock_pyrogram
         client.is_connected = True
