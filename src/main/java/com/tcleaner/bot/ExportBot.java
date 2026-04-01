@@ -7,6 +7,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
+import org.telegram.telegrambots.meta.api.methods.groupadministration.GetChat;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText;
 import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
@@ -245,8 +246,24 @@ public class ExportBot extends TelegramLongPollingBot {
         long sharedChatId = chatShared.getChatId();
         UserSession session = getSession(userId);
 
-        session.setChatId(sharedChatId);
-        session.setChatDisplay(String.valueOf(sharedChatId));
+        // Для публичных каналов получаем username через Bot API getChat,
+        // чтобы воркер мог разрезолвить канал без членства.
+        Object targetId = sharedChatId;
+        String displayName = String.valueOf(sharedChatId);
+        try {
+            org.telegram.telegrambots.meta.api.objects.Chat fullChat =
+                    execute(new GetChat(String.valueOf(sharedChatId)));
+            String username = fullChat.getUserName();
+            if (username != null && !username.isBlank()) {
+                targetId = username;
+                displayName = "@" + username;
+            }
+        } catch (Exception e) {
+            log.warn("Не удалось получить username для чата {}: {}", sharedChatId, e.getMessage());
+        }
+
+        session.setChatId(targetId);
+        session.setChatDisplay(displayName);
         session.setFromDate(null);
         session.setToDate(null);
         session.setState(UserSession.State.AWAITING_DATE_CHOICE);
