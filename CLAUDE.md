@@ -84,9 +84,12 @@ com.tcleaner
 │   └── UrlValidator        # XSS-защита: разрешает только безопасные схемы (http/https/tg/mailto/…)
 └── bot/                    # Telegram bot (long polling)
     ├── BotInitializer      # Регистрирует ExportBot в TelegramBotsApi при старте (ConditionalOnExpression)
-    ├── ExportBot           # Interactive wizard: chat picker, date range, callbacks
-    ├── ExportJobProducer   # Enqueue jobs to Redis (with optional from_date/to_date)
-    └── UserSession         # Per-user conversation state (state machine: IDLE→AWAITING_DATE_CHOICE→…)
+    ├── ExportBot           # Interactive wizard: chat picker, date range, callbacks;
+    │                       #   @Scheduled eviction сессий без активности > 2ч (защита от OOM)
+    ├── ExportJobProducer   # Enqueue jobs to Redis (with optional from_date/to_date);
+    │                       #   атомарная защита от дублирующих экспортов через SET NX
+    └── UserSession         # Per-user conversation state (state machine: IDLE→AWAITING_DATE_CHOICE→…);
+                            #   lastAccess для TTL eviction
 ```
 
 ### Python Worker Structure (export-worker/)
@@ -102,9 +105,12 @@ export-worker/
 │                           #   кэш-синхронизация Pyrogram entity access_hash,
 │                           #   raw MTProto fallback (access_hash=0) для публичных каналов по числовому ID,
 │                           #   get_messages_count() — universal count (raw MTProto для date-range)
-├── queue_consumer.py       # Redis BRPOP consumer: получение задач из очереди, таймауты, retry
+├── queue_consumer.py       # Redis BRPOP consumer: получение задач из очереди, таймауты, retry,
+│                           #   Dead Letter Queue (невалидные задачи → <queue>_dead),
+│                           #   socket_timeout=10с для защиты от deadlock
 ├── java_client.py          # HTTP-клиент к Java API: отправка сообщений на конвертацию,
-│                           #   UTF-16 entity offset handling, split файлов > 45МБ на части
+│                           #   UTF-16 entity offset handling, split файлов > 45МБ на части,
+│                           #   _notify_user_empty() при пустом результате экспорта
 ├── json_converter.py       # Конвертация Pyrogram Message → Telegram JSON export format
 ├── get_session.py          # Утилита: генерация Pyrogram string session для production
 ├── requirements.txt        # Production-зависимости
@@ -140,6 +146,9 @@ export-worker/
   - Прогресс должен работать во ВСЕХ путях экспорта: `_fetch_all_messages`, `_export_with_id_cache`, `_export_with_date_cache`
 - **Memory monitoring**: psutil отслеживает потребление памяти (оптимизация для слабых серверов)
 - **MAX_WORKERS**: По умолчанию 1, настраивается через env var. Каждый worker — отдельный Pyrogram клиент
+- **Dead Letter Queue**: Невалидные задачи (ошибка JSON или валидации Pydantic) автоматически перекладываются в Redis-список `<queue>_dead` с причиной и timestamp — не теряются
+- **Пустой результат**: `send_response()` явно уведомляет пользователя если экспорт вернул 0 сообщений
+- **Валидация дат**: `ExportRequest.from_date`/`to_date` валидируются Pydantic field_validator на входе из очереди (форматы: `YYYY-MM-DD` или `YYYY-MM-DDTHH:MM:SS`)
 
 ### Design Principles
 

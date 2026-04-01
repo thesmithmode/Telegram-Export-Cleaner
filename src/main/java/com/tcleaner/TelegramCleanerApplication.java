@@ -10,6 +10,10 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  *
  * <p>{@link UserDetailsServiceAutoConfiguration} исключён,
  * чтобы Spring не генерировал случайный пароль и не печатал его в лог.</p>
+ *
+ * <p>{@code @EnableScheduling} включает поддержку {@code @Scheduled}-аннотаций,
+ * используемых в {@link com.tcleaner.bot.ExportBot} для периодического
+ * вытеснения неактивных пользовательских сессий.</p>
  */
 @SpringBootApplication(exclude = UserDetailsServiceAutoConfiguration.class)
 @EnableScheduling
