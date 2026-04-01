@@ -377,7 +377,8 @@ class TelegramClient:
                     f"Chat {chat_id} not in cache. Syncing dialog list and retrying..."
                 )
                 try:
-                    await self.client.get_dialogs()
+                    async for _ in self.client.get_dialogs():
+                        pass
                     chat = await self.client.get_chat(chat_id)
                     logger.info(f"Successfully resolved chat {chat_id} after cache sync")
                     return (True, self._build_chat_info(chat), None)
