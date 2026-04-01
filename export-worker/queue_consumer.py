@@ -60,6 +60,8 @@ class QueueConsumer:
             self.redis_client = await redis.from_url(
                 self.redis_url,
                 decode_responses=True,
+                socket_timeout=10,        # Таймаут на операции (сек)
+                socket_connect_timeout=5, # Таймаут на установку соединения (сек)
             )
 
             # Test connection
