@@ -119,4 +119,28 @@ class ExportJobProducerTest {
         Map<String, Object> job2 = objectMapper.readValue(second, Map.class);
         assertThat(((Number) job2.get("chat_id")).longValue()).isEqualTo(chatId2);
     }
+
+    @Test
+    @DisplayName("storeQueueMsgId сохраняет ключ queue_msg:{taskId} в Redis")
+    void storeQueueMsgIdSavesKey() {
+        String taskId = "export_abc123";
+        long userChatId = 987654L;
+        int msgId = 42;
+
+        producer.storeQueueMsgId(taskId, userChatId, msgId);
+
+        String stored = redisTemplate.opsForValue().get("queue_msg:" + taskId);
+        assertThat(stored).isEqualTo(userChatId + ":" + msgId);
+    }
+
+    @Test
+    @DisplayName("getQueueLength возвращает текущую длину очереди")
+    void getQueueLengthReturnsCorrectCount() {
+        assertThat(producer.getQueueLength()).isZero();
+
+        producer.enqueue(1L, 1L, -100L);
+        producer.enqueue(2L, 2L, -200L);
+
+        assertThat(producer.getQueueLength()).isEqualTo(2L);
+    }
 }

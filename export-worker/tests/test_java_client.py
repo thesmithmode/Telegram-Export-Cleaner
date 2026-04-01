@@ -635,3 +635,67 @@ class TestEntityTransformation:
         assert "offset" not in msg["text_entities"][0]
         assert msg["text_entities"][1]["type"] == "italic"
         assert msg["text_entities"][1]["text"] == "world"
+
+
+@pytest.mark.asyncio
+class TestUpdateQueuePosition:
+    """Tests for update_queue_position."""
+
+    async def test_sends_position_message(self):
+        """Should edit message with queue position text."""
+        with patch('java_client.settings') as mock_settings:
+            mock_settings.JAVA_API_BASE_URL = "http://localhost:8080"
+            mock_settings.TELEGRAM_BOT_TOKEN = "test_token"
+
+            client = JavaBotClient()
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            client._http_client = AsyncMock()
+            client._http_client.post = AsyncMock(return_value=mock_response)
+
+            await client.update_queue_position(
+                user_chat_id=123, msg_id=456, position=2, total=5
+            )
+
+            client._http_client.post.assert_called_once()
+            call_args = client._http_client.post.call_args
+            assert "editMessageText" in call_args[0][0]
+            data = call_args[1]["data"]
+            assert data["chat_id"] == 123
+            assert data["message_id"] == 456
+            assert "2" in data["text"]
+            assert "5" in data["text"]
+
+    async def test_sends_started_message_when_position_zero(self):
+        """Should send 'started' message when position is 0."""
+        with patch('java_client.settings') as mock_settings:
+            mock_settings.JAVA_API_BASE_URL = "http://localhost:8080"
+            mock_settings.TELEGRAM_BOT_TOKEN = "test_token"
+
+            client = JavaBotClient()
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            client._http_client = AsyncMock()
+            client._http_client.post = AsyncMock(return_value=mock_response)
+
+            await client.update_queue_position(
+                user_chat_id=123, msg_id=456, position=0, total=0
+            )
+
+            data = client._http_client.post.call_args[1]["data"]
+            assert "начата" in data["text"]
+
+    async def test_handles_http_error_gracefully(self):
+        """Should not raise on HTTP error."""
+        with patch('java_client.settings') as mock_settings:
+            mock_settings.JAVA_API_BASE_URL = "http://localhost:8080"
+            mock_settings.TELEGRAM_BOT_TOKEN = "test_token"
+
+            client = JavaBotClient()
+            client._http_client = AsyncMock()
+            client._http_client.post = AsyncMock(side_effect=Exception("connection refused"))
+
+            # Should not raise
+            await client.update_queue_position(
+                user_chat_id=123, msg_id=456, position=1, total=3
+            )

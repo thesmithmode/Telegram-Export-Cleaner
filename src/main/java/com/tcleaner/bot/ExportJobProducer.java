@@ -147,6 +147,31 @@ public class ExportJobProducer {
     }
 
     /**
+     * Возвращает текущую длину очереди (количество ожидающих задач).
+     *
+     * @return количество задач в очереди
+     */
+    public long getQueueLength() {
+        Long size = redis.opsForList().size(queueName);
+        return size != null ? size : 0L;
+    }
+
+    /**
+     * Сохраняет message_id сообщения о позиции в очереди для последующего редактирования воркером.
+     *
+     * @param taskId     ID задачи
+     * @param userChatId Telegram chat ID пользователя
+     * @param msgId      ID отправленного сообщения с позицией
+     */
+    public void storeQueueMsgId(String taskId, long userChatId, int msgId) {
+        redis.opsForValue().set(
+                "queue_msg:" + taskId,
+                userChatId + ":" + msgId,
+                2, TimeUnit.HOURS
+        );
+    }
+
+    /**
      * Проверяет, есть ли у пользователя активный экспорт.
      * Автоматически очищает протухшие ключи: если задача уже completed/failed
      * или отсутствует в очереди и не в processing — считается завершённой.

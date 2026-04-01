@@ -1,6 +1,5 @@
 package com.tcleaner.core;
 
-import com.tcleaner.TelegramFileExporterInterface;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -13,7 +12,6 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.io.Writer;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -48,7 +46,7 @@ import java.util.List;
  * конфигурации, {@link MessageProcessor} не хранит состояния.</p>
  */
 @Service
-public class TelegramExporter implements TelegramFileExporterInterface {
+public class TelegramExporter implements TelegramExporterInterface {
 
     private static final Logger log = LoggerFactory.getLogger(TelegramExporter.class);
 
@@ -262,40 +260,4 @@ public class TelegramExporter implements TelegramFileExporterInterface {
         return false;
     }
 
-    /**
-     * Обрабатывает файл без фильтрации и записывает результат в выходной файл.
-     *
-     * <p>Эквивалентно {@link #processFileToFile(Path, Path, MessageFilter)
-     * processFileToFile(inputPath, outputPath, null)}.</p>
-     *
-     * @param inputPath  путь к файлу {@code result.json}
-     * @param outputPath путь к выходному файлу
-     * @throws IOException               при ошибках чтения/записи
-     * @throws TelegramExporterException при отсутствии файла или невалидном JSON
-     */
-    public void processFileToFile(Path inputPath, Path outputPath) throws IOException {
-        processFileToFile(inputPath, outputPath, null);
-    }
-
-    /**
-     * Обрабатывает файл с опциональной фильтрацией и записывает результат в выходной файл.
-     *
-     * <p>Использует {@link #processFileStreaming} — запись построчно через {@link java.io.BufferedWriter}
-     * без загрузки всего JSON в память. Подходит для файлов любого размера.</p>
-     *
-     * @param inputPath  путь к файлу {@code result.json}
-     * @param outputPath путь к выходному файлу (создаётся или перезаписывается)
-     * @param filter     фильтр сообщений; {@code null} — фильтрация не применяется
-     * @throws IOException               при ошибках чтения/записи
-     * @throws TelegramExporterException при отсутствии файла или невалидном JSON
-     */
-    public void processFileToFile(Path inputPath, Path outputPath, MessageFilter filter)
-            throws IOException {
-        log.debug("Начало обработки (streaming): {} -> {}", inputPath, outputPath);
-
-        try (java.io.BufferedWriter writer = Files.newBufferedWriter(outputPath, StandardCharsets.UTF_8)) {
-            int count = processFileStreaming(inputPath, filter, writer);
-            log.info("Результат записан в файл: {} ({} строк)", outputPath, count);
-        }
-    }
 }
