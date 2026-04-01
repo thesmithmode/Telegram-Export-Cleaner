@@ -426,6 +426,11 @@ public class ExportBot extends TelegramLongPollingBot {
                 taskId = jobProducer.enqueue(userId, chatId, (Long) targetChatId,
                         session.getFromDate(), session.getToDate());
             }
+        } catch (IllegalStateException e) {
+            // Экспорт уже активен — race condition побеждён на уровне SET NX
+            log.warn("Попытка дублирующего экспорта от пользователя {}: {}", userId, e.getMessage());
+            sendText(chatId, "⏳ У вас уже есть активный экспорт. Дождитесь его завершения или отмените.");
+            return;
         } catch (Exception e) {
             log.error("Ошибка при постановке задачи в очередь: {}", e.getMessage(), e);
             sendText(chatId, "Произошла ошибка при добавлении задачи. Попробуйте позже.");
