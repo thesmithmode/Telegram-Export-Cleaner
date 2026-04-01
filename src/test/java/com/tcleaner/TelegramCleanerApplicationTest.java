@@ -1,5 +1,4 @@
 package com.tcleaner;
-import com.tcleaner.api.FileController;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -12,8 +11,6 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
-
-import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -35,12 +32,8 @@ class TelegramCleanerApplicationTest {
 
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry registry) {
-        Path tmp = Path.of(System.getProperty("java.io.tmpdir"));
-        registry.add("app.storage.import-path", () -> tmp.resolve("tcleaner-test/import").toString());
-        registry.add("app.storage.export-path", () -> tmp.resolve("tcleaner-test/export").toString());
         registry.add("spring.data.redis.host", redis::getHost);
         registry.add("spring.data.redis.port", () -> redis.getMappedPort(6379));
-        registry.add("spring.autoconfigure.exclude", () -> "");
     }
 
     @Autowired
@@ -58,12 +51,6 @@ class TelegramCleanerApplicationTest {
         assertThat(context.getBeanNamesForType(
                 org.springframework.security.core.userdetails.UserDetailsService.class))
                 .isEmpty();
-    }
-
-    @Test
-    @DisplayName("FileController присутствует в контексте")
-    void fileControllerBeanExists() {
-        assertThat(context.getBean(FileController.class)).isNotNull();
     }
 
     @Test
