@@ -100,6 +100,7 @@ export-worker/
 │                           #   msgpack сериализация, TTL 7 дней, LRU eviction, per-chat cap
 ├── pyrogram_client.py      # Pyrogram MTProto клиент: экспорт сообщений, FloodWait handling,
 │                           #   кэш-синхронизация Pyrogram entity access_hash,
+│                           #   raw MTProto fallback (access_hash=0) для публичных каналов по числовому ID,
 │                           #   get_messages_count() — universal count (raw MTProto для date-range)
 ├── queue_consumer.py       # Redis BRPOP consumer: получение задач из очереди, таймауты, retry
 ├── java_client.py          # HTTP-клиент к Java API: отправка сообщений на конвертацию,
