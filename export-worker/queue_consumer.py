@@ -148,11 +148,13 @@ class QueueConsumer:
                 return job
 
             except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse job JSON: {e}")
+                logger.error(f"Failed to parse job JSON: {e}. Moving to DLQ.")
+                await self._move_to_dlq(job_json, f"JSON parse error: {e}")
                 return None
 
             except Exception as e:
-                logger.error(f"Failed to create ExportRequest: {e}")
+                logger.error(f"Failed to create ExportRequest: {e}. Moving to DLQ.")
+                await self._move_to_dlq(job_json, f"Validation error: {e}")
                 return None
 
         except redis.ConnectionError as e:
@@ -168,6 +170,28 @@ class QueueConsumer:
         except Exception as e:
             logger.error(f"Error getting job from queue: {e}", exc_info=True)
             return None
+
+    async def _move_to_dlq(self, job_json: str, reason: str) -> None:
+        """
+        Перекладывает невалидную задачу в Dead Letter Queue.
+
+        Отравленные сообщения (невалидный JSON, ошибка валидации Pydantic)
+        не теряются и могут быть проверены вручную в Redis-ключе <queue>_dead.
+        """
+        if not self.redis_client:
+            return
+        try:
+            import json as _json
+            dlq_entry = _json.dumps({
+                "raw": job_json,
+                "reason": reason,
+                "timestamp": datetime.now().isoformat(),
+            })
+            dlq_name = f"{self.queue_name}_dead"
+            await self.redis_client.rpush(dlq_name, dlq_entry)
+            logger.warning(f"Moved invalid job to DLQ '{dlq_name}': {reason}")
+        except Exception as e:
+            logger.error(f"Failed to move job to DLQ: {e}")
 
     async def push_job(self, job: ExportRequest) -> bool:
         """
