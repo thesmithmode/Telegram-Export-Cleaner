@@ -333,11 +333,18 @@ class TelegramClient:
         """
         Check access and get chat info in single API call.
 
-        FALLBACK CACHE SYNC: For numeric IDs, Pyrogram caches entity access_hash
+        FALLBACK 1 — CACHE SYNC: For numeric IDs, Pyrogram caches entity access_hash
         locally. If the ID isn't cached, get_chat() fails with PeerIdInvalidError.
         Solution: call get_dialogs() to sync the cache, then retry.
         For string usernames this fallback is skipped — Pyrogram resolves them
         via contacts.resolveUsername API directly.
+
+        FALLBACK 2 — RAW MTPROTO (публичные каналы по числовому ID из picker):
+        Когда picker передаёт числовой ID (-100...) публичного канала,
+        воркер не состоит в нём и get_dialogs() не помогает.
+        Telegram принимает channels.GetChannels с access_hash=0 для публичных
+        сущностей и возвращает реальный access_hash, который Pyrogram кэширует.
+        После этого get_chat() работает без проблем.
 
         Args:
             chat_id: Telegram chat ID or username

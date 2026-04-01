@@ -186,6 +186,48 @@ class TestTelegramClientVerifyAccess:
         assert info["is_contact"] is False
         assert error_reason is None
 
+    @pytest.mark.asyncio
+    async def test_verify_and_get_info_public_channel_by_numeric_id_via_raw_mtproto(self):
+        """Числовой ID публичного канала из picker: get_dialogs() не помогает,
+        fallback через raw MTProto channels.GetChannels(access_hash=0) должен разрезолвить."""
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+
+        # Первый get_chat — PeerIdInvalid (нет в кэше)
+        class FakePublicChannel:
+            id = -1002087367320
+            title = "Public Channel"
+            username = "publicchannel"
+            type = "channel"
+            members_count = 1000
+            description = ""
+
+        get_chat_results = [
+            BadRequest("Could not find the input entity"),  # первый вызов
+            BadRequest("Could not find the input entity"),  # после get_dialogs()
+            FakePublicChannel(),                            # после invoke()
+        ]
+
+        async def get_chat_side_effect(*args, **kwargs):
+            result = get_chat_results.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        mock_pyrogram.get_chat = get_chat_side_effect
+        mock_pyrogram.get_dialogs = AsyncMock(return_value=[])
+        mock_pyrogram.invoke = AsyncMock(return_value=MagicMock())
+        client.client = mock_pyrogram
+        client.is_connected = True
+
+        accessible, info, error_reason = await client.verify_and_get_info(-1002087367320)
+
+        assert accessible is True
+        assert info is not None
+        assert info["title"] == "Public Channel"
+        assert error_reason is None
+        mock_pyrogram.invoke.assert_called_once()
+
 
 class TestTelegramClientHistoryExport:
     """Test message history export."""
