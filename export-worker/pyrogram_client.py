@@ -380,6 +380,32 @@ class TelegramClient:
 
                 except Exception as retry_error:
                     logger.error(f"Cache sync retry failed for chat {chat_id}: {retry_error}")
+                    # Последний fallback: raw MTProto с access_hash=0 для публичных каналов.
+                    # Telegram принимает access_hash=0 для публичных сущностей и возвращает
+                    # реальный access_hash, который Pyrogram кэширует локально.
+                    if chat_id < -1000000000000:
+                        try:
+                            channel_id = abs(chat_id) - 1000000000000
+                            logger.warning(
+                                f"Trying raw MTProto access_hash=0 for channel {channel_id}..."
+                            )
+                            await self.client.invoke(
+                                functions.channels.GetChannels(
+                                    id=[raw_types.InputChannel(
+                                        channel_id=channel_id, access_hash=0
+                                    )]
+                                )
+                            )
+                            chat = await self.client.get_chat(chat_id)
+                            logger.info(f"Resolved public channel {chat_id} via raw MTProto")
+                            return (True, self._build_chat_info(chat), None)
+                        except ChannelPrivate:
+                            logger.error(f"❌ Channel {chat_id} is private (raw MTProto)")
+                            return (False, None, "CHANNEL_PRIVATE")
+                        except Exception as raw_error:
+                            logger.error(
+                                f"Raw MTProto fallback failed for channel {chat_id}: {raw_error}"
+                            )
                     return (False, None, "CHAT_NOT_ACCESSIBLE")
 
             return (False, None, "CHAT_NOT_ACCESSIBLE")
