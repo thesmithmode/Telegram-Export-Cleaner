@@ -3,6 +3,7 @@ package com.tcleaner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * Точка входа приложения.
@@ -11,6 +12,7 @@ import org.springframework.boot.autoconfigure.security.servlet.UserDetailsServic
  * чтобы Spring не генерировал случайный пароль и не печатал его в лог.</p>
  */
 @SpringBootApplication(exclude = UserDetailsServiceAutoConfiguration.class)
+@EnableScheduling
 public class TelegramCleanerApplication {
 
     /**

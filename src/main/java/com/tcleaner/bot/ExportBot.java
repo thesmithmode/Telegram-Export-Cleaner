@@ -22,6 +22,10 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.Keyboard
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
+import org.springframework.scheduling.annotation.Scheduled;
+
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
@@ -588,7 +592,24 @@ public class ExportBot extends TelegramLongPollingBot {
     // === Helpers ===
 
     private UserSession getSession(long userId) {
-        return sessions.computeIfAbsent(userId, k -> new UserSession());
+        UserSession session = sessions.computeIfAbsent(userId, k -> new UserSession());
+        session.touch();
+        return session;
+    }
+
+    /**
+     * Вытесняет сессии, к которым не обращались более 2 часов.
+     * Запускается каждые 30 минут, предотвращает утечку памяти при большом числе пользователей.
+     */
+    @Scheduled(fixedDelay = 30 * 60 * 1000)
+    public void evictStaleSessions() {
+        Instant threshold = Instant.now().minus(Duration.ofHours(2));
+        int before = sessions.size();
+        sessions.entrySet().removeIf(e -> e.getValue().getLastAccess().isBefore(threshold));
+        int removed = before - sessions.size();
+        if (removed > 0) {
+            log.info("Вытеснено {} неактивных сессий (осталось: {})", removed, sessions.size());
+        }
     }
 
     /**
