@@ -7,7 +7,7 @@ Covers connection, authentication, message export, and error handling.
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime
-from pyrogram.errors import Unauthorized, BadRequest
+from pyrogram.errors import Unauthorized, BadRequest, PeerIdInvalid
 
 from pyrogram_client import TelegramClient
 from models import ExportedMessage
@@ -203,8 +203,8 @@ class TestTelegramClientVerifyAccess:
             description = ""
 
         get_chat_results = [
-            BadRequest("Could not find the input entity"),  # первый вызов
-            BadRequest("Could not find the input entity"),  # после get_dialogs()
+            PeerIdInvalid(),  # первый вызов — нет в кэше
+            PeerIdInvalid(),  # после get_dialogs() — всё ещё не в кэше
             FakePublicChannel(),                            # после invoke()
         ]
 
