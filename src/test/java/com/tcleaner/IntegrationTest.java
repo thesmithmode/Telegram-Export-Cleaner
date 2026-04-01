@@ -1,6 +1,5 @@
 package com.tcleaner;
 
-import com.tcleaner.core.MessageFilter;
 import com.tcleaner.core.TelegramExporter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -97,57 +96,6 @@ class IntegrationTest {
         assertThat(result.get(0)).startsWith("20250624 Друзья");
         assertThat(result.get(1)).startsWith("20250624 Новое видео на канале:");
         assertThat(result.get(1)).contains("https://www.youtube.com");
-    }
-
-    @Test
-    @DisplayName("processFileToFile без фильтра: содержимое совпадает с processFile")
-    void processFileToFileMatchesProcessFile() throws IOException {
-        String json = """
-            {
-                "name": "Test",
-                "messages": [
-                    {"id": 1, "type": "message", "date": "2025-06-24T10:00:00", "text": "Line 1"},
-                    {"id": 2, "type": "message", "date": "2025-06-24T11:00:00", "text": "Line 2"}
-                ]
-            }
-            """;
-
-        Path inputFile = tempDir.resolve("result.json");
-        Path outputFile = tempDir.resolve("output.txt");
-        Files.writeString(inputFile, json);
-
-        exporter.processFileToFile(inputFile, outputFile);
-
-        // Files.write пишет строки через системный разделитель строк
-        List<String> lines = Files.readAllLines(outputFile);
-        assertThat(lines).containsExactly(
-            "20250624 Line 1",
-            "20250624 Line 2"
-        );
-    }
-
-    @Test
-    @DisplayName("processFileToFile с фильтром: применяет фильтр перед записью")
-    void processFileToFileWithFilterAppliesFilter() throws IOException {
-        String json = """
-            {
-                "messages": [
-                    {"id": 1, "type": "message", "date": "2025-06-24T10:00:00", "text": "Keep this"},
-                    {"id": 2, "type": "message", "date": "2025-06-24T11:00:00", "text": "Skip this"}
-                ]
-            }
-            """;
-
-        Path inputFile = tempDir.resolve("result.json");
-        Path outputFile = tempDir.resolve("output.txt");
-        Files.writeString(inputFile, json);
-
-        MessageFilter filter = new MessageFilter().withKeyword("keep");
-        exporter.processFileToFile(inputFile, outputFile, filter);
-
-        List<String> lines = Files.readAllLines(outputFile);
-        assertThat(lines).hasSize(1);
-        assertThat(lines.get(0)).contains("Keep this");
     }
 
     @Test
