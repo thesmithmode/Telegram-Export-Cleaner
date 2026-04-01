@@ -65,6 +65,10 @@ class JavaBotClient:
                 # Notify user about failure if we know their chat
                 if user_chat_id and self.bot_token:
                     await self._notify_user_failure(user_chat_id, task_id, error)
+            elif not messages and user_chat_id and self.bot_token:
+                # Успешный экспорт, но сообщений нет — уведомляем явно
+                logger.info(f"Task {task_id}: no messages found, notifying user")
+                await self._notify_user_empty(user_chat_id, task_id)
             return True
 
         # Build result.json payload (Telegram Desktop export format)
@@ -531,6 +535,19 @@ class JavaBotClient:
             await self._http_client.post(url, data={"chat_id": user_chat_id, "text": text})
         except Exception as e:
             logger.warning(f"Could not notify user of failure: {e}")
+
+    async def _notify_user_empty(self, user_chat_id: int, task_id: str) -> None:
+        """Notify user that no messages were found for the export."""
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        text = (
+            f"ℹ️ Экспорт завершён (task {task_id})\n\n"
+            "Сообщений не найдено. Возможно, чат пуст или в указанном диапазоне дат нет сообщений."
+        )
+
+        try:
+            await self._http_client.post(url, data={"chat_id": user_chat_id, "text": text})
+        except Exception as e:
+            logger.warning(f"Could not notify user of empty result: {e}")
 
     async def aclose(self):
         """Close HTTP client connection."""
