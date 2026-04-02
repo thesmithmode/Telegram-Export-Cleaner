@@ -228,6 +228,82 @@ class TestExportWorkerJobProcessing:
         worker.queue_consumer.mark_job_failed.assert_called()
 
 
+class TestChatIdNormalization:
+    """Test that chat_id is normalized to canonical numeric ID after verify_and_get_info."""
+
+    @pytest.fixture
+    def worker(self):
+        worker = ExportWorker()
+        worker.queue_consumer = AsyncMock()
+        worker.telegram_client = AsyncMock()
+        worker.java_client = _make_mock_java_client()
+        worker.telegram_client.get_messages_count = AsyncMock(return_value=1)
+        worker.message_cache = MessageCache(
+            redis_client=AsyncMock(),
+            enabled=False,
+        )
+        worker.control_redis = AsyncMock()
+        worker.control_redis.get = AsyncMock(return_value=None)
+        return worker
+
+    @pytest.mark.asyncio
+    async def test_chat_id_normalized_from_username_to_numeric(self, worker):
+        """Если пользователь передаёт username, chat_id нормализуется до числового ID
+        из chat_info['id'] — чтобы кэш по числовому ID тоже попадал в цель."""
+        canonical_id = -1002477958568
+        job = ExportRequest(
+            task_id="norm_task_1", user_id=1, user_chat_id=1,
+            chat_id="strbypass", limit=0, offset_id=0,
+        )
+
+        # verify_and_get_info возвращает канонический числовой ID
+        worker.telegram_client.verify_and_get_info = AsyncMock(
+            return_value=(True, {"id": canonical_id, "title": "Test", "type": "supergroup"}, None)
+        )
+
+        messages = [ExportedMessage(id=1, date="2025-01-01T00:00:00", text="Hi")]
+
+        async def mock_history(*args, **kwargs):
+            # Проверяем: get_chat_history вызывается с нормализованным числовым ID
+            assert kwargs.get("chat_id") == canonical_id or args[0] == canonical_id
+            for msg in messages:
+                yield msg
+
+        worker.telegram_client.get_chat_history = mock_history
+        worker.java_client.send_response = AsyncMock(return_value=True)
+        worker.queue_consumer.mark_job_processing = AsyncMock()
+        worker.queue_consumer.mark_job_completed = AsyncMock()
+
+        result = await worker.process_job(job)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_chat_id_no_change_when_already_canonical(self, worker):
+        """Если chat_id уже совпадает с chat_info['id'], нормализация не меняет ничего."""
+        job = ExportRequest(
+            task_id="norm_task_2", user_id=1, user_chat_id=1,
+            chat_id=-1002477958568, limit=0, offset_id=0,
+        )
+
+        worker.telegram_client.verify_and_get_info = AsyncMock(
+            return_value=(True, {"id": -1002477958568, "title": "Test", "type": "supergroup"}, None)
+        )
+
+        messages = [ExportedMessage(id=1, date="2025-01-01T00:00:00", text="Hi")]
+
+        async def mock_history(*args, **kwargs):
+            for msg in messages:
+                yield msg
+
+        worker.telegram_client.get_chat_history = mock_history
+        worker.java_client.send_response = AsyncMock(return_value=True)
+        worker.queue_consumer.mark_job_processing = AsyncMock()
+        worker.queue_consumer.mark_job_completed = AsyncMock()
+
+        result = await worker.process_job(job)
+        assert result is True
+
+
 class TestExportWorkerProgressReporting:
     """Test progress reporting to user."""
 

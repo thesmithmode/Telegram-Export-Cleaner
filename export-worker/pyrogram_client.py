@@ -329,6 +329,57 @@ class TelegramClient:
             "description": getattr(chat, "description", "") or "",
         }
 
+    async def _resolve_numeric_chat_id(
+        self, chat_id: int
+    ) -> tuple[bool, Optional[dict], Optional[str]]:
+        """
+        Resolve a numeric chat_id that is not in the Pyrogram local peer cache.
+
+        Strategy:
+          1. Sync dialog list (get_dialogs) — works if worker is a member of the chat.
+          2. Raw MTProto channels.GetChannels with access_hash=0 — works for public
+             channels even when the worker is not a member.
+
+        Returns the same (is_accessible, chat_info, error_reason) tuple as verify_and_get_info.
+        """
+        logger.warning(f"Chat {chat_id} not in cache. Syncing dialog list and retrying...")
+        try:
+            async for _ in self.client.get_dialogs():
+                pass
+            chat = await self.client.get_chat(chat_id)
+            logger.info(f"Successfully resolved chat {chat_id} after cache sync")
+            return (True, self._build_chat_info(chat), None)
+
+        except Exception as retry_error:
+            logger.error(f"Cache sync retry failed for chat {chat_id}: {retry_error}")
+            # Последний fallback: raw MTProto с access_hash=0 для публичных каналов.
+            # Telegram принимает access_hash=0 для публичных сущностей и возвращает
+            # реальный access_hash, который Pyrogram кэширует локально.
+            if chat_id < -1000000000000:
+                try:
+                    channel_id = abs(chat_id) - 1000000000000
+                    logger.warning(
+                        f"Trying raw MTProto access_hash=0 for channel {channel_id}..."
+                    )
+                    await self.client.invoke(
+                        functions.channels.GetChannels(
+                            id=[raw_types.InputChannel(
+                                channel_id=channel_id, access_hash=0
+                            )]
+                        )
+                    )
+                    chat = await self.client.get_chat(chat_id)
+                    logger.info(f"Resolved public channel {chat_id} via raw MTProto")
+                    return (True, self._build_chat_info(chat), None)
+                except ChannelPrivate:
+                    logger.error(f"❌ Channel {chat_id} is private (raw MTProto)")
+                    return (False, None, "CHANNEL_PRIVATE")
+                except Exception as raw_error:
+                    logger.error(
+                        f"Raw MTProto fallback failed for channel {chat_id}: {raw_error}"
+                    )
+            return (False, None, "CHAT_NOT_ACCESSIBLE")
+
     async def verify_and_get_info(self, chat_id: Union[int, str]) -> tuple[bool, Optional[dict], Optional[str]]:
         """
         Check access and get chat info in single API call.
@@ -373,47 +424,23 @@ class TelegramClient:
 
             # Numeric ID not in cache — sync dialogs and retry (only for numeric IDs)
             if isinstance(chat_id, int) and isinstance(e, PeerIdInvalid):
-                logger.warning(
-                    f"Chat {chat_id} not in cache. Syncing dialog list and retrying..."
-                )
-                try:
-                    async for _ in self.client.get_dialogs():
-                        pass
-                    chat = await self.client.get_chat(chat_id)
-                    logger.info(f"Successfully resolved chat {chat_id} after cache sync")
-                    return (True, self._build_chat_info(chat), None)
-
-                except Exception as retry_error:
-                    logger.error(f"Cache sync retry failed for chat {chat_id}: {retry_error}")
-                    # Последний fallback: raw MTProto с access_hash=0 для публичных каналов.
-                    # Telegram принимает access_hash=0 для публичных сущностей и возвращает
-                    # реальный access_hash, который Pyrogram кэширует локально.
-                    if chat_id < -1000000000000:
-                        try:
-                            channel_id = abs(chat_id) - 1000000000000
-                            logger.warning(
-                                f"Trying raw MTProto access_hash=0 for channel {channel_id}..."
-                            )
-                            await self.client.invoke(
-                                functions.channels.GetChannels(
-                                    id=[raw_types.InputChannel(
-                                        channel_id=channel_id, access_hash=0
-                                    )]
-                                )
-                            )
-                            chat = await self.client.get_chat(chat_id)
-                            logger.info(f"Resolved public channel {chat_id} via raw MTProto")
-                            return (True, self._build_chat_info(chat), None)
-                        except ChannelPrivate:
-                            logger.error(f"❌ Channel {chat_id} is private (raw MTProto)")
-                            return (False, None, "CHANNEL_PRIVATE")
-                        except Exception as raw_error:
-                            logger.error(
-                                f"Raw MTProto fallback failed for channel {chat_id}: {raw_error}"
-                            )
-                    return (False, None, "CHAT_NOT_ACCESSIBLE")
+                return await self._resolve_numeric_chat_id(chat_id)
 
             return (False, None, "CHAT_NOT_ACCESSIBLE")
+
+        except ValueError as e:
+            # Pyrogram raises ValueError("Peer id invalid: ...") when the peer is not
+            # in the local session cache — before making any API call.
+            # This is distinct from the BadRequest/PeerIdInvalid API error path above.
+            error_str = str(e)
+            if isinstance(chat_id, int) and "Peer id invalid" in error_str:
+                logger.warning(
+                    f"Chat {chat_id} not in Pyrogram cache (ValueError). "
+                    f"Attempting cache sync + raw MTProto fallback..."
+                )
+                return await self._resolve_numeric_chat_id(chat_id)
+            logger.error(f"ValueError accessing chat {chat_id}: {error_str}")
+            return (False, None, "UNKNOWN")
 
         except ChannelPrivate:
             logger.error(f"❌ Channel {chat_id} is private")

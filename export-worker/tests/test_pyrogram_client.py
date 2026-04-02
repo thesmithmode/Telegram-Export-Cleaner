@@ -232,6 +232,70 @@ class TestTelegramClientVerifyAccess:
         mock_pyrogram.invoke.assert_called_once()
 
 
+    @pytest.mark.asyncio
+    async def test_verify_and_get_info_value_error_peer_id_triggers_fallback(self):
+        """ValueError 'Peer id invalid' от Pyrogram (peer не в локальном кэше сессии)
+        должен активировать тот же fallback, что и PeerIdInvalid из BadRequest:
+        синхронизация диалогов → raw MTProto channels.GetChannels(access_hash=0)."""
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+
+        class FakePublicChannel:
+            id = -1002477958568
+            title = "Test Supergroup"
+            username = "testgroup"
+            type = "supergroup"
+            members_count = 500
+            description = ""
+
+        get_chat_results = [
+            ValueError("Peer id invalid: -1002477958568"),  # нет в кэше
+            ValueError("Peer id invalid: -1002477958568"),  # после get_dialogs()
+            FakePublicChannel(),                             # после invoke()
+        ]
+
+        async def get_chat_side_effect(*args, **kwargs):
+            result = get_chat_results.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        mock_pyrogram.get_chat = get_chat_side_effect
+
+        async def _empty_dialog_gen():
+            return
+            yield  # noqa: make it an async generator
+
+        mock_pyrogram.get_dialogs = _empty_dialog_gen
+        mock_pyrogram.invoke = AsyncMock(return_value=MagicMock())
+        client.client = mock_pyrogram
+        client.is_connected = True
+
+        accessible, info, error_reason = await client.verify_and_get_info(-1002477958568)
+
+        assert accessible is True
+        assert info is not None
+        assert info["title"] == "Test Supergroup"
+        assert error_reason is None
+        mock_pyrogram.invoke.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_verify_and_get_info_value_error_non_peer_propagates(self):
+        """ValueError с другим сообщением (не 'Peer id invalid') должен возвращать UNKNOWN."""
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.get_chat = AsyncMock(
+            side_effect=ValueError("some other error")
+        )
+        client.client = mock_pyrogram
+        client.is_connected = True
+
+        accessible, info, error_reason = await client.verify_and_get_info(-1002477958568)
+
+        assert accessible is False
+        assert error_reason == "UNKNOWN"
+
+
 class TestTelegramClientHistoryExport:
     """Test message history export."""
 
