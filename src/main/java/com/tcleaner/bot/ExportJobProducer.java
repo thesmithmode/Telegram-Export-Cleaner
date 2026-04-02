@@ -121,6 +121,8 @@ public class ExportJobProducer {
 
     private static final String ACTIVE_EXPORT_PREFIX = "active_export:";
     private static final String CANCEL_EXPORT_PREFIX = "cancel_export:";
+    private static final String JOB_JSON_PREFIX = "job_json:";
+    private static final String ACTIVE_PROCESSING_JOB_KEY = "active_processing_job";
     private static final long ACTIVE_EXPORT_TTL_MINUTES = 60;
 
     private String enqueue(long userId, long userChatId, Object chatId, String fromDate, String toDate) {
@@ -153,6 +155,8 @@ public class ExportJobProducer {
                 throw new IllegalStateException("Экспорт уже активен: " + existing);
             }
             redis.opsForList().rightPush(queueName, json);
+            // Сохраняем JSON задачи для возможного LREM при отмене из очереди
+            redis.opsForValue().set(JOB_JSON_PREFIX + taskId, json, ACTIVE_EXPORT_TTL_MINUTES, TimeUnit.MINUTES);
             log.info("Задача {} добавлена в очередь {} (chat_id={})", taskId, queueName, chatId);
             return taskId;
         } catch (IllegalStateException e) {
@@ -171,6 +175,16 @@ public class ExportJobProducer {
     public long getQueueLength() {
         Long size = redis.opsForList().size(queueName);
         return size != null ? size : 0L;
+    }
+
+    /**
+     * Проверяет, обрабатывает ли воркер задачу прямо сейчас.
+     * Python-воркер устанавливает ключ active_processing_job при старте задачи и удаляет при завершении.
+     *
+     * @return true если воркер занят
+     */
+    public boolean hasActiveProcessingJob() {
+        return Boolean.TRUE.equals(redis.hasKey(ACTIVE_PROCESSING_JOB_KEY));
     }
 
     /**
@@ -233,16 +247,32 @@ public class ExportJobProducer {
 
     /**
      * Отправляет сигнал отмены экспорта.
+     * Если задача ещё в очереди (не взята воркером) — удаляет её через LREM.
+     * Если задача уже обрабатывается — устанавливает флаг cancel_export для воркера.
      */
     public void cancelExport(long userId) {
-        String taskId = getActiveExport(userId);
-        if (taskId != null) {
-            redis.opsForValue().set(
-                    CANCEL_EXPORT_PREFIX + taskId, "1",
-                    ACTIVE_EXPORT_TTL_MINUTES, TimeUnit.MINUTES
-            );
-            redis.delete(ACTIVE_EXPORT_PREFIX + userId);
-            log.info("Запрошена отмена экспорта {} для пользователя {}", taskId, userId);
+        String taskId = redis.opsForValue().get(ACTIVE_EXPORT_PREFIX + userId);
+        if (taskId == null) {
+            log.warn("Нет активного экспорта для пользователя {}", userId);
+            return;
         }
+
+        // Пытаемся удалить задачу из очереди (если ещё не взята воркером)
+        String json = redis.opsForValue().get(JOB_JSON_PREFIX + taskId);
+        if (json != null) {
+            Long removed = redis.opsForList().remove(queueName, 1, json);
+            if (removed != null && removed > 0) {
+                log.info("Задача {} удалена из очереди (не успела начаться)", taskId);
+            }
+            redis.delete(JOB_JSON_PREFIX + taskId);
+        }
+
+        // Устанавливаем флаг отмены (на случай если задача уже в обработке)
+        redis.opsForValue().set(
+                CANCEL_EXPORT_PREFIX + taskId, "1",
+                ACTIVE_EXPORT_TTL_MINUTES, TimeUnit.MINUTES
+        );
+        redis.delete(ACTIVE_EXPORT_PREFIX + userId);
+        log.info("Запрошена отмена экспорта {} для пользователя {}", taskId, userId);
     }
 }
