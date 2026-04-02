@@ -155,4 +155,76 @@ class ExportJobProducerTest {
 
         assertThat(producer.getQueueLength()).isEqualTo(2L);
     }
+
+    @Test
+    @DisplayName("cancelExport удаляет задачу из очереди через LREM если она ещё не взята воркером")
+    void cancelExportRemovesJobFromQueue() {
+        long userId = 42L;
+        producer.enqueue(userId, userId, -100L);
+
+        assertThat(redisTemplate.opsForList().size(QUEUE)).isEqualTo(1L);
+
+        producer.cancelExport(userId);
+
+        // Задача должна быть удалена из очереди
+        assertThat(redisTemplate.opsForList().size(QUEUE)).isZero();
+    }
+
+    @Test
+    @DisplayName("cancelExport устанавливает флаг cancel_export:<taskId> в Redis")
+    void cancelExportSetsCancelFlag() {
+        long userId = 43L;
+        String taskId = producer.enqueue(userId, userId, -100L);
+
+        producer.cancelExport(userId);
+
+        String cancelFlag = redisTemplate.opsForValue().get("cancel_export:" + taskId);
+        assertThat(cancelFlag).isEqualTo("1");
+    }
+
+    @Test
+    @DisplayName("cancelExport удаляет ключ active_export:<userId>")
+    void cancelExportClearsActiveExportKey() {
+        long userId = 44L;
+        producer.enqueue(userId, userId, -100L);
+
+        assertThat(redisTemplate.opsForValue().get("active_export:" + userId)).isNotNull();
+
+        producer.cancelExport(userId);
+
+        assertThat(redisTemplate.opsForValue().get("active_export:" + userId)).isNull();
+    }
+
+    @Test
+    @DisplayName("cancelExport не падает если нет активного экспорта для пользователя")
+    void cancelExportHandlesMissingExport() {
+        // Не должен бросать исключений
+        producer.cancelExport(9999L);
+    }
+
+    @Test
+    @DisplayName("hasActiveProcessingJob возвращает false когда воркер не занят")
+    void hasActiveProcessingJobReturnsFalseWhenIdle() {
+        assertThat(producer.hasActiveProcessingJob()).isFalse();
+    }
+
+    @Test
+    @DisplayName("hasActiveProcessingJob возвращает true когда ключ active_processing_job установлен")
+    void hasActiveProcessingJobReturnsTrueWhenSet() {
+        redisTemplate.opsForValue().set("active_processing_job", "export_abc123");
+
+        assertThat(producer.hasActiveProcessingJob()).isTrue();
+
+        redisTemplate.delete("active_processing_job");
+    }
+
+    @Test
+    @DisplayName("enqueue сохраняет JSON задачи в job_json:<taskId> для возможного LREM")
+    void enqueueStoresJobJsonForLrem() {
+        long userId = 45L;
+        String taskId = producer.enqueue(userId, userId, -100L);
+
+        String json = redisTemplate.opsForValue().get("job_json:" + taskId);
+        assertThat(json).isNotNull().contains(taskId);
+    }
 }

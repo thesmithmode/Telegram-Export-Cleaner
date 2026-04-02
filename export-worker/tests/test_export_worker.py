@@ -684,3 +684,136 @@ class TestExportWorkerMemoryLogging:
         worker = ExportWorker()
         # Should not raise even without psutil
         worker.log_memory_usage("TEST")
+
+
+class TestCancelBeforeStart:
+    """Тесты отмены задачи до начала обработки (задача ещё в очереди)."""
+
+    @pytest.fixture
+    def worker(self):
+        w = ExportWorker()
+        w.queue_consumer = AsyncMock()
+        w.queue_consumer.mark_job_processing = AsyncMock()
+        w.queue_consumer.mark_job_completed = AsyncMock()
+        w.queue_consumer.mark_job_failed = AsyncMock()
+        w.telegram_client = AsyncMock()
+        w.java_client = _make_mock_java_client()
+        w.message_cache = MessageCache(redis_client=AsyncMock(), enabled=False)
+        w.control_redis = AsyncMock()
+        # По умолчанию — не отменено
+        w.control_redis.get = AsyncMock(return_value=None)
+        w.control_redis.delete = AsyncMock()
+        w.control_redis.set = AsyncMock()
+        return w
+
+    @pytest.mark.asyncio
+    async def test_job_cancelled_before_start_completes_without_export(self, worker):
+        """Если задача отменена ещё до начала обработки, воркер завершает её без экспорта."""
+        job = ExportRequest(
+            task_id="cancel_early_task",
+            user_id=1,
+            user_chat_id=1,
+            chat_id=123,
+            limit=0,
+            offset_id=0,
+        )
+
+        # Эмулируем: cancel_export:cancel_early_task установлен в Redis
+        async def get_side_effect(key):
+            if key == "cancel_export:cancel_early_task":
+                return b"1"
+            return None
+
+        worker.control_redis.get = AsyncMock(side_effect=get_side_effect)
+
+        result = await worker.process_job(job)
+
+        assert result is True
+        # verify_and_get_info НЕ должен вызываться — отменили до старта
+        worker.telegram_client.verify_and_get_info.assert_not_called()
+        # Задача должна быть помечена как completed (не failed)
+        worker.queue_consumer.mark_job_completed.assert_called_once_with("cancel_early_task")
+        worker.queue_consumer.mark_job_failed.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_active_processing_job_set_at_start_and_cleared_at_end(self, worker):
+        """active_processing_job ключ устанавливается при старте и удаляется при завершении."""
+        job = ExportRequest(
+            task_id="active_job_test",
+            user_id=2,
+            user_chat_id=2,
+            chat_id=456,
+            limit=0,
+            offset_id=0,
+        )
+
+        worker.telegram_client.verify_and_get_info = AsyncMock(
+            return_value=(True, {"title": "Chat", "type": "supergroup", "id": 456}, None)
+        )
+        worker.telegram_client.get_messages_count = AsyncMock(return_value=1)
+
+        async def mock_history(*args, **kwargs):
+            yield ExportedMessage(id=1, date="2025-01-01T00:00:00", text="msg")
+
+        worker.telegram_client.get_chat_history = mock_history
+        worker.java_client.send_response = AsyncMock(return_value=True)
+
+        await worker.process_job(job)
+
+        # Проверяем что set был вызван с active_processing_job
+        set_calls = [str(c) for c in worker.control_redis.set.call_args_list]
+        assert any("active_processing_job" in c for c in set_calls), (
+            f"active_processing_job не установлен. Вызовы set: {set_calls}"
+        )
+
+        # Проверяем что delete был вызван с active_processing_job
+        delete_calls = [str(c) for c in worker.control_redis.delete.call_args_list]
+        assert any("active_processing_job" in c for c in delete_calls), (
+            f"active_processing_job не удалён. Вызовы delete: {delete_calls}"
+        )
+
+
+class TestActiveProcessingJobHelpers:
+    """Тесты вспомогательных методов set/clear active_processing_job."""
+
+    @pytest.mark.asyncio
+    async def test_set_active_processing_job(self):
+        """set_active_processing_job вызывает redis.set с правильным ключом."""
+        worker = ExportWorker()
+        worker.control_redis = AsyncMock()
+        worker.control_redis.set = AsyncMock()
+
+        await worker.set_active_processing_job("export_abc123")
+
+        worker.control_redis.set.assert_called_once_with(
+            "active_processing_job", "export_abc123", ex=3600
+        )
+
+    @pytest.mark.asyncio
+    async def test_clear_active_processing_job(self):
+        """clear_active_processing_job вызывает redis.delete с правильным ключом."""
+        worker = ExportWorker()
+        worker.control_redis = AsyncMock()
+        worker.control_redis.delete = AsyncMock()
+
+        await worker.clear_active_processing_job()
+
+        worker.control_redis.delete.assert_called_once_with("active_processing_job")
+
+    @pytest.mark.asyncio
+    async def test_set_active_processing_job_no_redis(self):
+        """set_active_processing_job не падает если control_redis не инициализирован."""
+        worker = ExportWorker()
+        worker.control_redis = None
+
+        # Не должно бросать исключение
+        await worker.set_active_processing_job("export_xyz")
+
+    @pytest.mark.asyncio
+    async def test_clear_active_processing_job_no_redis(self):
+        """clear_active_processing_job не падает если control_redis не инициализирован."""
+        worker = ExportWorker()
+        worker.control_redis = None
+
+        # Не должно бросать исключение
+        await worker.clear_active_processing_job()
