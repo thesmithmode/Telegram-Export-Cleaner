@@ -119,10 +119,16 @@ class QueueConsumer:
         except Exception as e:
             logger.error(f"Error during disconnect: {e}")
 
+    @property
+    def express_queue_name(self) -> str:
+        """Express (priority) queue for cache-hit jobs — checked before main queue."""
+        return self.queue_name + "_express"
+
     async def get_job(self) -> Optional[ExportRequest]:
         """
         Get next job from queue (blocking).
 
+        Checks express queue first (cache-hit jobs), then main queue.
         Uses BLPOP to block until job available.
         Handles reconnection on connection errors.
 
@@ -133,8 +139,10 @@ class QueueConsumer:
             raise RuntimeError("Not connected to Redis")
 
         try:
-            # BLPOP: blocks with timeout so SIGTERM can be handled
-            result = await self.redis_client.blpop(self.queue_name, timeout=5)
+            # BLPOP: express queue has priority over main queue
+            result = await self.redis_client.blpop(
+                [self.express_queue_name, self.queue_name], timeout=5
+            )
 
             if not result:
                 return None
@@ -324,9 +332,11 @@ class QueueConsumer:
             return []
 
         try:
-            items = await self.redis_client.lrange(self.queue_name, 0, -1)
+            # Include both queues; express jobs are ahead in priority
+            express_items = await self.redis_client.lrange(self.express_queue_name, 0, -1)
+            main_items = await self.redis_client.lrange(self.queue_name, 0, -1)
             jobs = []
-            for item in items:
+            for item in express_items + main_items:
                 try:
                     job_data = json.loads(item)
                     jobs.append(ExportRequest(**job_data))

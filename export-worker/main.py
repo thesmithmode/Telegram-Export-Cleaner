@@ -254,11 +254,23 @@ class ExportWorker:
                 # Пикер может передать числовой ID (-100...), ссылка — username.
                 # Оба варианта должны использовать один и тот же ключ кэша.
                 canonical_id = chat_info.get("id")
+                original_chat_input = job.chat_id
                 if canonical_id and canonical_id != job.chat_id:
                     logger.info(
                         f"  Normalizing chat_id: {job.chat_id!r} → {canonical_id}"
                     )
                     job = job.model_copy(update={"chat_id": canonical_id})
+                # Сохраняем маппинг canonical: input → numeric_id, чтобы Java мог
+                # проверить наличие кэша перед постановкой в очередь (fast-path).
+                if self.control_redis and canonical_id:
+                    try:
+                        await self.control_redis.set(
+                            f"canonical:{original_chat_input}",
+                            str(canonical_id),
+                            ex=86400 * 30,
+                        )
+                    except Exception:
+                        pass
 
             # --- Cache-aware export ---
             # Both full and date-range exports use cache:
@@ -279,6 +291,14 @@ class ExportWorker:
             # Fallback: no cache, cache disabled, or cache export failed
             if messages is None:
                 messages = await self._fetch_all_messages(job)
+                # Сохраняем в кэш — чтобы следующий запрос того же чата шёл из кэша
+                if messages and self.message_cache and self.message_cache.enabled:
+                    try:
+                        await self.message_cache.store_messages(job.chat_id, messages)
+                        await self.message_cache.evict_if_needed()
+                        logger.info(f"  Cached {len(messages)} messages for chat {job.chat_id} (fallback path)")
+                    except Exception as e:
+                        logger.warning(f"Failed to cache messages after fallback fetch: {e}")
 
             if messages is None:
                 # _fetch_all_messages / cache export returned None → error already reported
