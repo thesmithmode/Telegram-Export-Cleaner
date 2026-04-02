@@ -105,7 +105,17 @@ public class ExportBot extends TelegramLongPollingBot {
     public void onUpdateReceived(Update update) {
         // Обработка inline-кнопок (CallbackQuery)
         if (update.hasCallbackQuery()) {
-            handleCallback(update.getCallbackQuery());
+            try {
+                handleCallback(update.getCallbackQuery());
+            } catch (Exception e) {
+                log.error("Ошибка обработки callback от userId={}: {}",
+                        update.getCallbackQuery().getFrom().getId(), e.getMessage(), e);
+                try {
+                    answerCallback(update.getCallbackQuery().getId());
+                } catch (Exception ignored) {
+                    // игнорируем — главное залогировали
+                }
+            }
             return;
         }
 
@@ -278,9 +288,7 @@ public class ExportBot extends TelegramLongPollingBot {
             }
             case CB_CANCEL_EXPORT -> {
                 jobProducer.cancelExport(userId);
-                editMessage(chatId, messageId,
-                        "🛑 Отмена запрошена. Уже скачанные сообщения сохранены в кэш.",
-                        null);
+                editMessage(chatId, messageId, "✅ Экспорт отменён.", null);
             }
             default -> log.warn("Неизвестный callback: {}", data);
         }
@@ -379,13 +387,18 @@ public class ExportBot extends TelegramLongPollingBot {
 
         String dateInfo = buildDateInfoText(session);
 
-        long queueLength = jobProducer.getQueueLength();
+        long pendingInQueue = jobProducer.getQueueLength();
+        boolean hasActiveJob = jobProducer.hasActiveProcessingJob();
+        // pendingInQueue включает нашу задачу (только что добавлена).
+        // hasActiveJob — воркер прямо сейчас обрабатывает задачу (уже снята из очереди через BLPOP).
+        long aheadCount = (pendingInQueue - 1) + (hasActiveJob ? 1 : 0);
+        long myPosition = pendingInQueue + (hasActiveJob ? 1 : 0);
         String queueInfo;
-        if (queueLength <= 1) {
+        if (aheadCount == 0) {
             queueInfo = "\n\n⚙️ Задача поставлена в работу, ожидайте...";
         } else {
-            long position = queueLength;
-            queueInfo = String.format("\n\n📋 Вы в очереди: позиция %d\nВпереди %d задач(и)", position, position - 1);
+            queueInfo = String.format(
+                    "\n\n📋 Вы в очереди: позиция %d\nВпереди %d задач(и)", myPosition, aheadCount);
         }
 
         String resultText = String.format(
