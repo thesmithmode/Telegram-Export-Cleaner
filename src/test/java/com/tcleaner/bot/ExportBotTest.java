@@ -6,7 +6,6 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
 import org.telegram.telegrambots.meta.api.objects.Chat;
-import org.telegram.telegrambots.meta.api.objects.ChatShared;
 import org.telegram.telegrambots.meta.api.objects.Message;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.User;
@@ -337,18 +336,33 @@ class ExportBotTest {
         verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyLong());
     }
 
-    // === ChatShared ===
+    // === Отмена экспорта ===
 
-    @DisplayName("Should handle ChatShared from picker")
-    @Test
-    void testChatSharedHandling() {
-        when(jobProducerMock.enqueue(123L, 123L, -1009999999L, null, null))
-                .thenReturn("export_task_shared");
+    @Nested
+    @DisplayName("Отмена экспорта")
+    class CancelExport {
 
-        bot.onUpdateReceived(createChatSharedUpdate(-1009999999L));
-        bot.onUpdateReceived(createCallbackUpdate(ExportBot.CB_EXPORT_ALL));
+        @DisplayName("CB_CANCEL_EXPORT вызывает cancelExport у jobProducer")
+        @Test
+        void testCancelCallbackCallsCancelExport() {
+            bot.onUpdateReceived(createCallbackUpdate(ExportBot.CB_CANCEL_EXPORT));
 
-        verify(jobProducerMock).enqueue(123L, 123L, -1009999999L, null, null);
+            verify(jobProducerMock).cancelExport(123L);
+        }
+
+        @DisplayName("Исключение в handleCallback не пробрасывается наружу")
+        @Test
+        void testCallbackExceptionDoesNotPropagate() {
+            // cancelExport бросает RuntimeException
+            doThrow(new RuntimeException("Redis connection failed"))
+                    .when(jobProducerMock).cancelExport(anyLong());
+
+            // Не должно бросать исключение — try/catch в onUpdateReceived защищает
+            bot.onUpdateReceived(createCallbackUpdate(ExportBot.CB_CANCEL_EXPORT));
+
+            // Проверяем что cancelExport был вызван
+            verify(jobProducerMock).cancelExport(123L);
+        }
     }
 
     // === Helpers ===
@@ -381,22 +395,6 @@ class ExportBotTest {
         callback.setMessage(message);
 
         update.setCallbackQuery(callback);
-        return update;
-    }
-
-    private Update createChatSharedUpdate(long sharedChatId) {
-        Update update = new Update();
-        Message message = new Message();
-        message.setFrom(createUser());
-        message.setChat(createChat("private"));
-        message.setMessageId(1);
-
-        ChatShared chatShared = new ChatShared();
-        chatShared.setRequestId(String.valueOf(1));
-        chatShared.setChatId(sharedChatId);
-        message.setChatShared(chatShared);
-
-        update.setMessage(message);
         return update;
     }
 
