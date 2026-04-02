@@ -126,31 +126,6 @@ public class ExportJobProducer {
     private static final long ACTIVE_EXPORT_TTL_MINUTES = 60;
     private static final String EXPRESS_QUEUE_SUFFIX = "_express";
 
-    /**
-     * Проверяет, есть ли данные этого чата в кэше воркера.
-     * Использует canonical-маппинг, который Python-воркер записывает после каждой нормализации.
-     * Если кэш доступен, задачу можно ставить в приоритетную очередь.
-     *
-     * @param chatId идентификатор чата (username, числовой ID, строка)
-     * @return true если данные чата закэшированы
-     */
-    public boolean isLikelyCached(Object chatId) {
-        try {
-            String input = String.valueOf(chatId);
-            // Сначала пробуем через canonical маппинг (username → numeric ID)
-            String canonical = redis.opsForValue().get("canonical:" + input);
-            if (canonical == null) {
-                // Числовой ID — пробуем напрямую
-                canonical = input;
-            }
-            String ranges = redis.opsForValue().get("cache:ranges:" + canonical);
-            return ranges != null && !ranges.equals("[]");
-        } catch (Exception e) {
-            log.debug("Не удалось проверить кэш для {}: {}", chatId, e.getMessage());
-            return false;
-        }
-    }
-
     private String enqueue(long userId, long userChatId, Object chatId, String fromDate, String toDate) {
         String taskId = "export_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
 
@@ -195,6 +170,31 @@ public class ExportJobProducer {
         } catch (Exception e) {
             log.error("Не удалось добавить задачу в очередь: {}", e.getMessage(), e);
             throw new RuntimeException("Ошибка добавления задачи в очередь", e);
+        }
+    }
+
+    /**
+     * Проверяет, есть ли данные этого чата в кэше воркера.
+     * Использует canonical-маппинг, который Python-воркер записывает после каждой нормализации.
+     * Если кэш доступен, задачу можно ставить в приоритетную очередь.
+     *
+     * @param chatId идентификатор чата (username, числовой ID, строка)
+     * @return true если данные чата закэшированы
+     */
+    public boolean isLikelyCached(Object chatId) {
+        try {
+            String input = String.valueOf(chatId);
+            // Сначала пробуем через canonical маппинг (username → numeric ID)
+            String canonical = redis.opsForValue().get("canonical:" + input);
+            if (canonical == null) {
+                // Числовой ID — пробуем напрямую
+                canonical = input;
+            }
+            String ranges = redis.opsForValue().get("cache:ranges:" + canonical);
+            return ranges != null && !ranges.equals("[]");
+        } catch (Exception e) {
+            log.debug("Не удалось проверить кэш для {}: {}", chatId, e.getMessage());
+            return false;
         }
     }
 

@@ -456,7 +456,7 @@ public class ExportBot extends TelegramLongPollingBot {
      */
     private void sendMainMenu(long chatId, String text) {
         KeyboardButtonRequestChat requestChat = new KeyboardButtonRequestChat();
-        requestChat.setRequestId(1);
+        requestChat.setRequestId("1");
         // chatIsChannel не задаём — разрешаем любой тип чата (группы + каналы)
 
         KeyboardButton pickerButton = new KeyboardButton("📂 Выбрать чат из Telegram");
