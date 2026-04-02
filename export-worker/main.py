@@ -230,6 +230,15 @@ class ExportWorker:
 
             if chat_info:
                 logger.info(f"  Chat: {chat_info.get('title')} (type: {chat_info.get('type')})")
+                # Нормализуем chat_id до канонического числового ID.
+                # Пикер может передать числовой ID (-100...), ссылка — username.
+                # Оба варианта должны использовать один и тот же ключ кэша.
+                canonical_id = chat_info.get("id")
+                if canonical_id and canonical_id != job.chat_id:
+                    logger.info(
+                        f"  Normalizing chat_id: {job.chat_id!r} → {canonical_id}"
+                    )
+                    job = job.model_copy(update={"chat_id": canonical_id})
 
             # --- Cache-aware export ---
             # Both full and date-range exports use cache:
@@ -531,10 +540,10 @@ class ExportWorker:
                     await self.message_cache.store_messages(job.chat_id, older_msgs)
                     fresh_messages.extend(older_msgs)
 
-        # Retrieve all from cache (use ID 0 as lower bound to include everything)
+        # Читаем все сообщения из кэша — fresh_messages уже сохранены туда выше,
+        # поэтому повторный merge с fresh_messages не нужен (они уже включены).
         actual_min = 0 if (not job.limit or job.limit <= 0) else full_min
-        cached_messages = await self.message_cache.get_messages(job.chat_id, actual_min, full_max)
-        messages = self.message_cache.merge_and_sort(cached_messages, fresh_messages)
+        messages = await self.message_cache.get_messages(job.chat_id, actual_min, full_max)
         logger.info(f"  Total after cache merge: {len(messages)} messages")
 
         await self.message_cache.evict_if_needed()

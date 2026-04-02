@@ -7,19 +7,14 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
-import org.telegram.telegrambots.meta.api.methods.groupadministration.GetChat;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText;
 import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
-import org.telegram.telegrambots.meta.api.objects.ChatShared;
 import org.telegram.telegrambots.meta.api.objects.Message;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardRemove;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButton;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButtonRequestChat;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
 import org.springframework.scheduling.annotation.Scheduled;
@@ -29,7 +24,6 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
@@ -59,12 +53,10 @@ public class ExportBot extends TelegramLongPollingBot {
 
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("dd.MM.yyyy");
 
-    private static final int CHAT_REQUEST_ID = 1;
-
     private static final String HELP_TEXT = """
             Этот бот экспортирует историю Telegram-чата и отправляет очищенный текст.
 
-            Нажмите «📂 Выбрать чат» или отправьте идентификатор вручную:
+            Отправьте идентификатор чата или канала:
             • Ссылку: https://t.me/durov
             • Username: @durov или durov
             • ID чата: -1001234567890
@@ -127,12 +119,6 @@ public class ExportBot extends TelegramLongPollingBot {
 
         // Бот работает только в личных сообщениях
         if (!"private".equals(message.getChat().getType())) {
-            return;
-        }
-
-        // Обработка выбора чата через picker (ChatShared)
-        if (message.getChatShared() != null) {
-            handleChatShared(chatId, userId, message.getChatShared());
             return;
         }
 
@@ -228,55 +214,6 @@ public class ExportBot extends TelegramLongPollingBot {
     }
 
     /**
-     * Обрабатывает выбор чата из нативного Telegram picker.
-     */
-    private void handleChatShared(long chatId, long userId, ChatShared chatShared) {
-        // Проверяем активный экспорт ДО начала wizard
-        String activeTaskId = jobProducer.getActiveExport(userId);
-        if (activeTaskId != null) {
-            String text = "⏳ У вас уже есть активный экспорт (" + activeTaskId
-                    + ").\nДождитесь его завершения или отмените.";
-            InlineKeyboardMarkup cancelKeyboard = InlineKeyboardMarkup.builder()
-                    .keyboardRow(List.of(
-                            InlineKeyboardButton.builder()
-                                    .text("❌ Отменить текущий экспорт")
-                                    .callbackData(CB_CANCEL_EXPORT)
-                                    .build()))
-                    .build();
-            sendWithInlineKeyboard(chatId, text, cancelKeyboard);
-            return;
-        }
-
-        long sharedChatId = chatShared.getChatId();
-        UserSession session = getSession(userId);
-
-        // Для публичных каналов получаем username через Bot API getChat,
-        // чтобы воркер мог разрезолвить канал без членства.
-        Object targetId = sharedChatId;
-        String displayName = String.valueOf(sharedChatId);
-        try {
-            org.telegram.telegrambots.meta.api.objects.Chat fullChat =
-                    execute(new GetChat(String.valueOf(sharedChatId)));
-            String username = fullChat.getUserName();
-            if (username != null && !username.isBlank()) {
-                targetId = username;
-                displayName = "@" + username;
-            }
-        } catch (Exception e) {
-            log.warn("Не удалось получить username для чата {}: {}", sharedChatId, e.getMessage());
-        }
-
-        session.setChatId(targetId);
-        session.setChatDisplay(displayName);
-        session.setFromDate(null);
-        session.setToDate(null);
-        session.setState(UserSession.State.AWAITING_DATE_CHOICE);
-
-        log.info("Пользователь {} выбрал чат {} через picker", userId, sharedChatId);
-        sendDateChoiceMenu(chatId, session.getChatDisplay());
-    }
-
-    /**
      * Обрабатывает нажатие на inline-кнопку.
      */
     private void handleCallback(CallbackQuery callback) {
@@ -320,9 +257,7 @@ public class ExportBot extends TelegramLongPollingBot {
             }
             case CB_BACK_TO_MAIN -> {
                 session.reset();
-                editMessage(chatId, messageId,
-                        "Отправьте идентификатор чата или выберите через кнопку ниже.", null);
-                sendMainMenu(chatId, "Выберите чат для экспорта:");
+                editMessage(chatId, messageId, HELP_TEXT, null);
             }
             case CB_BACK_TO_DATE_CHOICE -> {
                 session.setFromDate(null);
@@ -485,38 +420,17 @@ public class ExportBot extends TelegramLongPollingBot {
     // === Keyboards ===
 
     /**
-     * Отправляет reply-клавиатуру с кнопкой "📂 Выбрать чат".
+     * Отправляет главное меню с инструкцией по вводу идентификатора чата.
+     * Убирает ReplyKeyboard если она была ранее показана.
      */
     private void sendMainMenu(long chatId, String text) {
-        KeyboardButtonRequestChat requestChat = new KeyboardButtonRequestChat();
-        requestChat.setRequestId(String.valueOf(CHAT_REQUEST_ID));
-        requestChat.setChatIsChannel(false);
-
-        KeyboardButton chatButton = new KeyboardButton("📂 Выбрать группу");
-        chatButton.setRequestChat(requestChat);
-
-        KeyboardButtonRequestChat requestChannel = new KeyboardButtonRequestChat();
-        requestChannel.setRequestId(String.valueOf(CHAT_REQUEST_ID + 1));
-        requestChannel.setChatIsChannel(true);
-
-        KeyboardButton channelButton = new KeyboardButton("📢 Выбрать канал");
-        channelButton.setRequestChat(requestChannel);
-
-        KeyboardRow row = new KeyboardRow();
-        row.add(chatButton);
-        row.add(channelButton);
-
-        List<KeyboardRow> keyboard = new ArrayList<>();
-        keyboard.add(row);
-
-        ReplyKeyboardMarkup markup = new ReplyKeyboardMarkup();
-        markup.setKeyboard(keyboard);
-        markup.setResizeKeyboard(true);
+        ReplyKeyboardRemove remove = new ReplyKeyboardRemove();
+        remove.setRemoveKeyboard(true);
 
         SendMessage message = new SendMessage();
         message.setChatId(chatId);
         message.setText(text);
-        message.setReplyMarkup(markup);
+        message.setReplyMarkup(remove);
 
         try {
             execute(message);
