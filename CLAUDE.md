@@ -85,9 +85,14 @@ com.tcleaner
 └── bot/                    # Telegram bot (long polling)
     ├── BotInitializer      # Регистрирует ExportBot в TelegramBotsApi при старте (ConditionalOnExpression)
     ├── ExportBot           # Interactive wizard: chat picker, date range, callbacks;
-    │                       #   @Scheduled eviction сессий без активности > 2ч (защита от OOM)
+    │                       #   @Scheduled eviction сессий без активности > 2ч (защита от OOM);
+    │                       #   try/catch вокруг handleCallback — исключения логируются, не поглощаются фреймворком
     ├── ExportJobProducer   # Enqueue jobs to Redis (with optional from_date/to_date);
-    │                       #   атомарная защита от дублирующих экспортов через SET NX
+    │                       #   атомарная защита от дублирующих экспортов через SET NX;
+    │                       #   cancelExport: LREM удаляет задачу из очереди если ещё не взята воркером,
+    │                       #   иначе устанавливает cancel_export:<taskId> флаг для воркера;
+    │                       #   hasActiveProcessingJob: читает active_processing_job ключ (пишет Python-воркер);
+    │                       #   job_json:<taskId> — хранит JSON задачи для LREM при отмене
     └── UserSession         # Per-user conversation state (state machine: IDLE→AWAITING_DATE_CHOICE→…);
                             #   lastAccess для TTL eviction
 ```
@@ -96,7 +101,10 @@ com.tcleaner
 
 ```
 export-worker/
-├── main.py                 # Точка входа: запуск asyncio event loop, graceful shutdown (SIGTERM/SIGINT)
+├── main.py                 # Точка входа: запуск asyncio event loop, graceful shutdown (SIGTERM/SIGINT);
+│                           #   active_processing_job ключ в Redis — сигнал Java-боту что воркер занят;
+│                           #   cancel проверяется СРАЗУ при старте задачи (до verify_and_get_info);
+│                           #   логи "Cache HIT / Cache MISS" в _export_with_id_cache и _export_with_date_cache
 ├── config.py               # Pydantic Settings: загрузка конфигурации из env vars
 ├── models.py               # Pydantic-модели: ExportRequest, ExportResult, ErrorCode enum
 ├── message_cache.py        # Redis-кэш сообщений: sorted sets, range tracking, gap detection,
@@ -139,6 +147,7 @@ export-worker/
 - **Retry с backoff**: FloodWait от Telegram API обрабатывается с экспоненциальным backoff и дедупликацией
 - **Нормализация chat_id**: После `verify_and_get_info` `process_job` нормализует `job.chat_id` до канонического числового ID из `chat_info["id"]`. Это гарантирует единый ключ кэша независимо от того, передал ли юзер username (`@strbypass`) или числовой ID (`-1002477958568`) из picker.
 - **Кэш сообщений (MessageCache)**: Redis sorted sets для кэширования per-chat. Два индекса: по msg_id (`cache:msgs`) и по дате (`cache:dates`). Трекинг кэшированных диапазонов по ID (`cache:ranges`) и по датам (`cache:date_ranges`). При повторном экспорте — gap detection по датам или ID → fetch только недостающего → merge с кэшем → монолитный файл. Пример: Вася экспортирует 11-13.01, Петя 01-08.01, Коля запрашивает 01-15.01 → из кэша 01-08 и 11-13, fetch только 09-10 и 14-15. TTL 30 дней, LRU eviction 120MB. `CACHE_ENABLED=true`.
+- **Отмена задачи**: При старте `process_job` сразу проверяет `cancel_export:<taskId>` — если задача была отменена пока ждала в очереди, воркер завершает её без экспорта. Во время экспорта — проверка каждые 1000 сообщений. Ключ `active_processing_job` в Redis сигнализирует Java-боту что воркер занят (для корректного расчёта позиции в очереди).
 - **Graceful shutdown**: Обработка SIGTERM/SIGINT, завершение текущей задачи перед остановкой
 - **Прогресс-репортинг (ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА)**:
   - **ВСЕГДА** получать total количество сообщений перед началом экспорта: `get_messages_count(chat_id, from_date?, to_date?)` — для полного экспорта через `get_chat_history_count`, для date-range через raw MTProto `messages.Search` с `min_date`/`max_date`

@@ -336,6 +336,35 @@ class ExportBotTest {
         verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyLong());
     }
 
+    // === Отмена экспорта ===
+
+    @Nested
+    @DisplayName("Отмена экспорта")
+    class CancelExport {
+
+        @DisplayName("CB_CANCEL_EXPORT вызывает cancelExport у jobProducer")
+        @Test
+        void testCancelCallbackCallsCancelExport() {
+            bot.onUpdateReceived(createCallbackUpdate(ExportBot.CB_CANCEL_EXPORT));
+
+            verify(jobProducerMock).cancelExport(123L);
+        }
+
+        @DisplayName("Исключение в handleCallback не пробрасывается наружу")
+        @Test
+        void testCallbackExceptionDoesNotPropagate() {
+            // cancelExport бросает RuntimeException
+            doThrow(new RuntimeException("Redis connection failed"))
+                    .when(jobProducerMock).cancelExport(anyLong());
+
+            // Не должно бросать исключение — try/catch в onUpdateReceived защищает
+            bot.onUpdateReceived(createCallbackUpdate(ExportBot.CB_CANCEL_EXPORT));
+
+            // Проверяем что cancelExport был вызван
+            verify(jobProducerMock).cancelExport(123L);
+        }
+    }
+
     // === Helpers ===
 
     private Update createUpdate(String text) {
