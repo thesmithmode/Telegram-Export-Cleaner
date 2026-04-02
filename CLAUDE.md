@@ -104,6 +104,8 @@ export-worker/
 ├── pyrogram_client.py      # Pyrogram MTProto клиент: экспорт сообщений, FloodWait handling,
 │                           #   кэш-синхронизация Pyrogram entity access_hash,
 │                           #   raw MTProto fallback (access_hash=0) для публичных каналов по числовому ID,
+│                           #   _resolve_numeric_chat_id() — общий fallback для BadRequest/PeerIdInvalid И
+│                           #   ValueError("Peer id invalid: ...") (Pyrogram кидает ValueError до API-вызова),
 │                           #   get_messages_count() — universal count (raw MTProto для date-range)
 ├── queue_consumer.py       # Redis BRPOP consumer: получение задач из очереди, таймауты, retry,
 │                           #   Dead Letter Queue (невалидные задачи → <queue>_dead),
@@ -135,6 +137,7 @@ export-worker/
 
 - **Авторизация**: `TELEGRAM_SESSION_STRING` для production (stateless, без номера телефона), file-based session для локальной разработки
 - **Retry с backoff**: FloodWait от Telegram API обрабатывается с экспоненциальным backoff и дедупликацией
+- **Нормализация chat_id**: После `verify_and_get_info` `process_job` нормализует `job.chat_id` до канонического числового ID из `chat_info["id"]`. Это гарантирует единый ключ кэша независимо от того, передал ли юзер username (`@strbypass`) или числовой ID (`-1002477958568`) из picker.
 - **Кэш сообщений (MessageCache)**: Redis sorted sets для кэширования per-chat. Два индекса: по msg_id (`cache:msgs`) и по дате (`cache:dates`). Трекинг кэшированных диапазонов по ID (`cache:ranges`) и по датам (`cache:date_ranges`). При повторном экспорте — gap detection по датам или ID → fetch только недостающего → merge с кэшем → монолитный файл. Пример: Вася экспортирует 11-13.01, Петя 01-08.01, Коля запрашивает 01-15.01 → из кэша 01-08 и 11-13, fetch только 09-10 и 14-15. TTL 30 дней, LRU eviction 120MB. `CACHE_ENABLED=true`.
 - **Graceful shutdown**: Обработка SIGTERM/SIGINT, завершение текущей задачи перед остановкой
 - **Прогресс-репортинг (ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА)**:
