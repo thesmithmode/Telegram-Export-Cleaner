@@ -257,9 +257,7 @@ public class ExportBot extends TelegramLongPollingBot {
             }
             case CB_BACK_TO_MAIN -> {
                 session.reset();
-                editMessage(chatId, messageId,
-                        "Отправьте ссылку, @username или числовой ID чата для экспорта.", null);
-                sendMainMenu(chatId, HELP_TEXT);
+                editMessage(chatId, messageId, HELP_TEXT, null);
             }
             case CB_BACK_TO_DATE_CHOICE -> {
                 session.setFromDate(null);
