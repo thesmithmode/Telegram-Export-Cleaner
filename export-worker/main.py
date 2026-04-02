@@ -21,7 +21,7 @@ import signal
 import sys
 import shutil
 import psutil
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -125,6 +125,12 @@ class ExportWorker:
         except Exception as e:
             logger.warning(f"Failed to cleanup temp files for {task_id}: {e}")
 
+    async def _cleanup_job(self, job: ExportRequest):
+        """Общий cleanup после завершения задачи (успех, ошибка, отмена)."""
+        await self.cleanup_temp_files(job.task_id)
+        await self.clear_active_export(job.user_id)
+        await self.clear_active_processing_job()
+
     async def initialize(self) -> bool:
         """
         Initialize all components.
@@ -204,8 +210,7 @@ class ExportWorker:
             if await self.is_cancelled(job.task_id):
                 logger.info(f"🛑 Job {job.task_id} отменена до начала обработки")
                 await self.queue_consumer.mark_job_completed(job.task_id)
-                await self.clear_active_export(job.user_id)
-                await self.clear_active_processing_job()
+                await self._cleanup_job(job)
                 return True
 
             # Verify access and get chat info in single call
@@ -217,7 +222,8 @@ class ExportWorker:
                     "ADMIN_REQUIRED": f"Для экспорта чата {job.chat_id} нужны права администратора.",
                     "CHAT_NOT_ACCESSIBLE": (
                         f"Нет доступа к чату {job.chat_id}. "
-                        f"Аккаунт worker-а должен быть участником этого чата/канала."
+                        f"Попробуйте отправить ссылку (t.me/...) вместо выбора через кнопку, "
+                        f"или убедитесь что аккаунт worker-а — участник чата."
                     ),
                     "SESSION_INVALID": (
                         "Сессия Telegram worker-а истекла или заблокирована. "
@@ -244,8 +250,7 @@ class ExportWorker:
                     user_chat_id=job.user_chat_id,
                 )
                 await self.queue_consumer.mark_job_failed(job.task_id, error)
-                await self.clear_active_export(job.user_id)
-                await self.clear_active_processing_job()
+                await self._cleanup_job(job)
                 return True
 
             if chat_info:
@@ -254,11 +259,23 @@ class ExportWorker:
                 # Пикер может передать числовой ID (-100...), ссылка — username.
                 # Оба варианта должны использовать один и тот же ключ кэша.
                 canonical_id = chat_info.get("id")
+                original_chat_input = job.chat_id
                 if canonical_id and canonical_id != job.chat_id:
                     logger.info(
                         f"  Normalizing chat_id: {job.chat_id!r} → {canonical_id}"
                     )
                     job = job.model_copy(update={"chat_id": canonical_id})
+                # Сохраняем маппинг canonical: input → numeric_id, чтобы Java мог
+                # проверить наличие кэша перед постановкой в очередь (fast-path).
+                if self.control_redis and canonical_id:
+                    try:
+                        await self.control_redis.set(
+                            f"canonical:{original_chat_input}",
+                            str(canonical_id),
+                            ex=86400 * 30,
+                        )
+                    except Exception:
+                        pass
 
             # --- Cache-aware export ---
             # Both full and date-range exports use cache:
@@ -279,6 +296,14 @@ class ExportWorker:
             # Fallback: no cache, cache disabled, or cache export failed
             if messages is None:
                 messages = await self._fetch_all_messages(job)
+                # Сохраняем в кэш — чтобы следующий запрос того же чата шёл из кэша
+                if messages and self.message_cache and self.message_cache.enabled:
+                    try:
+                        await self.message_cache.store_messages(job.chat_id, messages)
+                        await self.message_cache.evict_if_needed()
+                        logger.info(f"  Cached {len(messages)} messages for chat {job.chat_id} (fallback path)")
+                    except Exception as e:
+                        logger.warning(f"Failed to cache messages after fallback fetch: {e}")
 
             if messages is None:
                 # _fetch_all_messages / cache export returned None → error already reported
@@ -301,21 +326,15 @@ class ExportWorker:
                 await self.queue_consumer.mark_job_completed(job.task_id)
                 self.jobs_processed += 1
                 self.log_memory_usage("JOB_DONE")
-                await self.cleanup_temp_files(job.task_id)
-                await self.clear_active_export(job.user_id)
-                await self.clear_active_processing_job()
-                return True
-
             else:
                 error = "Failed to send response to Java Bot"
                 logger.error(f"❌ {error}")
                 await self.queue_consumer.mark_job_failed(job.task_id, error)
                 self.jobs_failed += 1
                 self.log_memory_usage("JOB_FAILED")
-                await self.cleanup_temp_files(job.task_id)
-                await self.clear_active_export(job.user_id)
-                await self.clear_active_processing_job()
-                return True
+
+            await self._cleanup_job(job)
+            return True
 
         except Exception as e:
             logger.error(f"❌ Unexpected error in job {job.task_id}: {e}", exc_info=True)
@@ -327,9 +346,7 @@ class ExportWorker:
             await self.queue_consumer.mark_job_failed(job.task_id, str(e))
             self.jobs_failed += 1
             self.log_memory_usage("JOB_ERROR")
-            await self.cleanup_temp_files(job.task_id)
-            await self.clear_active_export(job.user_id)
-            await self.clear_active_processing_job()
+            await self._cleanup_job(job)
             return True
 
     @staticmethod
@@ -373,7 +390,7 @@ class ExportWorker:
         if not from_date_str and to_date_str:
             from_date_str = "2000-01-01"
         if from_date_str and not to_date_str:
-            to_date_str = datetime.now().strftime("%Y-%m-%d")
+            to_date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         # Find which date ranges we're missing
         missing = await self.message_cache.get_missing_date_ranges(
@@ -405,8 +422,8 @@ class ExportWorker:
         logger.info(f"  Loaded {len(cached_messages)} messages from cache")
 
         # Получаем total для прогресса (только для запрошенного диапазона)
-        from_dt = datetime.fromisoformat(from_date_str + "T00:00:00")
-        to_dt = datetime.fromisoformat(to_date_str + "T23:59:59")
+        from_dt = datetime.fromisoformat(from_date_str + "T00:00:00+00:00")
+        to_dt = datetime.fromisoformat(to_date_str + "T23:59:59+00:00")
         total = await self.telegram_client.get_messages_count(
             job.chat_id, from_dt, to_dt
         )
@@ -420,8 +437,8 @@ class ExportWorker:
         fresh_messages: list[ExportedMessage] = []
         fetched_count = len(cached_messages)  # Считаем cached в прогресс
         for gap_from, gap_to in missing:
-            gap_from_dt = datetime.fromisoformat(gap_from + "T00:00:00")
-            gap_to_dt = datetime.fromisoformat(gap_to + "T23:59:59")
+            gap_from_dt = datetime.fromisoformat(gap_from + "T00:00:00+00:00")
+            gap_to_dt = datetime.fromisoformat(gap_to + "T23:59:59+00:00")
 
             gap_msgs: list[ExportedMessage] = []
             try:
@@ -450,6 +467,9 @@ class ExportWorker:
         # Merge cached + fresh (не перечитываем из Redis — всё уже в памяти)
         messages = self.message_cache.merge_and_sort(cached_messages, fresh_messages)
         logger.info(f"  Date-range export complete: {len(messages)} messages")
+
+        if tracker:
+            await tracker.finalize(len(messages))
 
         await self.message_cache.evict_if_needed()
         return messages
@@ -570,6 +590,9 @@ class ExportWorker:
         messages = await self.message_cache.get_messages(job.chat_id, actual_min, full_max)
         logger.info(f"  Total after cache merge: {len(messages)} messages")
 
+        if tracker:
+            await tracker.finalize(len(messages))
+
         await self.message_cache.evict_if_needed()
         return messages
 
@@ -581,17 +604,19 @@ class ExportWorker:
         """
         messages: list[ExportedMessage] = []
 
-        # Parse date filters
+        # Parse date filters (ensure UTC-aware для корректного сравнения с Pyrogram)
         from_date = None
         to_date = None
         if job.from_date:
             try:
-                from_date = datetime.fromisoformat(job.from_date)
+                dt = datetime.fromisoformat(job.from_date)
+                from_date = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
             except ValueError:
                 pass
         if job.to_date:
             try:
-                to_date = datetime.fromisoformat(job.to_date)
+                dt = datetime.fromisoformat(job.to_date)
+                to_date = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
             except ValueError:
                 pass
 
@@ -640,6 +665,9 @@ class ExportWorker:
             )
             await self.queue_consumer.mark_job_failed(job.task_id, error)
             return None
+
+        if tracker:
+            await tracker.finalize(len(messages))
 
         return messages
 

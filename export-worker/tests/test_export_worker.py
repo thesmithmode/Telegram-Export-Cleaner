@@ -369,9 +369,9 @@ class TestExportWorkerProgressReporting:
 
         await worker.process_job(job)
 
-        # started + 9 milestones (10%..90%)
+        # started + 9 milestones (10%..90%) + 1 finalize (100%)
         progress_calls = worker.java_client.send_progress_update.call_args_list
-        assert len(progress_calls) == 10  # 1 started + 9 milestones
+        assert len(progress_calls) == 11  # 1 started + 9 milestones + 1 finalize
 
     @pytest.mark.asyncio
     async def test_process_job_exception_notifies_user(self, worker):
