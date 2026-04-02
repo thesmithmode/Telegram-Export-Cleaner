@@ -658,43 +658,48 @@ class TestTelegramClientMessageCount:
 
     @pytest.mark.asyncio
     async def test_get_date_range_count_success(self):
-        """Test date range count via raw MTProto."""
+        """
+        Два вызова GetHistory (before to_date и before from_date), разность — счётчик диапазона.
+        """
         client = TelegramClient()
         client.is_connected = True
         mock_pyrogram = AsyncMock()
-
-        # Mock resolve_peer and invoke
         mock_pyrogram.resolve_peer = AsyncMock(return_value=MagicMock())
-        mock_result = MagicMock()
-        mock_result.count = 1500
-        mock_pyrogram.invoke = AsyncMock(return_value=mock_result)
+
+        # First call (offset_date = to_date+1): 1500 total messages before end date
+        result_to = MagicMock()
+        result_to.count = 1500
+        # Second call (offset_date = from_date): 1456 total messages before start date
+        result_from = MagicMock()
+        result_from.count = 1456
+        mock_pyrogram.invoke = AsyncMock(side_effect=[result_to, result_from])
         client.client = mock_pyrogram
 
         result = await client.get_date_range_count(
             123, datetime(2025, 1, 1), datetime(2025, 1, 31)
         )
 
-        assert result == 1500
-        mock_pyrogram.invoke.assert_called_once()
+        # 1500 - 1456 = 44 messages in the date range
+        assert result == 44
+        assert mock_pyrogram.invoke.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_get_date_range_count_no_count_attr(self):
-        """Test fallback to messages list length when count attr missing."""
+    async def test_get_date_range_count_no_count_attr_returns_none(self):
+        """Если GetHistory не вернул count — возвращаем None."""
         client = TelegramClient()
         client.is_connected = True
         mock_pyrogram = AsyncMock()
         mock_pyrogram.resolve_peer = AsyncMock(return_value=MagicMock())
 
-        mock_result = MagicMock(spec=[])  # no count attr
-        mock_result.messages = [MagicMock(), MagicMock()]
-        mock_pyrogram.invoke = AsyncMock(return_value=mock_result)
+        result_no_count = MagicMock(spec=[])  # no count attr
+        mock_pyrogram.invoke = AsyncMock(return_value=result_no_count)
         client.client = mock_pyrogram
 
         result = await client.get_date_range_count(
             123, datetime(2025, 1, 1), datetime(2025, 1, 31)
         )
 
-        assert result == 2
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_get_date_range_count_error_returns_none(self):

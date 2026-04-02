@@ -7,14 +7,20 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
+import org.telegram.telegrambots.meta.api.methods.groupadministration.GetChat;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText;
+import org.telegram.telegrambots.meta.api.objects.Chat;
 import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
 import org.telegram.telegrambots.meta.api.objects.Message;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardRemove;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButton;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButtonRequestChat;
+import org.telegram.telegrambots.meta.api.objects.ChatShared;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
 import org.springframework.scheduling.annotation.Scheduled;
@@ -56,7 +62,7 @@ public class ExportBot extends TelegramLongPollingBot {
     private static final String HELP_TEXT = """
             Этот бот экспортирует историю Telegram-чата и отправляет очищенный текст.
 
-            Отправьте идентификатор чата или канала:
+            Нажмите кнопку ниже чтобы выбрать чат из Telegram, или введите вручную:
             • Ссылку: https://t.me/durov
             • Username: @durov или durov
             • ID чата: -1001234567890
@@ -129,6 +135,16 @@ public class ExportBot extends TelegramLongPollingBot {
 
         // Бот работает только в личных сообщениях
         if (!"private".equals(message.getChat().getType())) {
+            return;
+        }
+
+        // Обработка выбора чата через встроенный Telegram пикер (кнопка 📂)
+        ChatShared chatShared = message.getChatShared();
+        if (chatShared != null) {
+            long sharedChatId = chatShared.getChatId();
+            log.debug("Получен chat_shared от userId={}: chatId={}", userId, sharedChatId);
+            String chatIdentifier = resolveChatIdentifier(sharedChatId);
+            handleExportDirect(chatId, userId, chatIdentifier);
             return;
         }
 
@@ -387,6 +403,9 @@ public class ExportBot extends TelegramLongPollingBot {
 
         String dateInfo = buildDateInfoText(session);
 
+        // Проверяем, пойдёт ли задача в express-очередь (кэш доступен)
+        boolean fromCache = jobProducer.isLikelyCached(targetChatId);
+
         long pendingInQueue = jobProducer.getQueueLength();
         boolean hasActiveJob = jobProducer.hasActiveProcessingJob();
         // pendingInQueue включает нашу задачу (только что добавлена).
@@ -394,7 +413,9 @@ public class ExportBot extends TelegramLongPollingBot {
         long aheadCount = (pendingInQueue - 1) + (hasActiveJob ? 1 : 0);
         long myPosition = pendingInQueue + (hasActiveJob ? 1 : 0);
         String queueInfo;
-        if (aheadCount == 0) {
+        if (fromCache) {
+            queueInfo = "\n\n⚡ Данные в кэше — результат будет быстро!";
+        } else if (aheadCount == 0) {
             queueInfo = "\n\n⚙️ Задача поставлена в работу, ожидайте...";
         } else {
             queueInfo = String.format(
@@ -433,17 +454,30 @@ public class ExportBot extends TelegramLongPollingBot {
     // === Keyboards ===
 
     /**
-     * Отправляет главное меню с инструкцией по вводу идентификатора чата.
-     * Убирает ReplyKeyboard если она была ранее показана.
+     * Отправляет главное меню с кнопкой выбора чата через Telegram пикер.
+     * Кнопка отображается в ReplyKeyboard — при нажатии открывается нативный диалог выбора чата.
+     * Пользователь также может ввести идентификатор вручную.
      */
     private void sendMainMenu(long chatId, String text) {
-        ReplyKeyboardRemove remove = new ReplyKeyboardRemove();
-        remove.setRemoveKeyboard(true);
+        KeyboardButtonRequestChat requestChat = new KeyboardButtonRequestChat();
+        requestChat.setRequestId("1");
+        // chatIsChannel не задаём — разрешаем любой тип чата (группы + каналы)
+
+        KeyboardButton pickerButton = new KeyboardButton("📂 Выбрать чат из Telegram");
+        pickerButton.setRequestChat(requestChat);
+
+        KeyboardRow row = new KeyboardRow();
+        row.add(pickerButton);
+
+        ReplyKeyboardMarkup markup = new ReplyKeyboardMarkup();
+        markup.setKeyboard(List.of(row));
+        markup.setResizeKeyboard(true);
+        markup.setOneTimeKeyboard(true);
 
         SendMessage message = new SendMessage();
         message.setChatId(chatId);
         message.setText(text);
-        message.setReplyMarkup(remove);
+        message.setReplyMarkup(markup);
 
         try {
             execute(message);
@@ -537,6 +571,31 @@ public class ExportBot extends TelegramLongPollingBot {
         if (removed > 0) {
             log.info("Вытеснено {} неактивных сессий (осталось: {})", removed, sessions.size());
         }
+    }
+
+    /**
+     * Резолвит числовой chat ID в username через Bot API getChat.
+     *
+     * <p>После события ChatShared Telegram разрешает боту вызывать getChat
+     * для переданного чата (Bot API 7.2+). Если чат публичный,
+     * getChat вернёт username, который Python-воркер сможет резолвить
+     * через Pyrogram API без необходимости быть участником чата.</p>
+     *
+     * @param sharedChatId числовой ID чата из ChatShared
+     * @return username чата (без @) или числовой ID как строка (fallback)
+     */
+    private String resolveChatIdentifier(long sharedChatId) {
+        try {
+            Chat chat = execute(new GetChat(String.valueOf(sharedChatId)));
+            String username = chat.getUserName();
+            if (username != null && !username.isBlank()) {
+                log.info("Резолвлен username для chatId={}: @{}", sharedChatId, username);
+                return username;
+            }
+        } catch (TelegramApiException e) {
+            log.debug("getChat не удался для chatId={}: {}", sharedChatId, e.getMessage());
+        }
+        return String.valueOf(sharedChatId);
     }
 
     /**
