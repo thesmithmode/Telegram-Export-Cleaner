@@ -4,15 +4,19 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.telegram.telegrambots.meta.api.methods.groupadministration.GetChat;
 import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
 import org.telegram.telegrambots.meta.api.objects.Chat;
+import org.telegram.telegrambots.meta.api.objects.ChatShared;
 import org.telegram.telegrambots.meta.api.objects.Message;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.User;
+import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
 import java.time.LocalDate;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
@@ -301,11 +305,14 @@ class ExportBotTest {
 
     // === Прочие кейсы ===
 
-    @DisplayName("Should handle /start command")
+    @DisplayName("Should handle /start command without triggering export")
     @Test
     void testStartCommand() {
         bot.onUpdateReceived(createUpdate("/start"));
-        // Should not throw
+        verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString(), anyString(), anyString());
+        verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyLong(), anyString(), anyString());
+        verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString());
+        verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyLong());
     }
 
     @DisplayName("Should handle unknown slash command")
@@ -365,6 +372,70 @@ class ExportBotTest {
         }
     }
 
+    // === ChatShared (кнопка picker) ===
+
+    @Nested
+    @DisplayName("ChatShared: резолв username через getChat")
+    class ChatSharedResolve {
+
+        @DisplayName("getChat возвращает username — enqueue вызывается с username")
+        @Test
+        void testChatSharedResolvesUsername() throws TelegramApiException {
+            ExportBot spyBot = spy(new ExportBot("test_token", "test_bot", jobProducerMock));
+
+            Chat resolvedChat = new Chat();
+            resolvedChat.setId(-1001395363861L);
+            resolvedChat.setUserName("somepublicchat");
+            resolvedChat.setType("supergroup");
+            doReturn(resolvedChat).when(spyBot).execute(any(GetChat.class));
+
+            when(jobProducerMock.enqueue(123L, 123L, "somepublicchat", null, null))
+                    .thenReturn("export_task_123");
+
+            spyBot.onUpdateReceived(createChatSharedUpdate(-1001395363861L));
+            spyBot.onUpdateReceived(createCallbackUpdate(ExportBot.CB_EXPORT_ALL));
+
+            verify(jobProducerMock).enqueue(123L, 123L, "somepublicchat", null, null);
+        }
+
+        @DisplayName("getChat бросает exception — fallback на числовой ID")
+        @Test
+        void testChatSharedFallbackToNumericId() throws TelegramApiException {
+            ExportBot spyBot = spy(new ExportBot("test_token", "test_bot", jobProducerMock));
+
+            doThrow(new TelegramApiException("Forbidden"))
+                    .when(spyBot).execute(any(GetChat.class));
+
+            when(jobProducerMock.enqueue(123L, 123L, -1001395363861L, null, null))
+                    .thenReturn("export_task_123");
+
+            spyBot.onUpdateReceived(createChatSharedUpdate(-1001395363861L));
+            spyBot.onUpdateReceived(createCallbackUpdate(ExportBot.CB_EXPORT_ALL));
+
+            verify(jobProducerMock).enqueue(123L, 123L, -1001395363861L, null, null);
+        }
+
+        @DisplayName("getChat возвращает чат без username — fallback на числовой ID")
+        @Test
+        void testChatSharedNoUsername() throws TelegramApiException {
+            ExportBot spyBot = spy(new ExportBot("test_token", "test_bot", jobProducerMock));
+
+            Chat resolvedChat = new Chat();
+            resolvedChat.setId(-1001395363861L);
+            resolvedChat.setType("supergroup");
+            // username == null (приватный чат)
+            doReturn(resolvedChat).when(spyBot).execute(any(GetChat.class));
+
+            when(jobProducerMock.enqueue(123L, 123L, -1001395363861L, null, null))
+                    .thenReturn("export_task_123");
+
+            spyBot.onUpdateReceived(createChatSharedUpdate(-1001395363861L));
+            spyBot.onUpdateReceived(createCallbackUpdate(ExportBot.CB_EXPORT_ALL));
+
+            verify(jobProducerMock).enqueue(123L, 123L, -1001395363861L, null, null);
+        }
+    }
+
     // === Helpers ===
 
     private Update createUpdate(String text) {
@@ -403,6 +474,21 @@ class ExportBotTest {
         user.setId(123L);
         user.setIsBot(false);
         return user;
+    }
+
+    private Update createChatSharedUpdate(long sharedChatId) {
+        ChatShared chatShared = new ChatShared();
+        chatShared.setRequestId("1");
+        chatShared.setChatId(sharedChatId);
+
+        Update update = new Update();
+        Message message = new Message();
+        message.setFrom(createUser());
+        message.setChat(createChat("private"));
+        message.setChatShared(chatShared);
+        message.setMessageId(1);
+        update.setMessage(message);
+        return update;
     }
 
     private Chat createChat(String chatType) {

@@ -618,6 +618,27 @@ class ProgressTracker:
         if result:
             self._message_id = result
 
+    async def finalize(self, count: int) -> None:
+        """Отправить финальный 100% прогресс после завершения экспорта."""
+        if not self._total or self._total <= 0:
+            total = count  # если total неизвестен, берём фактическое кол-во
+        else:
+            total = self._total
+        if total <= 0:
+            return
+        elapsed = (datetime.now() - self._start_time).total_seconds() if self._start_time else 0
+        logger.info(f"  Progress: {count}/{total} (100%)")
+        result = await self._client.send_progress_update(
+            user_chat_id=self._user_chat_id,
+            task_id=self._task_id,
+            message_count=count,
+            total=total,
+            elapsed_seconds=elapsed,
+            progress_message_id=self._message_id,
+        )
+        if result:
+            self._message_id = result
+
 
 async def create_java_client() -> JavaBotClient:
     """
