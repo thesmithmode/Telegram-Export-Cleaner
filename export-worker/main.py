@@ -84,6 +84,16 @@ class ExportWorker:
         if self.control_redis:
             await self.control_redis.delete(f"active_export:{user_id}")
 
+    async def set_active_processing_job(self, task_id: str):
+        """Сообщаем Java-боту что воркер сейчас занят этой задачей."""
+        if self.control_redis:
+            await self.control_redis.set("active_processing_job", task_id, ex=3600)
+
+    async def clear_active_processing_job(self):
+        """Сбрасываем флаг занятости воркера."""
+        if self.control_redis:
+            await self.control_redis.delete("active_processing_job")
+
     def _create_tracker(self, job: ExportRequest) -> Optional[ProgressTracker]:
         """Create a ProgressTracker if user notifications are possible."""
         if job.user_chat_id and self.java_client:
@@ -188,6 +198,15 @@ class ExportWorker:
 
             # Mark job as processing
             await self.queue_consumer.mark_job_processing(job.task_id)
+            await self.set_active_processing_job(job.task_id)
+
+            # Проверяем отмену сразу при старте — задача могла быть отменена пока ждала в очереди
+            if await self.is_cancelled(job.task_id):
+                logger.info(f"🛑 Job {job.task_id} отменена до начала обработки")
+                await self.queue_consumer.mark_job_completed(job.task_id)
+                await self.clear_active_export(job.user_id)
+                await self.clear_active_processing_job()
+                return True
 
             # Verify access and get chat info in single call
             accessible, chat_info, error_reason = await self.telegram_client.verify_and_get_info(job.chat_id)
@@ -226,6 +245,7 @@ class ExportWorker:
                 )
                 await self.queue_consumer.mark_job_failed(job.task_id, error)
                 await self.clear_active_export(job.user_id)
+                await self.clear_active_processing_job()
                 return True
 
             if chat_info:
@@ -283,6 +303,7 @@ class ExportWorker:
                 self.log_memory_usage("JOB_DONE")
                 await self.cleanup_temp_files(job.task_id)
                 await self.clear_active_export(job.user_id)
+                await self.clear_active_processing_job()
                 return True
 
             else:
@@ -293,6 +314,7 @@ class ExportWorker:
                 self.log_memory_usage("JOB_FAILED")
                 await self.cleanup_temp_files(job.task_id)
                 await self.clear_active_export(job.user_id)
+                await self.clear_active_processing_job()
                 return True
 
         except Exception as e:
@@ -307,6 +329,7 @@ class ExportWorker:
             self.log_memory_usage("JOB_ERROR")
             await self.cleanup_temp_files(job.task_id)
             await self.clear_active_export(job.user_id)
+            await self.clear_active_processing_job()
             return True
 
     @staticmethod
@@ -359,7 +382,7 @@ class ExportWorker:
 
         if not missing:
             # Everything cached — read directly
-            logger.info(f"  Full date cache hit for {job.chat_id} [{from_date_str} - {to_date_str}]")
+            logger.info(f"  Cache HIT (полный) для чата {job.chat_id} [{from_date_str} - {to_date_str}]")
             cached = await self.message_cache.get_messages_by_date(
                 job.chat_id, from_date_str, to_date_str
             )
@@ -369,7 +392,7 @@ class ExportWorker:
         cached_date_ranges = self._compute_cached_ranges(
             from_date_str, to_date_str, missing
         )
-        logger.info(f"  Date cache partial hit for {job.chat_id}: "
+        logger.info(f"  Cache MISS (частичный) для чата {job.chat_id}: "
                      f"missing={missing}, cached={cached_date_ranges}")
 
         # Читаем закэшированные сообщения (только нужные диапазоны, не всё)
@@ -442,6 +465,7 @@ class ExportWorker:
         cached_ranges = await self.message_cache.get_cached_ranges(job.chat_id)
 
         if not cached_ranges:
+            logger.info(f"  Cache MISS для чата {job.chat_id} — полная загрузка")
             # No cache — full fetch, populate cache
             messages = await self._fetch_all_messages(job)
             if messages:
@@ -450,7 +474,7 @@ class ExportWorker:
             return messages
 
         cache_max_id = max(r[1] for r in cached_ranges)
-        logger.info(f"  Cache hit for chat {job.chat_id}: ranges={cached_ranges}")
+        logger.info(f"  Cache HIT для чата {job.chat_id}: ranges={cached_ranges}, cache_max_id={cache_max_id}")
 
         # Получаем total для прогресс-репортинга
         total = await self.telegram_client.get_messages_count(job.chat_id)
@@ -540,10 +564,10 @@ class ExportWorker:
                     await self.message_cache.store_messages(job.chat_id, older_msgs)
                     fresh_messages.extend(older_msgs)
 
-        # Retrieve all from cache (use ID 0 as lower bound to include everything)
+        # Читаем все сообщения из кэша — fresh_messages уже сохранены туда выше,
+        # поэтому повторный merge с fresh_messages не нужен (они уже включены).
         actual_min = 0 if (not job.limit or job.limit <= 0) else full_min
-        cached_messages = await self.message_cache.get_messages(job.chat_id, actual_min, full_max)
-        messages = self.message_cache.merge_and_sort(cached_messages, fresh_messages)
+        messages = await self.message_cache.get_messages(job.chat_id, actual_min, full_max)
         logger.info(f"  Total after cache merge: {len(messages)} messages")
 
         await self.message_cache.evict_if_needed()
