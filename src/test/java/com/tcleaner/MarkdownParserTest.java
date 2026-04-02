@@ -197,6 +197,32 @@ class MarkdownParserTest {
     }
 
     @Nested
+    @DisplayName("Fallback и специальные типы")
+    class FallbackAndSpecialTypes {
+
+        @Test
+        @DisplayName("bank_card маскируется как [CARD]")
+        void parsesBankCard() throws Exception {
+            JsonNode entity = createEntity("bank_card", "1234567890123456");
+            assertThat(MarkdownParser.parseEntity(entity)).isEqualTo("[CARD]");
+        }
+
+        @Test
+        @DisplayName("Неизвестный тип — возвращает text как есть (fallback)")
+        void parsesUnknownTypeAsFallback() throws Exception {
+            JsonNode entity = createEntity("future_unknown_type", "some text");
+            assertThat(MarkdownParser.parseEntity(entity)).isEqualTo("some text");
+        }
+
+        @Test
+        @DisplayName("mention_name — возвращает текст без префикса @")
+        void parsesMentionName() throws Exception {
+            JsonNode entity = createEntity("mention_name", "John Doe");
+            assertThat(MarkdownParser.parseEntity(entity)).isEqualTo("John Doe");
+        }
+    }
+
+    @Nested
     @DisplayName("Парсинг сложных сущностей")
     class ParseComplexEntities {
 

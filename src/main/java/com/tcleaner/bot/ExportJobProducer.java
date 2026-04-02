@@ -124,6 +124,7 @@ public class ExportJobProducer {
     private static final String JOB_JSON_PREFIX = "job_json:";
     private static final String ACTIVE_PROCESSING_JOB_KEY = "active_processing_job";
     private static final long ACTIVE_EXPORT_TTL_MINUTES = 60;
+    private static final String EXPRESS_QUEUE_SUFFIX = "_express";
 
     private String enqueue(long userId, long userChatId, Object chatId, String fromDate, String toDate) {
         String taskId = "export_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
@@ -154,10 +155,15 @@ public class ExportJobProducer {
                 String existing = redis.opsForValue().get(ACTIVE_EXPORT_PREFIX + userId);
                 throw new IllegalStateException("Экспорт уже активен: " + existing);
             }
-            redis.opsForList().rightPush(queueName, json);
+            // Если данные чата уже в кэше — задача идёт в приоритетную очередь
+            boolean cached = isLikelyCached(chatId);
+            String targetQueue = cached ? queueName + EXPRESS_QUEUE_SUFFIX : queueName;
+            redis.opsForList().rightPush(targetQueue, json);
             // Сохраняем JSON задачи для возможного LREM при отмене из очереди
             redis.opsForValue().set(JOB_JSON_PREFIX + taskId, json, ACTIVE_EXPORT_TTL_MINUTES, TimeUnit.MINUTES);
-            log.info("Задача {} добавлена в очередь {} (chat_id={})", taskId, queueName, chatId);
+            // Запоминаем в какую очередь положили (для отмены)
+            redis.opsForValue().set("job_queue:" + taskId, targetQueue, ACTIVE_EXPORT_TTL_MINUTES, TimeUnit.MINUTES);
+            log.info("Задача {} добавлена в очередь {} (chat_id={}, cached={})", taskId, targetQueue, chatId, cached);
             return taskId;
         } catch (IllegalStateException e) {
             throw e;
@@ -168,13 +174,39 @@ public class ExportJobProducer {
     }
 
     /**
-     * Возвращает текущую длину очереди (количество ожидающих задач).
+     * Проверяет, есть ли данные этого чата в кэше воркера.
+     * Использует canonical-маппинг, который Python-воркер записывает после каждой нормализации.
+     * Если кэш доступен, задачу можно ставить в приоритетную очередь.
+     *
+     * @param chatId идентификатор чата (username, числовой ID, строка)
+     * @return true если данные чата закэшированы
+     */
+    public boolean isLikelyCached(Object chatId) {
+        try {
+            String input = String.valueOf(chatId);
+            // Сначала пробуем через canonical маппинг (username → numeric ID)
+            String canonical = redis.opsForValue().get("canonical:" + input);
+            if (canonical == null) {
+                // Числовой ID — пробуем напрямую
+                canonical = input;
+            }
+            String ranges = redis.opsForValue().get("cache:ranges:" + canonical);
+            return ranges != null && !ranges.equals("[]");
+        } catch (Exception e) {
+            log.debug("Не удалось проверить кэш для {}: {}", chatId, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Возвращает текущую длину очереди (основная + express).
      *
      * @return количество задач в очереди
      */
     public long getQueueLength() {
-        Long size = redis.opsForList().size(queueName);
-        return size != null ? size : 0L;
+        Long main = redis.opsForList().size(queueName);
+        Long express = redis.opsForList().size(queueName + EXPRESS_QUEUE_SUFFIX);
+        return (main != null ? main : 0L) + (express != null ? express : 0L);
     }
 
     /**
@@ -232,9 +264,11 @@ public class ExportJobProducer {
             return taskId;
         }
 
-        // Задача не в processing, не completed, не failed — проверяем очередь
+        // Задача не в processing, не completed, не failed — проверяем обе очереди
         Long queueSize = redis.opsForList().size(queueName);
-        if (queueSize != null && queueSize > 0) {
+        Long expressSize = redis.opsForList().size(queueName + EXPRESS_QUEUE_SUFFIX);
+        long totalSize = (queueSize != null ? queueSize : 0L) + (expressSize != null ? expressSize : 0L);
+        if (totalSize > 0) {
             // В очереди есть задачи — возможно наша ждёт
             return taskId;
         }
@@ -257,14 +291,23 @@ public class ExportJobProducer {
             return;
         }
 
-        // Пытаемся удалить задачу из очереди (если ещё не взята воркером)
+        // Пытаемся удалить задачу из очереди (если ещё не взята воркером).
+        // Проверяем обе очереди: основную и express.
         String json = redis.opsForValue().get(JOB_JSON_PREFIX + taskId);
         if (json != null) {
-            Long removed = redis.opsForList().remove(queueName, 1, json);
-            if (removed != null && removed > 0) {
-                log.info("Задача {} удалена из очереди (не успела начаться)", taskId);
+            String targetQueue = redis.opsForValue().get("job_queue:" + taskId);
+            if (targetQueue != null) {
+                Long removed = redis.opsForList().remove(targetQueue, 1, json);
+                if (removed != null && removed > 0) {
+                    log.info("Задача {} удалена из очереди {} (не успела начаться)", taskId, targetQueue);
+                }
+            } else {
+                // Fallback: пробуем обе очереди
+                redis.opsForList().remove(queueName, 1, json);
+                redis.opsForList().remove(queueName + EXPRESS_QUEUE_SUFFIX, 1, json);
             }
             redis.delete(JOB_JSON_PREFIX + taskId);
+            redis.delete("job_queue:" + taskId);
         }
 
         // Устанавливаем флаг отмены (на случай если задача уже в обработке)

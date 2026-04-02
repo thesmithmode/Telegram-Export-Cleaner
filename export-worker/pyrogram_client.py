@@ -14,7 +14,7 @@ import logging
 import os
 from typing import List, Optional, AsyncGenerator, Union
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from pyrogram import Client, types as pyrogram_types
 from pyrogram.raw import functions, types as raw_types
@@ -33,6 +33,16 @@ except ImportError:
     redis = None  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+
+def ensure_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    """Нормализовать datetime к UTC-aware. Pyrogram 2.x возвращает aware UTC,
+    поэтому все сравнения дат должны быть aware."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 class TelegramClient:
@@ -148,6 +158,9 @@ class TelegramClient:
         if not self.is_connected:
             raise RuntimeError("Not connected to Telegram")
 
+        from_date = ensure_utc(from_date)
+        to_date = ensure_utc(to_date)
+
         try:
             logger.info(f"Fetching history for chat {chat_id} (limit: {limit})")
 
@@ -262,23 +275,27 @@ class TelegramClient:
         to_date: datetime,
     ) -> Optional[int]:
         """
-        Get message count in a date range.
+        Get message count in a date range using GetHistory with offset_date.
 
-        Strategy: use messages.Search with min_date/max_date directly.
-        Uses 1 lightweight API call (limit=1).
+        Strategy: two lightweight GetHistory calls (limit=1) to get the total
+        message count before each boundary date, then subtract.
+
+        count_before_to - count_before_from = messages in [from_date, to_date]
+
+        This is more reliable than messages.Search which may return the total
+        chat count regardless of date filters for certain chat types.
+
         Returns None on failure.
         """
         try:
             peer = await self.client.resolve_peer(chat_id)
 
-            result = await self.client.invoke(
-                functions.messages.Search(
+            # Count messages with date <= to_date (i.e. offset_date = to_date + 1s)
+            result_to = await self.client.invoke(
+                functions.messages.GetHistory(
                     peer=peer,
-                    q="",
-                    filter=raw_types.InputMessagesFilterEmpty(),
-                    min_date=int(from_date.timestamp()),
-                    max_date=int(to_date.timestamp()),
                     offset_id=0,
+                    offset_date=int(to_date.timestamp()) + 1,
                     add_offset=0,
                     limit=1,
                     max_id=0,
@@ -286,12 +303,29 @@ class TelegramClient:
                     hash=0,
                 )
             )
-            count = getattr(result, "count", None)
-            if count is not None and count > 0:
-                return count
-            if hasattr(result, "messages"):
-                return len(result.messages) or None
-            return None
+            count_to = getattr(result_to, "count", None)
+            if count_to is None:
+                return None
+
+            # Count messages with date < from_date (i.e. offset_date = from_date)
+            result_from = await self.client.invoke(
+                functions.messages.GetHistory(
+                    peer=peer,
+                    offset_id=0,
+                    offset_date=int(from_date.timestamp()),
+                    add_offset=0,
+                    limit=1,
+                    max_id=0,
+                    min_id=0,
+                    hash=0,
+                )
+            )
+            count_from = getattr(result_from, "count", None)
+            if count_from is None:
+                return None
+
+            date_range_count = count_to - count_from
+            return max(date_range_count, 0) if date_range_count is not None else None
         except Exception as e:
             logger.warning(f"Could not get date range count for chat {chat_id}: {e}")
             return None
@@ -309,8 +343,8 @@ class TelegramClient:
         With dates: raw MTProto messages.Search with min_date/max_date (1 API call).
         """
         if from_date or to_date:
-            effective_from = from_date or datetime(2000, 1, 1)
-            effective_to = to_date or datetime.now()
+            effective_from = ensure_utc(from_date) or datetime(2000, 1, 1, tzinfo=timezone.utc)
+            effective_to = ensure_utc(to_date) or datetime.now(timezone.utc)
             return await self.get_date_range_count(chat_id, effective_from, effective_to)
         return await self.get_chat_messages_count(chat_id)
 
