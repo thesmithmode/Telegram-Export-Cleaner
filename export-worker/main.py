@@ -230,6 +230,15 @@ class ExportWorker:
 
             if chat_info:
                 logger.info(f"  Chat: {chat_info.get('title')} (type: {chat_info.get('type')})")
+                # Нормализуем chat_id до канонического числового ID.
+                # Пикер может передать числовой ID (-100...), ссылка — username.
+                # Оба варианта должны использовать один и тот же ключ кэша.
+                canonical_id = chat_info.get("id")
+                if canonical_id and canonical_id != job.chat_id:
+                    logger.info(
+                        f"  Normalizing chat_id: {job.chat_id!r} → {canonical_id}"
+                    )
+                    job = job.model_copy(update={"chat_id": canonical_id})
 
             # --- Cache-aware export ---
             # Both full and date-range exports use cache:
