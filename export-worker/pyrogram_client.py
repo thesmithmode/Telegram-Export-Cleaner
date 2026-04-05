@@ -14,7 +14,7 @@ import logging
 import os
 from typing import List, Optional, AsyncGenerator, Union
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from pyrogram import Client, types as pyrogram_types
 from pyrogram.raw import functions, types as raw_types
@@ -33,6 +33,16 @@ except ImportError:
     redis = None  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+
+def ensure_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    """Нормализовать datetime к UTC-aware. Pyrogram 2.x возвращает aware UTC,
+    поэтому все сравнения дат должны быть aware."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 class TelegramClient:
@@ -147,6 +157,9 @@ class TelegramClient:
         """
         if not self.is_connected:
             raise RuntimeError("Not connected to Telegram")
+
+        from_date = ensure_utc(from_date)
+        to_date = ensure_utc(to_date)
 
         try:
             logger.info(f"Fetching history for chat {chat_id} (limit: {limit})")
@@ -309,8 +322,8 @@ class TelegramClient:
         With dates: raw MTProto messages.Search with min_date/max_date (1 API call).
         """
         if from_date or to_date:
-            effective_from = from_date or datetime(2000, 1, 1)
-            effective_to = to_date or datetime.now()
+            effective_from = ensure_utc(from_date) or datetime(2000, 1, 1, tzinfo=timezone.utc)
+            effective_to = ensure_utc(to_date) or datetime.now(timezone.utc)
             return await self.get_date_range_count(chat_id, effective_from, effective_to)
         return await self.get_chat_messages_count(chat_id)
 

@@ -21,7 +21,7 @@ import signal
 import sys
 import shutil
 import psutil
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -393,7 +393,7 @@ class ExportWorker:
         if not from_date_str and to_date_str:
             from_date_str = "2000-01-01"
         if from_date_str and not to_date_str:
-            to_date_str = datetime.now().strftime("%Y-%m-%d")
+            to_date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         # Find which date ranges we're missing
         missing = await self.message_cache.get_missing_date_ranges(
@@ -425,8 +425,8 @@ class ExportWorker:
         logger.info(f"  Loaded {len(cached_messages)} messages from cache")
 
         # Получаем total для прогресса (только для запрошенного диапазона)
-        from_dt = datetime.fromisoformat(from_date_str + "T00:00:00")
-        to_dt = datetime.fromisoformat(to_date_str + "T23:59:59")
+        from_dt = datetime.fromisoformat(from_date_str + "T00:00:00+00:00")
+        to_dt = datetime.fromisoformat(to_date_str + "T23:59:59+00:00")
         total = await self.telegram_client.get_messages_count(
             job.chat_id, from_dt, to_dt
         )
@@ -440,8 +440,8 @@ class ExportWorker:
         fresh_messages: list[ExportedMessage] = []
         fetched_count = len(cached_messages)  # Считаем cached в прогресс
         for gap_from, gap_to in missing:
-            gap_from_dt = datetime.fromisoformat(gap_from + "T00:00:00")
-            gap_to_dt = datetime.fromisoformat(gap_to + "T23:59:59")
+            gap_from_dt = datetime.fromisoformat(gap_from + "T00:00:00+00:00")
+            gap_to_dt = datetime.fromisoformat(gap_to + "T23:59:59+00:00")
 
             gap_msgs: list[ExportedMessage] = []
             try:
@@ -601,17 +601,19 @@ class ExportWorker:
         """
         messages: list[ExportedMessage] = []
 
-        # Parse date filters
+        # Parse date filters (ensure UTC-aware для корректного сравнения с Pyrogram)
         from_date = None
         to_date = None
         if job.from_date:
             try:
-                from_date = datetime.fromisoformat(job.from_date)
+                dt = datetime.fromisoformat(job.from_date)
+                from_date = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
             except ValueError:
                 pass
         if job.to_date:
             try:
-                to_date = datetime.fromisoformat(job.to_date)
+                dt = datetime.fromisoformat(job.to_date)
+                to_date = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
             except ValueError:
                 pass
 
