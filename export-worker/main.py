@@ -471,6 +471,9 @@ class ExportWorker:
         messages = self.message_cache.merge_and_sort(cached_messages, fresh_messages)
         logger.info(f"  Date-range export complete: {len(messages)} messages")
 
+        if tracker:
+            await tracker.finalize(len(messages))
+
         await self.message_cache.evict_if_needed()
         return messages
 
@@ -590,6 +593,9 @@ class ExportWorker:
         messages = await self.message_cache.get_messages(job.chat_id, actual_min, full_max)
         logger.info(f"  Total after cache merge: {len(messages)} messages")
 
+        if tracker:
+            await tracker.finalize(len(messages))
+
         await self.message_cache.evict_if_needed()
         return messages
 
@@ -662,6 +668,9 @@ class ExportWorker:
             )
             await self.queue_consumer.mark_job_failed(job.task_id, error)
             return None
+
+        if tracker:
+            await tracker.finalize(len(messages))
 
         return messages
 
