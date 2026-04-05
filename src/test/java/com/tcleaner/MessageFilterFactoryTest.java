@@ -2,6 +2,9 @@ package com.tcleaner;
 import com.tcleaner.core.MessageFilter;
 import com.tcleaner.core.MessageFilterFactory;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -14,6 +17,19 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 @DisplayName("MessageFilterFactory")
 class MessageFilterFactoryTest {
+
+    private ObjectMapper objectMapper;
+
+    @BeforeEach
+    void setUp() {
+        objectMapper = new ObjectMapper();
+    }
+
+    private JsonNode msg(String date, String text) throws Exception {
+        return objectMapper.readTree(
+            String.format("{\"id\":1,\"type\":\"message\",\"date\":\"%s\",\"text\":\"%s\"}", date, text)
+        );
+    }
 
     @Nested
     @DisplayName("Возвращает null при отсутствии параметров")
@@ -37,17 +53,20 @@ class MessageFilterFactoryTest {
     class DateFilters {
 
         @Test
-        @DisplayName("Задаёт startDate")
-        void setsStartDate() {
-            MessageFilter filter = MessageFilterFactory.build("2025-06-01", null, null, null);
-            assertThat(filter).isNotNull();
+        @DisplayName("startDate — сообщения до даты отсеиваются")
+        void setsStartDate() throws Exception {
+            MessageFilter filter = MessageFilterFactory.build("2025-07-01", null, null, null);
+            assertThat(filter.matches(msg("2025-06-30T23:59:59", "before"))).isFalse();
+            assertThat(filter.matches(msg("2025-07-01T00:00:00", "on start"))).isTrue();
+            assertThat(filter.matches(msg("2025-08-01T00:00:00", "after"))).isTrue();
         }
 
         @Test
-        @DisplayName("Задаёт endDate")
-        void setsEndDate() {
+        @DisplayName("endDate — сообщения после даты отсеиваются")
+        void setsEndDate() throws Exception {
             MessageFilter filter = MessageFilterFactory.build(null, "2025-06-30", null, null);
-            assertThat(filter).isNotNull();
+            assertThat(filter.matches(msg("2025-06-30T23:59:59", "on end"))).isTrue();
+            assertThat(filter.matches(msg("2025-07-01T00:00:00", "after"))).isFalse();
         }
 
         @Test
@@ -63,31 +82,36 @@ class MessageFilterFactoryTest {
     class KeywordFilters {
 
         @Test
-        @DisplayName("Одно ключевое слово")
-        void singleKeyword() {
+        @DisplayName("Одно ключевое слово — проходят совпадающие, отсеиваются несовпадающие")
+        void singleKeyword() throws Exception {
             MessageFilter filter = MessageFilterFactory.build(null, null, "hello", null);
-            assertThat(filter).isNotNull();
+            assertThat(filter.matches(msg("2025-01-01T00:00:00", "Hello world"))).isTrue();
+            assertThat(filter.matches(msg("2025-01-01T00:00:00", "Goodbye"))).isFalse();
         }
 
         @Test
-        @DisplayName("Несколько ключевых слов через запятую")
-        void multipleKeywordsCommaSeparated() {
+        @DisplayName("Несколько ключевых слов через запятую — совпадение по любому из них (OR)")
+        void multipleKeywordsCommaSeparated() throws Exception {
             MessageFilter filter = MessageFilterFactory.build(null, null, "java,spring", null);
-            assertThat(filter).isNotNull();
+            assertThat(filter.matches(msg("2025-01-01T00:00:00", "java rocks"))).isTrue();
+            assertThat(filter.matches(msg("2025-01-01T00:00:00", "spring boot"))).isTrue();
+            assertThat(filter.matches(msg("2025-01-01T00:00:00", "python rules"))).isFalse();
         }
 
         @Test
-        @DisplayName("Пробелы вокруг ключевых слов обрезаются")
-        void keywordsAreTrimmed() {
+        @DisplayName("Пробелы вокруг ключевых слов обрезаются — фильтрация работает корректно")
+        void keywordsAreTrimmed() throws Exception {
             MessageFilter filter = MessageFilterFactory.build(null, null, " java , spring ", null);
-            assertThat(filter).isNotNull();
+            assertThat(filter.matches(msg("2025-01-01T00:00:00", "java code"))).isTrue();
+            assertThat(filter.matches(msg("2025-01-01T00:00:00", "spring framework"))).isTrue();
         }
 
         @Test
-        @DisplayName("Задаёт excludeKeywords")
-        void setsExcludeKeywords() {
+        @DisplayName("excludeKeywords — сообщения с исключённым словом отсеиваются")
+        void setsExcludeKeywords() throws Exception {
             MessageFilter filter = MessageFilterFactory.build(null, null, null, "spam");
-            assertThat(filter).isNotNull();
+            assertThat(filter.matches(msg("2025-01-01T00:00:00", "buy cheap spam now"))).isFalse();
+            assertThat(filter.matches(msg("2025-01-01T00:00:00", "normal message"))).isTrue();
         }
     }
 
@@ -96,11 +120,16 @@ class MessageFilterFactoryTest {
     class CombinedParams {
 
         @Test
-        @DisplayName("Все параметры заданы — возвращает непустой фильтр")
-        void allParamsReturnFilter() {
+        @DisplayName("Дата + ключевое слово — оба условия применяются (AND)")
+        void dateAndKeywordCombineAsAnd() throws Exception {
             MessageFilter filter = MessageFilterFactory.build(
-                    "2025-01-01", "2025-12-31", "java", "spam");
-            assertThat(filter).isNotNull();
+                    "2025-06-01", "2025-06-30", "java", null);
+            // Дата в диапазоне + keyword совпадает → проходит
+            assertThat(filter.matches(msg("2025-06-15T00:00:00", "learning java"))).isTrue();
+            // Дата в диапазоне, но keyword не совпадает → не проходит
+            assertThat(filter.matches(msg("2025-06-15T00:00:00", "learning python"))).isFalse();
+            // Keyword совпадает, но дата вне диапазона → не проходит
+            assertThat(filter.matches(msg("2025-07-15T00:00:00", "learning java"))).isFalse();
         }
     }
 

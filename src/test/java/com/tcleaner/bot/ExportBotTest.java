@@ -301,11 +301,14 @@ class ExportBotTest {
 
     // === Прочие кейсы ===
 
-    @DisplayName("Should handle /start command")
+    @DisplayName("Should handle /start command without triggering export")
     @Test
     void testStartCommand() {
         bot.onUpdateReceived(createUpdate("/start"));
-        // Should not throw
+        verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString(), anyString(), anyString());
+        verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyLong(), anyString(), anyString());
+        verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString());
+        verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyLong());
     }
 
     @DisplayName("Should handle unknown slash command")
