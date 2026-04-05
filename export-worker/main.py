@@ -125,6 +125,12 @@ class ExportWorker:
         except Exception as e:
             logger.warning(f"Failed to cleanup temp files for {task_id}: {e}")
 
+    async def _cleanup_job(self, job: ExportRequest):
+        """Общий cleanup после завершения задачи (успех, ошибка, отмена)."""
+        await self.cleanup_temp_files(job.task_id)
+        await self.clear_active_export(job.user_id)
+        await self.clear_active_processing_job()
+
     async def initialize(self) -> bool:
         """
         Initialize all components.
@@ -204,8 +210,7 @@ class ExportWorker:
             if await self.is_cancelled(job.task_id):
                 logger.info(f"🛑 Job {job.task_id} отменена до начала обработки")
                 await self.queue_consumer.mark_job_completed(job.task_id)
-                await self.clear_active_export(job.user_id)
-                await self.clear_active_processing_job()
+                await self._cleanup_job(job)
                 return True
 
             # Verify access and get chat info in single call
@@ -244,8 +249,7 @@ class ExportWorker:
                     user_chat_id=job.user_chat_id,
                 )
                 await self.queue_consumer.mark_job_failed(job.task_id, error)
-                await self.clear_active_export(job.user_id)
-                await self.clear_active_processing_job()
+                await self._cleanup_job(job)
                 return True
 
             if chat_info:
@@ -321,21 +325,15 @@ class ExportWorker:
                 await self.queue_consumer.mark_job_completed(job.task_id)
                 self.jobs_processed += 1
                 self.log_memory_usage("JOB_DONE")
-                await self.cleanup_temp_files(job.task_id)
-                await self.clear_active_export(job.user_id)
-                await self.clear_active_processing_job()
-                return True
-
             else:
                 error = "Failed to send response to Java Bot"
                 logger.error(f"❌ {error}")
                 await self.queue_consumer.mark_job_failed(job.task_id, error)
                 self.jobs_failed += 1
                 self.log_memory_usage("JOB_FAILED")
-                await self.cleanup_temp_files(job.task_id)
-                await self.clear_active_export(job.user_id)
-                await self.clear_active_processing_job()
-                return True
+
+            await self._cleanup_job(job)
+            return True
 
         except Exception as e:
             logger.error(f"❌ Unexpected error in job {job.task_id}: {e}", exc_info=True)
@@ -347,9 +345,7 @@ class ExportWorker:
             await self.queue_consumer.mark_job_failed(job.task_id, str(e))
             self.jobs_failed += 1
             self.log_memory_usage("JOB_ERROR")
-            await self.cleanup_temp_files(job.task_id)
-            await self.clear_active_export(job.user_id)
-            await self.clear_active_processing_job()
+            await self._cleanup_job(job)
             return True
 
     @staticmethod
