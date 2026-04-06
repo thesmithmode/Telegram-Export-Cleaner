@@ -346,14 +346,14 @@ class TestExportWorkerProgressReporting:
         assert first_call.kwargs["total"] == 5000
 
     @pytest.mark.asyncio
-    async def test_fetch_all_sends_10pct_milestones(self, worker):
-        """_fetch_all_messages sends progress at every 10% milestone."""
+    async def test_fetch_all_sends_5pct_milestones(self, worker):
+        """_fetch_all_messages sends progress at every 5% milestone."""
         job = ExportRequest(
             task_id="progress_2", user_id=1, user_chat_id=1,
             chat_id=456, limit=0, offset_id=0,
         )
 
-        # 100 messages, total=100 → should fire at 10%, 20%, ... 90%
+        # 100 messages, total=100 → should fire at 5%, 10%, ... 95%
         messages = [
             ExportedMessage(id=i, date="2025-01-01T00:00:00", text=f"msg{i}")
             for i in range(1, 101)
@@ -369,9 +369,9 @@ class TestExportWorkerProgressReporting:
 
         await worker.process_job(job)
 
-        # started + 9 milestones (10%..90%) + 1 finalize (100%)
+        # started (0) + 19 milestones (5, 10..95) + 1 finalize (100)
         progress_calls = worker.java_client.send_progress_update.call_args_list
-        assert len(progress_calls) == 11  # 1 started + 9 milestones + 1 finalize
+        assert len(progress_calls) == 21  # 1 started + 19 milestones + 1 finalize
 
     @pytest.mark.asyncio
     async def test_process_job_exception_notifies_user(self, worker):
