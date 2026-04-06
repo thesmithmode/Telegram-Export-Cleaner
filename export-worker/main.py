@@ -162,6 +162,9 @@ class ExportWorker:
                 decode_responses=True,
             )
 
+            # Передаём Redis-клиент в Telegram-клиент для canonical-маппинга
+            self.telegram_client.redis_client = self.control_redis
+
             # 5. Initialize message cache
             logger.info("4️⃣  Initializing message cache...")
             cache_redis = aioredis.Redis(
@@ -267,6 +270,8 @@ class ExportWorker:
                     job = job.model_copy(update={"chat_id": canonical_id})
                 # Сохраняем маппинг canonical: input → numeric_id, чтобы Java мог
                 # проверить наличие кэша перед постановкой в очередь (fast-path).
+                # Также сохраняем обратный маппинг canonical:<numeric_id> → username,
+                # чтобы Java-бот мог резолвить числовые ID из пикера в username.
                 if self.control_redis and canonical_id:
                     try:
                         await self.control_redis.set(
@@ -274,6 +279,14 @@ class ExportWorker:
                             str(canonical_id),
                             ex=86400 * 30,
                         )
+                        # Обратный маппинг: по numeric_id находим username
+                        chat_username = chat_info.get("username")
+                        if chat_username:
+                            await self.control_redis.set(
+                                f"canonical:{canonical_id}",
+                                chat_username,
+                                ex=86400 * 30,
+                            )
                     except Exception:
                         pass
 
