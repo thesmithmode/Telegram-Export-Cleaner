@@ -48,7 +48,6 @@ dependency-reduced-pom.xml
 ### Project specific ###
 # Контекст и документация (локальные, не для репо)
 Контекст/
-.claude/
 
 # Выходные файлы CLI
 tcleaner_output.txt
@@ -56,7 +55,7 @@ tcleaner_output.txt
 nul
 $null
 
-# Контекст AI-агентов (локальные настройки, не для репо)
+# Контекст AI-агентов и IDE (локальные настройки, не для репо)
 opencode.json
 opencode
 .kilo/
@@ -65,6 +64,9 @@ opencode
 .kilocode/
 AGENTS.md
 CLAUDE.md
+QWEN.md
+.claude/
+.qwen/
 
 # Личные данные для тестирования (real Telegram exports)
 Development_context*/
