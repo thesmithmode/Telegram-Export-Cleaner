@@ -154,8 +154,22 @@ public class ExportBot extends TelegramLongPollingBot {
         ChatShared chatShared = message.getChatShared();
         if (chatShared != null) {
             long sharedChatId = chatShared.getChatId();
-            log.debug("Получен chat_shared от userId={}: chatId={}", userId, sharedChatId);
-            String chatIdentifier = resolveChatIdentifier(sharedChatId);
+            String requestId = chatShared.getRequestId();
+            log.info("Получен chat_shared: requestId={}, rawChatId={}, userId={}", 
+                    requestId, sharedChatId, userId);
+            
+            // Для каналов и супергрупп Bot API может возвращать ID без префикса -100.
+            // Если requestId соответствует каналу (2) или группе (1) и ID положительный - 
+            // пробуем добавить префикс для корректного вызова getChat.
+            long targetId = sharedChatId;
+            if (sharedChatId > 0 && (PICKER_REQUEST_ID_CHANNEL.equals(requestId) 
+                    || PICKER_REQUEST_ID_GROUP.equals(requestId))) {
+                targetId = -1000000000000L - sharedChatId;
+                log.debug("Нормализован ID для getChat: {} -> {}", sharedChatId, targetId);
+            }
+
+            String chatIdentifier = resolveChatIdentifier(targetId);
+            log.info("Резолвлен идентификатор для воркера: {} -> {}", targetId, chatIdentifier);
             handleExportDirect(chatId, userId, chatIdentifier);
             return;
         }
