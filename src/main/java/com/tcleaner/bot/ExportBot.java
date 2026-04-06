@@ -7,8 +7,10 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
+import org.telegram.telegrambots.meta.api.methods.groupadministration.GetChat;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText;
+import org.telegram.telegrambots.meta.api.objects.Chat;
 import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
 import org.telegram.telegrambots.meta.api.objects.Message;
 import org.telegram.telegrambots.meta.api.objects.Update;
@@ -139,8 +141,10 @@ public class ExportBot extends TelegramLongPollingBot {
         // Обработка выбора чата через встроенный Telegram пикер (кнопка 📂)
         ChatShared chatShared = message.getChatShared();
         if (chatShared != null) {
-            log.debug("Получен chat_shared от userId={}: chatId={}", userId, chatShared.getChatId());
-            handleExportDirect(chatId, userId, String.valueOf(chatShared.getChatId()));
+            long sharedChatId = chatShared.getChatId();
+            log.debug("Получен chat_shared от userId={}: chatId={}", userId, sharedChatId);
+            String chatIdentifier = resolveChatIdentifier(sharedChatId);
+            handleExportDirect(chatId, userId, chatIdentifier);
             return;
         }
 
@@ -567,6 +571,31 @@ public class ExportBot extends TelegramLongPollingBot {
         if (removed > 0) {
             log.info("Вытеснено {} неактивных сессий (осталось: {})", removed, sessions.size());
         }
+    }
+
+    /**
+     * Резолвит числовой chat ID в username через Bot API getChat.
+     *
+     * <p>После события ChatShared Telegram разрешает боту вызывать getChat
+     * для переданного чата (Bot API 7.2+). Если чат публичный,
+     * getChat вернёт username, который Python-воркер сможет резолвить
+     * через Pyrogram API без необходимости быть участником чата.</p>
+     *
+     * @param sharedChatId числовой ID чата из ChatShared
+     * @return username чата (без @) или числовой ID как строка (fallback)
+     */
+    private String resolveChatIdentifier(long sharedChatId) {
+        try {
+            Chat chat = execute(new GetChat(String.valueOf(sharedChatId)));
+            String username = chat.getUserName();
+            if (username != null && !username.isBlank()) {
+                log.info("Резолвлен username для chatId={}: @{}", sharedChatId, username);
+                return username;
+            }
+        } catch (TelegramApiException e) {
+            log.debug("getChat не удался для chatId={}: {}", sharedChatId, e.getMessage());
+        }
+        return String.valueOf(sharedChatId);
     }
 
     /**
