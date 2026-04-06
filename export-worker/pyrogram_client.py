@@ -401,25 +401,36 @@ class TelegramClient:
         except Exception as retry_error:
             logger.error(f"Cache sync retry failed for chat {chat_id}: {retry_error}")
 
-        # Fallback 2: raw MTProto с access_hash=0 для публичных каналов
+        # Fallback 2: raw MTProto с access_hash=0 для публичных каналов.
+        # Используем ответ GetChannels напрямую (username из ответа) вместо
+        # повторного get_chat(numeric_id) — это надёжнее, т.к. не зависит
+        # от сайд-эффекта кэша Pyrogram.
         if chat_id < -1000000000000:
             try:
                 channel_id = abs(chat_id) - 1000000000000
                 logger.warning(
                     f"Trying raw MTProto access_hash=0 for channel {channel_id}..."
                 )
-                await self.client.invoke(
+                result = await self.client.invoke(
                     functions.channels.GetChannels(
                         id=[raw_types.InputChannel(
                             channel_id=channel_id, access_hash=0
                         )]
                     )
                 )
-                chat = await self.client.get_chat(chat_id)
+                # Извлечь username из ответа — надёжнее чем get_chat(numeric_id)
+                raw_channel = result.chats[0] if result.chats else None
+                raw_username = getattr(raw_channel, "username", None)
+                if raw_username:
+                    logger.info(f"Got username from GetChannels: @{raw_username}")
+                    chat = await self.client.get_chat(raw_username)
+                else:
+                    # Нет username (приватный канал без имени) — попробуем numeric
+                    chat = await self.client.get_chat(chat_id)
                 logger.info(f"Resolved public channel {chat_id} via raw MTProto")
                 chat_info = self._build_chat_info(chat)
-                # Сохранить canonical mapping если у чата есть username
-                username = chat_info.get("username")
+                # Сохранить canonical mapping
+                username = chat_info.get("username") or raw_username
                 if username and self.redis_client:
                     try:
                         await self.redis_client.set(
