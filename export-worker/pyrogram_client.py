@@ -385,7 +385,18 @@ class TelegramClient:
                 pass
             chat = await self.client.get_chat(chat_id)
             logger.info(f"Successfully resolved chat {chat_id} after cache sync")
-            return (True, self._build_chat_info(chat), None)
+            chat_info = self._build_chat_info(chat)
+            # Сохранить canonical mapping если у чата есть username
+            username = chat_info.get("username")
+            if username and self.redis_client:
+                try:
+                    await self.redis_client.set(
+                        f"canonical:{chat_id}", username, ex=86400 * 30
+                    )
+                    logger.info(f"Saved canonical mapping: canonical:{chat_id} → {username}")
+                except Exception as redis_err:
+                    logger.warning(f"Failed to save canonical mapping: {redis_err}")
+            return (True, chat_info, None)
 
         except Exception as retry_error:
             logger.error(f"Cache sync retry failed for chat {chat_id}: {retry_error}")
@@ -406,7 +417,18 @@ class TelegramClient:
                 )
                 chat = await self.client.get_chat(chat_id)
                 logger.info(f"Resolved public channel {chat_id} via raw MTProto")
-                return (True, self._build_chat_info(chat), None)
+                chat_info = self._build_chat_info(chat)
+                # Сохранить canonical mapping если у чата есть username
+                username = chat_info.get("username")
+                if username and self.redis_client:
+                    try:
+                        await self.redis_client.set(
+                            f"canonical:{chat_id}", username, ex=86400 * 30
+                        )
+                        logger.info(f"Saved canonical mapping: canonical:{chat_id} → {username}")
+                    except Exception as redis_err:
+                        logger.warning(f"Failed to save canonical mapping: {redis_err}")
+                return (True, chat_info, None)
             except ChannelPrivate:
                 logger.error(f"❌ Channel {chat_id} is private (raw MTProto)")
                 # Не возвращаем сразу — попробуем fallback 3

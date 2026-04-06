@@ -445,6 +445,9 @@ class ExportWorker:
         tracker = self._create_tracker(job)
         if tracker:
             await tracker.start(total)
+            # Отправить статус кэшированного прогресса одним обновлением (избежать скачка от 0 к N%)
+            if cached_messages:
+                await tracker.track(len(cached_messages))
 
         # Fetch each missing date range from Telegram
         fresh_messages: list[ExportedMessage] = []

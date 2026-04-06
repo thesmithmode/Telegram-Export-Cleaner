@@ -527,4 +527,31 @@ class ExportBotTest {
         chat.setType(chatType);
         return chat;
     }
+
+    @Nested
+    @DisplayName("Picker button request IDs")
+    class PickerRequestIds {
+        @DisplayName("PICKER_REQUEST_ID_GROUP should be non-empty string")
+        @Test
+        void testGroupRequestIdIsString() {
+            assertThat(ExportBot.PICKER_REQUEST_ID_GROUP)
+                    .isInstanceOf(String.class)
+                    .isNotBlank();
+        }
+
+        @DisplayName("PICKER_REQUEST_ID_CHANNEL should be non-empty string")
+        @Test
+        void testChannelRequestIdIsString() {
+            assertThat(ExportBot.PICKER_REQUEST_ID_CHANNEL)
+                    .isInstanceOf(String.class)
+                    .isNotBlank();
+        }
+
+        @DisplayName("Group and channel request IDs should be distinct")
+        @Test
+        void testRequestIdsAreDistinct() {
+            assertThat(ExportBot.PICKER_REQUEST_ID_GROUP)
+                    .isNotEqualTo(ExportBot.PICKER_REQUEST_ID_CHANNEL);
+        }
+    }
 }
