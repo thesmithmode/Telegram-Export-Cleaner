@@ -48,7 +48,6 @@ dependency-reduced-pom.xml
 ### Project specific ###
 # Контекст и документация (локальные, не для репо)
 Контекст/
-.claude/
 
 # Выходные файлы CLI
 tcleaner_output.txt
@@ -64,7 +63,6 @@ opencode
 *.kilo.db
 .kilocode/
 AGENTS.md
-CLAUDE.md
 
 # Личные данные для тестирования (real Telegram exports)
 Development_context*/
