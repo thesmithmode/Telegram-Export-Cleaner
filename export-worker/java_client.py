@@ -437,18 +437,15 @@ class JavaBotClient:
         Returns:
             Message ID on success (for subsequent edits), None on failure
         """
-        if started:
-            if total:
-                text = f"⏳ Экспорт начался — {total} сообщений"
-            else:
-                text = "⏳ Экспорт начался, ожидайте..."
-        elif total:
-            percentage = message_count * 100 // total
+        if total and (started or total > 0):
+            percentage = message_count * 100 // total if total > 0 else 0
             progress_bar = self._build_progress_bar(percentage)
             eta_str = self._format_eta(elapsed_seconds, percentage)
             text = f"📊 {progress_bar} {percentage}% ({message_count}/{total})"
             if eta_str:
                 text += f"\n⏱ Осталось ~{eta_str}"
+        elif started:
+            text = "⏳ Экспорт начался, ожидайте..."
         else:
             text = f"📊 Экспортировано {message_count} сообщений..."
 
@@ -597,16 +594,19 @@ class ProgressTracker:
         )
 
     async def track(self, count: int) -> None:
-        """Report progress if a new 10% milestone is reached."""
+        """Report progress at every 1% milestone.
+
+        ETA formula: remaining_seconds = elapsed_seconds * (100 - pct) / pct
+        where pct = count * 100 // total.
+        """
         if not self._total or self._total <= 0:
             return
         pct = count * 100 // self._total
-        milestone = (pct // 10) * 10
-        if milestone <= self._last_reported_pct or milestone >= 100:
+        if pct <= self._last_reported_pct or pct >= 100:
             return
-        self._last_reported_pct = milestone
+        self._last_reported_pct = pct
         elapsed = (datetime.now() - self._start_time).total_seconds() if self._start_time else 0
-        logger.info(f"  Progress: {count}/{self._total} ({milestone}%)")
+        logger.info(f"  Progress: {count}/{self._total} ({pct}%)")
         result = await self._client.send_progress_update(
             user_chat_id=self._user_chat_id,
             task_id=self._task_id,
