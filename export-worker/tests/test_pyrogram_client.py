@@ -771,3 +771,114 @@ class TestTelegramClientContextManager:
 
         assert client.is_connected is False
         mock_pyrogram.stop.assert_called_once()
+
+
+@pytest.mark.asyncio
+class TestResolveNumericChatIdWithCanonicalMapping:
+    """Test that _resolve_numeric_chat_id saves canonical mapping after successful resolve."""
+
+    async def test_fallback_1_saves_canonical_mapping_with_username(self):
+        """After dialog sync resolve (fallback 1), save canonical:{id}→username to Redis."""
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+        mock_redis = AsyncMock()
+
+        # Mock get_dialogs (fallback 1)
+        mock_pyrogram.get_dialogs = AsyncMock()
+        mock_pyrogram.get_dialogs.return_value = AsyncMock(
+            __aiter__=lambda self: self,
+            __anext__=AsyncMock(side_effect=StopAsyncIteration)
+        )
+
+        # Mock get_chat — returns a chat with username
+        mock_chat = MagicMock()
+        mock_chat.id = -1001234567890
+        mock_chat.username = "testchannel"
+        mock_pyrogram.get_chat = AsyncMock(return_value=mock_chat)
+
+        client.client = mock_pyrogram
+        client.redis_client = mock_redis
+
+        # Call _resolve_numeric_chat_id
+        is_accessible, chat_info, error = await client._resolve_numeric_chat_id(-1001234567890)
+
+        # Verify resolve succeeded
+        assert is_accessible is True
+        assert error is None
+        assert chat_info is not None
+
+        # Verify canonical mapping was saved
+        mock_redis.set.assert_called_once()
+        call_args = mock_redis.set.call_args
+        assert call_args[0][0] == "canonical:-1001234567890"
+        assert call_args[0][1] == "testchannel"
+        assert call_args[1]["ex"] == 86400 * 30
+
+    async def test_fallback_2_saves_canonical_mapping_with_username(self):
+        """After raw MTProto resolve (fallback 2), save canonical:{id}→username to Redis."""
+        from pyrogram import types
+        from pyrogram.errors import ChannelPrivate
+        from unittest.mock import AsyncMock
+        import pyrogram.raw.types as raw_types
+        import pyrogram.raw.functions as functions
+
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+        mock_redis = AsyncMock()
+
+        # Mock get_dialogs to fail (fallback 1 fails)
+        mock_pyrogram.get_dialogs = AsyncMock(
+            side_effect=Exception("Not in dialogs")
+        )
+
+        # Mock invoke for raw MTProto (fallback 2)
+        mock_pyrogram.invoke = AsyncMock()
+
+        # Mock get_chat — returns a chat with username
+        mock_chat = MagicMock()
+        mock_chat.id = -1001234567899
+        mock_chat.username = "publicchannel"
+        mock_pyrogram.get_chat = AsyncMock(return_value=mock_chat)
+
+        client.client = mock_pyrogram
+        client.redis_client = mock_redis
+
+        # Call _resolve_numeric_chat_id with a channel ID (< -1000000000000)
+        is_accessible, chat_info, error = await client._resolve_numeric_chat_id(-1001234567899)
+
+        # Verify resolve succeeded
+        assert is_accessible is True
+        assert error is None
+
+        # Verify canonical mapping was saved
+        mock_redis.set.assert_called_once()
+        call_args = mock_redis.set.call_args
+        assert call_args[0][0] == "canonical:-1001234567899"
+        assert call_args[0][1] == "publicchannel"
+
+    async def test_fallback_1_no_redis_client_does_not_crash(self):
+        """If redis_client is None, should not crash (graceful degradation)."""
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+
+        # Mock get_dialogs (fallback 1)
+        mock_pyrogram.get_dialogs = AsyncMock()
+        mock_pyrogram.get_dialogs.return_value = AsyncMock(
+            __aiter__=lambda self: self,
+            __anext__=AsyncMock(side_effect=StopAsyncIteration)
+        )
+
+        # Mock get_chat
+        mock_chat = MagicMock()
+        mock_chat.id = -1001234567890
+        mock_chat.username = "testchannel"
+        mock_pyrogram.get_chat = AsyncMock(return_value=mock_chat)
+
+        client.client = mock_pyrogram
+        client.redis_client = None  # No Redis
+
+        # Should not crash
+        is_accessible, chat_info, error = await client._resolve_numeric_chat_id(-1001234567890)
+
+        assert is_accessible is True
+        assert error is None
