@@ -489,57 +489,42 @@ class TelegramClient:
         """
         Check access and get chat info in single API call.
 
-        FALLBACK 1 — CACHE SYNC: For numeric IDs, Pyrogram caches entity access_hash
-        locally. If the ID isn't cached, get_chat() fails with PeerIdInvalidError.
-        Solution: call get_dialogs() to sync the cache, then retry.
-        For string usernames this fallback is skipped — Pyrogram resolves them
-        via contacts.resolveUsername API directly.
-
-        FALLBACK 2 — RAW MTPROTO (публичные каналы по числовому ID из picker):
-        Когда picker передаёт числовой ID (-100...) публичного канала,
-        воркер не состоит в нём и get_dialogs() не помогает.
-        Telegram принимает channels.GetChannels с access_hash=0 для публичных
-        сущностей и возвращает реальный access_hash, который Pyrogram кэширует.
-        После этого get_chat() работает без проблем.
-
         Args:
             chat_id: Telegram chat ID or username
 
         Returns:
             Tuple of (is_accessible, chat_info_dict_or_None, error_reason_or_None)
-            error_reason values: CHANNEL_PRIVATE, USERNAME_NOT_FOUND,
-            ADMIN_REQUIRED, UNKNOWN
         """
         if not self.is_connected:
             return (False, None, "UNKNOWN")
 
         try:
+            logger.debug(f"Attempting to get chat info for: {chat_id!r} (type: {type(chat_id)})")
             chat = await self.client.get_chat(chat_id)
             return (True, self._build_chat_info(chat), None)
 
-        except BadRequest as e:
+        except (BadRequest, PeerIdInvalid) as e:
             error_str = str(e)
-            logger.error(
-                f"BadRequest for chat {chat_id}: {type(e).__name__}: {error_str}"
+            logger.warning(
+                f"BadRequest/PeerIdInvalid for chat {chat_id}: {type(e).__name__}: {error_str}"
             )
 
             # Username not found
             if "USERNAME_NOT_OCCUPIED" in error_str or "USERNAME_INVALID" in error_str:
                 return (False, None, "USERNAME_NOT_FOUND")
 
-            # Numeric ID not in cache — sync dialogs and retry (only for numeric IDs)
-            if isinstance(chat_id, int) and isinstance(e, PeerIdInvalid):
+            # Numeric ID not in cache — sync dialogs and retry
+            if isinstance(chat_id, int):
+                logger.info(f"Numeric ID {chat_id} not in cache, starting resolution fallback...")
                 return await self._resolve_numeric_chat_id(chat_id)
 
             return (False, None, "CHAT_NOT_ACCESSIBLE")
 
         except ValueError as e:
-            # Pyrogram raises ValueError("Peer id invalid: ...") when the peer is not
-            # in the local session cache — before making any API call.
-            # This is distinct from the BadRequest/PeerIdInvalid API error path above.
+            # Pyrogram raises ValueError("Peer id invalid: ...") before making any API call.
             error_str = str(e)
             if isinstance(chat_id, int) and "Peer id invalid" in error_str:
-                logger.warning(
+                logger.info(
                     f"Chat {chat_id} not in Pyrogram cache (ValueError). "
                     f"Attempting cache sync + raw MTProto fallback..."
                 )

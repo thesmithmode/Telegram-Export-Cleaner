@@ -594,7 +594,7 @@ class ProgressTracker:
         )
 
     async def track(self, count: int) -> None:
-        """Report progress at every 1% milestone.
+        """Report progress at every 5% milestone.
 
         ETA formula: remaining_seconds = elapsed_seconds * (100 - pct) / pct
         where pct = count * 100 // total.
@@ -602,7 +602,7 @@ class ProgressTracker:
         if not self._total or self._total <= 0:
             return
         pct = count * 100 // self._total
-        if pct <= self._last_reported_pct or pct >= 100:
+        if pct < self._last_reported_pct + 5 or pct >= 100:
             return
         self._last_reported_pct = pct
         elapsed = (datetime.now() - self._start_time).total_seconds() if self._start_time else 0
