@@ -716,3 +716,76 @@ class TestUpdateQueuePosition:
             await client.update_queue_position(
                 user_chat_id=123, msg_id=456, position=1, total=3
             )
+
+
+@pytest.mark.asyncio
+class TestProgressTracker:
+    """Test ProgressTracker clamping to 100%."""
+
+    async def test_send_progress_update_clamps_over_100_percent(self):
+        """Progress percentage should never exceed 100%."""
+        with patch('java_client.settings') as mock_settings:
+            mock_settings.TELEGRAM_BOT_TOKEN = "test_token"
+
+            client = JavaBotClient()
+            client._http_client = AsyncMock()
+            client._http_client.post = AsyncMock(return_value=MagicMock(status_code=200))
+
+            # Simulate message_count > total (actual > estimated)
+            result = await client.send_progress_update(
+                user_chat_id=123,
+                task_id="task_1",
+                message_count=253432,
+                total=244143,
+                started=False
+            )
+
+            # Check that the text contains exactly 100%, not 103%
+            call_args = client._http_client.post.call_args
+            post_data = call_args[1]["data"]
+            assert "100%" in post_data["text"]
+            assert "103%" not in post_data["text"]
+
+    def test_build_progress_bar_clamps_filled(self):
+        """Progress bar should not exceed width even if percentage > 100."""
+        client = JavaBotClient()
+
+        # Test normal case
+        bar = client._build_progress_bar(50)
+        assert bar == "▓▓▓▓▓░░░░░"
+        assert len(bar) == 10
+
+        # Test 100%
+        bar = client._build_progress_bar(100)
+        assert bar == "▓▓▓▓▓▓▓▓▓▓"
+        assert len(bar) == 10
+
+        # Test >100% (should still be 10 filled blocks)
+        bar = client._build_progress_bar(110)
+        assert bar == "▓▓▓▓▓▓▓▓▓▓"
+        assert len(bar) == 10
+
+    async def test_finalize_uses_max_of_total_and_count(self):
+        """finalize() should use max(total, count) to ensure percentage = 100%."""
+        from java_client import ProgressTracker
+
+        with patch('java_client.settings') as mock_settings:
+            mock_settings.TELEGRAM_BOT_TOKEN = "test_token"
+
+            mock_java_client = AsyncMock()
+            mock_java_client.send_progress_update = AsyncMock(return_value=None)
+
+            tracker = ProgressTracker(
+                java_client=mock_java_client,
+                user_chat_id=123,
+                task_id="task_1"
+            )
+
+            # Simulate Telegram undercount: total=100, actual=110
+            await tracker.start(total=100)
+            await tracker.finalize(count=110)
+
+            # Check finalize call arguments
+            call_args = mock_java_client.send_progress_update.call_args_list[-1]
+            assert call_args[1]["message_count"] == 110
+            assert call_args[1]["total"] == 110  # max(100, 110) = 110
