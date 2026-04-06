@@ -438,7 +438,7 @@ class JavaBotClient:
             Message ID on success (for subsequent edits), None on failure
         """
         if total and (started or total > 0):
-            percentage = message_count * 100 // total if total > 0 else 0
+            percentage = min(message_count * 100 // total, 100) if total > 0 else 0
             progress_bar = self._build_progress_bar(percentage)
             eta_str = self._format_eta(elapsed_seconds, percentage)
             text = f"📊 {progress_bar} {percentage}% ({message_count}/{total})"
@@ -479,7 +479,7 @@ class JavaBotClient:
     @staticmethod
     def _build_progress_bar(percentage: int, width: int = 10) -> str:
         """Build a text progress bar for display."""
-        filled = int(width * percentage / 100)
+        filled = min(int(width * percentage / 100), width)
         empty = width - filled
         return "▓" * filled + "░" * empty
 
@@ -623,7 +623,7 @@ class ProgressTracker:
         if not self._total or self._total <= 0:
             total = count  # если total неизвестен, берём фактическое кол-во
         else:
-            total = self._total
+            total = max(self._total, count)  # фактическое кол-во может быть > estimated total
         if total <= 0:
             return
         elapsed = (datetime.now() - self._start_time).total_seconds() if self._start_time else 0
