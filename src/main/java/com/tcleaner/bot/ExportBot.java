@@ -61,9 +61,9 @@ public class ExportBot extends TelegramLongPollingBot {
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("dd.MM.yyyy");
 
     /** requestId для пикера групп. */
-    static final String PICKER_REQUEST_ID_GROUP = "1";
+    static final int PICKER_REQUEST_ID_GROUP = 1;
     /** requestId для пикера каналов. */
-    static final String PICKER_REQUEST_ID_CHANNEL = "2";
+    static final int PICKER_REQUEST_ID_CHANNEL = 2;
 
     private static final String CANONICAL_PREFIX = "canonical:";
 
