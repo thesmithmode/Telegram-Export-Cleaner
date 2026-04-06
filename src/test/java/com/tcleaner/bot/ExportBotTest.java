@@ -4,6 +4,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.telegram.telegrambots.meta.api.methods.groupadministration.GetChat;
 import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
 import org.telegram.telegrambots.meta.api.objects.Chat;
@@ -29,11 +31,16 @@ class ExportBotTest {
 
     private ExportBot bot;
     private ExportJobProducer jobProducerMock;
+    private StringRedisTemplate redisMock;
 
+    @SuppressWarnings("unchecked")
     @BeforeEach
     void setUp() {
         jobProducerMock = mock(ExportJobProducer.class);
-        bot = new ExportBot("test_token", "test_bot", jobProducerMock);
+        redisMock = mock(StringRedisTemplate.class);
+        ValueOperations<String, String> valueOpsMock = mock(ValueOperations.class);
+        when(redisMock.opsForValue()).thenReturn(valueOpsMock);
+        bot = new ExportBot("test_token", "test_bot", jobProducerMock, redisMock);
     }
 
     @DisplayName("Should return correct bot username")
@@ -381,7 +388,7 @@ class ExportBotTest {
         @DisplayName("getChat возвращает username — enqueue вызывается с username")
         @Test
         void testChatSharedResolvesUsername() throws TelegramApiException {
-            ExportBot spyBot = spy(new ExportBot("test_token", "test_bot", jobProducerMock));
+            ExportBot spyBot = spy(new ExportBot("test_token", "test_bot", jobProducerMock, redisMock));
 
             Chat resolvedChat = new Chat();
             resolvedChat.setId(-1001395363861L);
@@ -392,7 +399,7 @@ class ExportBotTest {
             when(jobProducerMock.enqueue(123L, 123L, "somepublicchat", null, null))
                     .thenReturn("export_task_123");
 
-            spyBot.onUpdateReceived(createChatSharedUpdate(-1001395363861L));
+            spyBot.onUpdateReceived(createChatSharedUpdate(-1001395363861L, ExportBot.PICKER_REQUEST_ID_GROUP));
             spyBot.onUpdateReceived(createCallbackUpdate(ExportBot.CB_EXPORT_ALL));
 
             verify(jobProducerMock).enqueue(123L, 123L, "somepublicchat", null, null);
@@ -401,7 +408,7 @@ class ExportBotTest {
         @DisplayName("getChat бросает exception — fallback на числовой ID")
         @Test
         void testChatSharedFallbackToNumericId() throws TelegramApiException {
-            ExportBot spyBot = spy(new ExportBot("test_token", "test_bot", jobProducerMock));
+            ExportBot spyBot = spy(new ExportBot("test_token", "test_bot", jobProducerMock, redisMock));
 
             doThrow(new TelegramApiException("Forbidden"))
                     .when(spyBot).execute(any(GetChat.class));
@@ -409,7 +416,7 @@ class ExportBotTest {
             when(jobProducerMock.enqueue(123L, 123L, -1001395363861L, null, null))
                     .thenReturn("export_task_123");
 
-            spyBot.onUpdateReceived(createChatSharedUpdate(-1001395363861L));
+            spyBot.onUpdateReceived(createChatSharedUpdate(-1001395363861L, ExportBot.PICKER_REQUEST_ID_CHANNEL));
             spyBot.onUpdateReceived(createCallbackUpdate(ExportBot.CB_EXPORT_ALL));
 
             verify(jobProducerMock).enqueue(123L, 123L, -1001395363861L, null, null);
@@ -418,7 +425,7 @@ class ExportBotTest {
         @DisplayName("getChat возвращает чат без username — fallback на числовой ID")
         @Test
         void testChatSharedNoUsername() throws TelegramApiException {
-            ExportBot spyBot = spy(new ExportBot("test_token", "test_bot", jobProducerMock));
+            ExportBot spyBot = spy(new ExportBot("test_token", "test_bot", jobProducerMock, redisMock));
 
             Chat resolvedChat = new Chat();
             resolvedChat.setId(-1001395363861L);
@@ -429,10 +436,33 @@ class ExportBotTest {
             when(jobProducerMock.enqueue(123L, 123L, -1001395363861L, null, null))
                     .thenReturn("export_task_123");
 
-            spyBot.onUpdateReceived(createChatSharedUpdate(-1001395363861L));
+            spyBot.onUpdateReceived(createChatSharedUpdate(-1001395363861L, ExportBot.PICKER_REQUEST_ID_GROUP));
             spyBot.onUpdateReceived(createCallbackUpdate(ExportBot.CB_EXPORT_ALL));
 
             verify(jobProducerMock).enqueue(123L, 123L, -1001395363861L, null, null);
+        }
+
+        @DisplayName("getChat fails, canonical mapping returns username — enqueue с username")
+        @Test
+        @SuppressWarnings("unchecked")
+        void testChatSharedFallbackToCanonicalMapping() throws TelegramApiException {
+            StringRedisTemplate localRedis = mock(StringRedisTemplate.class);
+            ValueOperations<String, String> localOps = mock(ValueOperations.class);
+            when(localRedis.opsForValue()).thenReturn(localOps);
+            when(localOps.get("canonical:-1001395363861")).thenReturn("resolved_channel");
+
+            ExportBot spyBot = spy(new ExportBot("test_token", "test_bot", jobProducerMock, localRedis));
+
+            doThrow(new TelegramApiException("Forbidden"))
+                    .when(spyBot).execute(any(GetChat.class));
+
+            when(jobProducerMock.enqueue(123L, 123L, "resolved_channel", null, null))
+                    .thenReturn("export_task_123");
+
+            spyBot.onUpdateReceived(createChatSharedUpdate(-1001395363861L, ExportBot.PICKER_REQUEST_ID_CHANNEL));
+            spyBot.onUpdateReceived(createCallbackUpdate(ExportBot.CB_EXPORT_ALL));
+
+            verify(jobProducerMock).enqueue(123L, 123L, "resolved_channel", null, null);
         }
     }
 
@@ -476,9 +506,9 @@ class ExportBotTest {
         return user;
     }
 
-    private Update createChatSharedUpdate(long sharedChatId) {
+    private Update createChatSharedUpdate(long sharedChatId, String requestId) {
         ChatShared chatShared = new ChatShared();
-        chatShared.setRequestId("1");
+        chatShared.setRequestId(requestId);
         chatShared.setChatId(sharedChatId);
 
         Update update = new Update();

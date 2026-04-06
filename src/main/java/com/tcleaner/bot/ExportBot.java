@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
@@ -59,10 +60,17 @@ public class ExportBot extends TelegramLongPollingBot {
 
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("dd.MM.yyyy");
 
+    /** requestId для пикера групп. */
+    static final String PICKER_REQUEST_ID_GROUP = "1";
+    /** requestId для пикера каналов. */
+    static final String PICKER_REQUEST_ID_CHANNEL = "2";
+
+    private static final String CANONICAL_PREFIX = "canonical:";
+
     private static final String HELP_TEXT = """
             Этот бот экспортирует историю Telegram-чата и отправляет очищенный текст.
 
-            Нажмите кнопку ниже чтобы выбрать чат из Telegram, или введите вручную:
+            Нажмите кнопку ниже чтобы выбрать группу или канал, или введите вручную:
             • Ссылку: https://t.me/durov
             • Username: @durov или durov
             • ID чата: -1001234567890
@@ -82,6 +90,7 @@ public class ExportBot extends TelegramLongPollingBot {
 
     private final String botUsername;
     private final ExportJobProducer jobProducer;
+    private final StringRedisTemplate redis;
     private final ConcurrentHashMap<Long, UserSession> sessions = new ConcurrentHashMap<>();
 
     /**
@@ -90,15 +99,18 @@ public class ExportBot extends TelegramLongPollingBot {
      * @param botToken   токен бота
      * @param botUsername имя бота
      * @param jobProducer сервис добавления задач в Redis-очередь
+     * @param redis       клиент Redis для canonical-маппинга
      */
     public ExportBot(
             @Value("${telegram.bot.token}") String botToken,
             @Value("${telegram.bot.username}") String botUsername,
-            ExportJobProducer jobProducer
+            ExportJobProducer jobProducer,
+            StringRedisTemplate redis
     ) {
         super(botToken);
         this.botUsername = botUsername;
         this.jobProducer = jobProducer;
+        this.redis = redis;
         log.info("Telegram-бот инициализирован: @{}", botUsername);
     }
 
@@ -454,20 +466,30 @@ public class ExportBot extends TelegramLongPollingBot {
     // === Keyboards ===
 
     /**
-     * Отправляет главное меню с кнопкой выбора чата через Telegram пикер.
-     * Кнопка отображается в ReplyKeyboard — при нажатии открывается нативный диалог выбора чата.
+     * Отправляет главное меню с кнопками выбора группы и канала через Telegram пикер.
+     * Две кнопки: для групп (chatIsChannel=false) и каналов (chatIsChannel=true).
      * Пользователь также может ввести идентификатор вручную.
      */
     private void sendMainMenu(long chatId, String text) {
-        KeyboardButtonRequestChat requestChat = new KeyboardButtonRequestChat();
-        requestChat.setRequestId("1");
-        // chatIsChannel не задаём — разрешаем любой тип чата (группы + каналы)
+        // Кнопка выбора группы/супергруппы
+        KeyboardButtonRequestChat groupRequest = new KeyboardButtonRequestChat();
+        groupRequest.setRequestId(PICKER_REQUEST_ID_GROUP);
+        groupRequest.setChatIsChannel(false);
 
-        KeyboardButton pickerButton = new KeyboardButton("📂 Выбрать чат из Telegram");
-        pickerButton.setRequestChat(requestChat);
+        KeyboardButton groupButton = new KeyboardButton("💬 Выбрать группу");
+        groupButton.setRequestChat(groupRequest);
+
+        // Кнопка выбора канала
+        KeyboardButtonRequestChat channelRequest = new KeyboardButtonRequestChat();
+        channelRequest.setRequestId(PICKER_REQUEST_ID_CHANNEL);
+        channelRequest.setChatIsChannel(true);
+
+        KeyboardButton channelButton = new KeyboardButton("📢 Выбрать канал");
+        channelButton.setRequestChat(channelRequest);
 
         KeyboardRow row = new KeyboardRow();
-        row.add(pickerButton);
+        row.add(groupButton);
+        row.add(channelButton);
 
         ReplyKeyboardMarkup markup = new ReplyKeyboardMarkup();
         markup.setKeyboard(List.of(row));
@@ -574,17 +596,22 @@ public class ExportBot extends TelegramLongPollingBot {
     }
 
     /**
-     * Резолвит числовой chat ID в username через Bot API getChat.
+     * Резолвит числовой chat ID в username для передачи Python-воркеру.
      *
-     * <p>После события ChatShared Telegram разрешает боту вызывать getChat
-     * для переданного чата (Bot API 7.2+). Если чат публичный,
-     * getChat вернёт username, который Python-воркер сможет резолвить
-     * через Pyrogram API без необходимости быть участником чата.</p>
+     * <p>Стратегия (в порядке приоритета):</p>
+     * <ol>
+     *   <li>Bot API getChat — работает если бот участник чата</li>
+     *   <li>Redis canonical mapping — Python-воркер сохраняет маппинг
+     *       {@code canonical:<input> → <numeric_id>} после каждого успешного резолва.
+     *       Обратный маппинг {@code canonical_rev:<numeric_id> → <username>} позволяет
+     *       восстановить username по числовому ID.</li>
+     * </ol>
      *
      * @param sharedChatId числовой ID чата из ChatShared
      * @return username чата (без @) или числовой ID как строка (fallback)
      */
     private String resolveChatIdentifier(long sharedChatId) {
+        // 1. Попытка через Bot API getChat
         try {
             Chat chat = execute(new GetChat(String.valueOf(sharedChatId)));
             String username = chat.getUserName();
@@ -595,7 +622,39 @@ public class ExportBot extends TelegramLongPollingBot {
         } catch (TelegramApiException e) {
             log.debug("getChat не удался для chatId={}: {}", sharedChatId, e.getMessage());
         }
+
+        // 2. Попытка через Redis canonical reverse mapping
+        String username = lookupUsernameInCanonical(sharedChatId);
+        if (username != null) {
+            return username;
+        }
+
         return String.valueOf(sharedChatId);
+    }
+
+    /**
+     * Ищет username по числовому chat ID через Redis canonical-маппинг.
+     *
+     * <p>Python-воркер сохраняет {@code canonical:<username> → <numeric_id>}.
+     * Мы ищем обратную запись {@code canonical_rev:<numeric_id> → <username>},
+     * которую создаём при каждом успешном enqueue с username.</p>
+     *
+     * @param chatId числовой ID чата
+     * @return username или null
+     */
+    private String lookupUsernameInCanonical(long chatId) {
+        try {
+            String username = redis.opsForValue().get(CANONICAL_PREFIX + chatId);
+            if (username != null && !username.isBlank()) {
+                log.info("Найден username в canonical-маппинге для chatId={}: {}",
+                        chatId, username);
+                return username;
+            }
+        } catch (Exception e) {
+            log.debug("Ошибка при поиске canonical-маппинга для chatId={}: {}",
+                    chatId, e.getMessage());
+        }
+        return null;
     }
 
     /**

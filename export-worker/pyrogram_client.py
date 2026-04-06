@@ -373,9 +373,12 @@ class TelegramClient:
           1. Sync dialog list (get_dialogs) — works if worker is a member of the chat.
           2. Raw MTProto channels.GetChannels with access_hash=0 — works for public
              channels even when the worker is not a member.
+          3. Redis canonical reverse mapping — lookup username by numeric ID,
+             then resolve via contacts.resolveUsername.
 
         Returns the same (is_accessible, chat_info, error_reason) tuple as verify_and_get_info.
         """
+        # Fallback 1: sync dialog list
         logger.warning(f"Chat {chat_id} not in cache. Syncing dialog list and retrying...")
         try:
             async for _ in self.client.get_dialogs():
@@ -386,33 +389,68 @@ class TelegramClient:
 
         except Exception as retry_error:
             logger.error(f"Cache sync retry failed for chat {chat_id}: {retry_error}")
-            # Последний fallback: raw MTProto с access_hash=0 для публичных каналов.
-            # Telegram принимает access_hash=0 для публичных сущностей и возвращает
-            # реальный access_hash, который Pyrogram кэширует локально.
-            if chat_id < -1000000000000:
-                try:
-                    channel_id = abs(chat_id) - 1000000000000
-                    logger.warning(
-                        f"Trying raw MTProto access_hash=0 for channel {channel_id}..."
+
+        # Fallback 2: raw MTProto с access_hash=0 для публичных каналов
+        if chat_id < -1000000000000:
+            try:
+                channel_id = abs(chat_id) - 1000000000000
+                logger.warning(
+                    f"Trying raw MTProto access_hash=0 for channel {channel_id}..."
+                )
+                await self.client.invoke(
+                    functions.channels.GetChannels(
+                        id=[raw_types.InputChannel(
+                            channel_id=channel_id, access_hash=0
+                        )]
                     )
-                    await self.client.invoke(
-                        functions.channels.GetChannels(
-                            id=[raw_types.InputChannel(
-                                channel_id=channel_id, access_hash=0
-                            )]
-                        )
-                    )
-                    chat = await self.client.get_chat(chat_id)
-                    logger.info(f"Resolved public channel {chat_id} via raw MTProto")
-                    return (True, self._build_chat_info(chat), None)
-                except ChannelPrivate:
-                    logger.error(f"❌ Channel {chat_id} is private (raw MTProto)")
-                    return (False, None, "CHANNEL_PRIVATE")
-                except Exception as raw_error:
-                    logger.error(
-                        f"Raw MTProto fallback failed for channel {chat_id}: {raw_error}"
-                    )
-            return (False, None, "CHAT_NOT_ACCESSIBLE")
+                )
+                chat = await self.client.get_chat(chat_id)
+                logger.info(f"Resolved public channel {chat_id} via raw MTProto")
+                return (True, self._build_chat_info(chat), None)
+            except ChannelPrivate:
+                logger.error(f"❌ Channel {chat_id} is private (raw MTProto)")
+                # Не возвращаем сразу — попробуем fallback 3
+            except Exception as raw_error:
+                logger.error(
+                    f"Raw MTProto fallback failed for channel {chat_id}: {raw_error}"
+                )
+
+        # Fallback 3: Redis canonical reverse mapping (username → numeric_id)
+        result = await self._resolve_via_canonical_mapping(chat_id)
+        if result is not None:
+            return result
+
+        return (False, None, "CHAT_NOT_ACCESSIBLE")
+
+    async def _resolve_via_canonical_mapping(
+        self, chat_id: int
+    ) -> Optional[tuple[bool, Optional[dict], Optional[str]]]:
+        """
+        Ищет username через Redis canonical mapping и пробует резолвить через Pyrogram.
+
+        Python-воркер сохраняет canonical:<numeric_id> → <username> при каждом
+        успешном резолве. Если маппинг найден — пробуем get_chat(username).
+        """
+        if not self.redis_client:
+            return None
+        try:
+            username = await self.redis_client.get(f"canonical:{chat_id}")
+            if not username:
+                return None
+            if isinstance(username, bytes):
+                username = username.decode("utf-8")
+            logger.info(
+                f"Found canonical mapping for {chat_id}: @{username}, "
+                f"attempting resolveUsername..."
+            )
+            chat = await self.client.get_chat(username)
+            logger.info(f"Resolved chat {chat_id} via canonical mapping → @{username}")
+            return (True, self._build_chat_info(chat), None)
+        except Exception as e:
+            logger.warning(
+                f"Canonical mapping fallback failed for {chat_id}: {e}"
+            )
+        return None
 
     async def verify_and_get_info(self, chat_id: Union[int, str]) -> tuple[bool, Optional[dict], Optional[str]]:
         """
