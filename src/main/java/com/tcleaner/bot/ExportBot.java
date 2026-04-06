@@ -61,9 +61,9 @@ public class ExportBot extends TelegramLongPollingBot {
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("dd.MM.yyyy");
 
     /** requestId для пикера групп. */
-    static final int PICKER_REQUEST_ID_GROUP = 1;
+    static final String PICKER_REQUEST_ID_GROUP = "1";
     /** requestId для пикера каналов. */
-    static final int PICKER_REQUEST_ID_CHANNEL = 2;
+    static final String PICKER_REQUEST_ID_CHANNEL = "2";
 
     private static final String CANONICAL_PREFIX = "canonical:";
 
@@ -487,12 +487,16 @@ public class ExportBot extends TelegramLongPollingBot {
         KeyboardButton channelButton = new KeyboardButton("📢 Выбрать канал");
         channelButton.setRequestChat(channelRequest);
 
-        KeyboardRow row = new KeyboardRow();
-        row.add(groupButton);
-        row.add(channelButton);
+        // Разместить кнопки в разных рядах, чтобы Telegram отобразил обе
+        // (иначе Telegram мобильное приложение collapse их в один picker)
+        KeyboardRow groupRow = new KeyboardRow();
+        groupRow.add(groupButton);
+
+        KeyboardRow channelRow = new KeyboardRow();
+        channelRow.add(channelButton);
 
         ReplyKeyboardMarkup markup = new ReplyKeyboardMarkup();
-        markup.setKeyboard(List.of(row));
+        markup.setKeyboard(List.of(groupRow, channelRow));
         markup.setResizeKeyboard(true);
         markup.setOneTimeKeyboard(true);
 

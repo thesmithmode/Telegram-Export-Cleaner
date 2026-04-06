@@ -531,18 +531,20 @@ class ExportBotTest {
     @Nested
     @DisplayName("Picker button request IDs")
     class PickerRequestIds {
-        @DisplayName("PICKER_REQUEST_ID_GROUP should be an int")
+        @DisplayName("PICKER_REQUEST_ID_GROUP should be non-empty string")
         @Test
-        void testGroupRequestIdIsInt() {
-            assertThat(ExportBot.PICKER_REQUEST_ID_GROUP).isInstanceOf(Integer.class)
-                    .isGreaterThan(0);
+        void testGroupRequestIdIsString() {
+            assertThat(ExportBot.PICKER_REQUEST_ID_GROUP)
+                    .isInstanceOf(String.class)
+                    .isNotBlank();
         }
 
-        @DisplayName("PICKER_REQUEST_ID_CHANNEL should be an int")
+        @DisplayName("PICKER_REQUEST_ID_CHANNEL should be non-empty string")
         @Test
-        void testChannelRequestIdIsInt() {
-            assertThat(ExportBot.PICKER_REQUEST_ID_CHANNEL).isInstanceOf(Integer.class)
-                    .isGreaterThan(0);
+        void testChannelRequestIdIsString() {
+            assertThat(ExportBot.PICKER_REQUEST_ID_CHANNEL)
+                    .isInstanceOf(String.class)
+                    .isNotBlank();
         }
 
         @DisplayName("Group and channel request IDs should be distinct")
