@@ -59,14 +59,16 @@ class ExportBotTest {
             Message message = new Message();
             message.setMessageId(1);
 
-            Chat chat = new Chat();
-            chat.setId(123L);
-            chat.setType("private");
+            Chat chat = Chat.builder()
+                    .id(123L)
+                    .type("private")
+                    .build();
             message.setChat(chat);
 
-            User user = new User();
-            user.setId(456L);
-            user.setIsBot(false);
+            User user = User.builder()
+                    .id(456L)
+                    .isBot(false)
+                    .build();
             message.setFrom(user);
 
             ChatShared chatShared = new ChatShared();
@@ -331,13 +333,15 @@ class ExportBotTest {
             Message message = new Message();
             message.setMessageId(1);
             message.setText("test");
-            Chat chat = new Chat();
-            chat.setId(123L);
-            chat.setType("group");  // ← не private
+            Chat chat = Chat.builder()
+                    .id(123L)
+                    .type("group")  // ← не private
+                    .build();
             message.setChat(chat);
-            User user = new User();
-            user.setId(456L);
-            user.setIsBot(false);
+            User user = User.builder()
+                    .id(456L)
+                    .isBot(false)
+                    .build();
             message.setFrom(user);
             update.setMessage(message);
 
@@ -358,14 +362,16 @@ class ExportBotTest {
         message.setMessageId(1);
         message.setText(text);
 
-        Chat chat = new Chat();
-        chat.setId(userId);
-        chat.setType("private");
+        Chat chat = Chat.builder()
+                .id(userId)
+                .type("private")
+                .build();
         message.setChat(chat);
 
-        User user = new User();
-        user.setId(userId);
-        user.setIsBot(false);
+        User user = User.builder()
+                .id(userId)
+                .isBot(false)
+                .build();
         message.setFrom(user);
 
         update.setMessage(message);
