@@ -9,9 +9,12 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.Writer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.Map;
 
@@ -42,6 +45,17 @@ class TelegramControllerTest {
         mockExporter = mock(TelegramExporterInterface.class);
         FileConversionService conversionService = new FileConversionService(mockExporter);
         this.controller = new TelegramController(conversionService);
+    }
+
+    /**
+     * Helper: execute a StreamingResponseBody and capture its output as a String.
+     */
+    private static String executeStreamingBody(ResponseEntity<?> response) throws Exception {
+        assertThat(response.getBody()).isInstanceOf(StreamingResponseBody.class);
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        StreamingResponseBody body = (StreamingResponseBody) response.getBody();
+        body.writeTo(baos);
+        return baos.toString(StandardCharsets.UTF_8.name());
     }
 
     @Test
@@ -119,7 +133,7 @@ class TelegramControllerTest {
             ResponseEntity<?> response = ctrl.convert(file, null, null, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-            assertThat((String) response.getBody()).isEqualTo("20250624 Hello\n");
+            assertThat(executeStreamingBody(response)).isEqualTo("20250624 Hello\n");
         }
 
         @Test
@@ -141,7 +155,7 @@ class TelegramControllerTest {
             ResponseEntity<?> response = ctrl.convert(file, null, null, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-            assertThat((String) response.getBody()).isEqualTo("20250624 First\n20250624 Second\n");
+            assertThat(executeStreamingBody(response)).isEqualTo("20250624 First\n20250624 Second\n");
         }
 
         @Test
@@ -159,7 +173,7 @@ class TelegramControllerTest {
             ResponseEntity<?> response = ctrl.convert(file, null, null, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-            assertThat((String) response.getBody()).isEqualTo("");
+            assertThat(executeStreamingBody(response)).isEqualTo("");
         }
 
         @Test
@@ -231,7 +245,7 @@ class TelegramControllerTest {
 
         @Test
         @DisplayName("Реальный экспорт: одно сообщение обрабатывается корректно")
-        void realExport_singleMessage() {
+        void realExport_singleMessage() throws Exception {
             MockMultipartFile file = new MockMultipartFile(
                     "file", "result.json", "application/json",
                     "{\"messages\":[{\"id\":1,\"type\":\"message\",\"date\":\"2025-06-24T10:00:00\",\"text\":\"Hello\"}]}".getBytes());
@@ -239,7 +253,7 @@ class TelegramControllerTest {
             ResponseEntity<?> response = controller.convert(file, null, null, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-            assertThat((String) response.getBody()).isEqualTo("20250624 Hello\n");
+            assertThat(executeStreamingBody(response)).isEqualTo("20250624 Hello\n");
         }
     }
 
