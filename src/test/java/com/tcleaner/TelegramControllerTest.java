@@ -117,7 +117,7 @@ class TelegramControllerTest {
 
         @Test
         @DisplayName("Одно сообщение: ответ содержит строку с финальным \\n")
-        void returns200WithTrailingNewlineForSingleMessage() throws IOException {
+        void returns200WithTrailingNewlineForSingleMessage() throws Exception {
             TelegramExporterInterface mockExporter = mock(TelegramExporterInterface.class);
             doAnswer(inv -> {
                 Writer w = inv.getArgument(2);
@@ -138,7 +138,7 @@ class TelegramControllerTest {
 
         @Test
         @DisplayName("Несколько сообщений разделяются \\n, финальный \\n присутствует")
-        void multipleMessagesAreSeparatedByNewline() throws IOException {
+        void multipleMessagesAreSeparatedByNewline() throws Exception {
             TelegramExporterInterface mockExporter = mock(TelegramExporterInterface.class);
             doAnswer(inv -> {
                 Writer w = inv.getArgument(2);
@@ -160,7 +160,7 @@ class TelegramControllerTest {
 
         @Test
         @DisplayName("Пустой список сообщений → пустое тело ответа")
-        void emptyMessageList_returnsEmptyBody() throws IOException {
+        void emptyMessageList_returnsEmptyBody() throws Exception {
             TelegramExporterInterface mockExporter = mock(TelegramExporterInterface.class);
             doAnswer(inv -> 0)
                     .when(mockExporter).processFileStreaming(any(Path.class), any(), any(Writer.class));
@@ -178,7 +178,7 @@ class TelegramControllerTest {
 
         @Test
         @DisplayName("TelegramExporterException при невалидном JSON — возвращает 400 с кодом ошибки")
-        void exporterException_returns400WithErrorCode() throws IOException {
+        void exporterException_returns400WithErrorCode() throws Exception {
             TelegramExporterInterface mockExporter = mock(TelegramExporterInterface.class);
             doAnswer(inv -> {
                 throw new com.tcleaner.core.TelegramExporterException("INVALID_JSON", "Невалидный JSON");
