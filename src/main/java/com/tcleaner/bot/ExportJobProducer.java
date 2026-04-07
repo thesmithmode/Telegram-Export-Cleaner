@@ -75,7 +75,7 @@ public class ExportJobProducer {
      * @throws RuntimeException      если не удалось сериализовать задачу или записать в Redis
      */
     public String enqueue(long userId, long userChatId, long chatId) {
-        return enqueue(userId, userChatId, (Object) chatId, null, null);
+        return enqueue(userId, userChatId, (Object) chatId, null, null, null, null);
     }
 
     /**
@@ -89,7 +89,23 @@ public class ExportJobProducer {
      * @return task_id созданной задачи
      */
     public String enqueue(long userId, long userChatId, long chatId, String fromDate, String toDate) {
-        return enqueue(userId, userChatId, (Object) chatId, fromDate, toDate);
+        return enqueue(userId, userChatId, (Object) chatId, fromDate, toDate, null, null);
+    }
+
+    /**
+     * Добавляет задачу на экспорт с фильтрацией по датам и ключевым словам.
+     *
+     * @param userId          Telegram user ID
+     * @param userChatId      Telegram chat ID — куда вернуть результат
+     * @param chatId          ID чата для экспорта
+     * @param fromDate        начальная дата (ISO, nullable)
+     * @param toDate          конечная дата (ISO, nullable)
+     * @param keywords        ключевые слова для включения (nullable)
+     * @param excludeKeywords ключевые слова для исключения (nullable)
+     * @return task_id созданной задачи
+     */
+    public String enqueue(long userId, long userChatId, long chatId, String fromDate, String toDate, String keywords, String excludeKeywords) {
+        return enqueue(userId, userChatId, (Object) chatId, fromDate, toDate, keywords, excludeKeywords);
     }
 
     /**
@@ -102,7 +118,7 @@ public class ExportJobProducer {
      * @throws RuntimeException если не удалось сериализовать задачу или записать в Redis
      */
     public String enqueue(long userId, long userChatId, String chatIdentifier) {
-        return enqueue(userId, userChatId, (Object) chatIdentifier, null, null);
+        return enqueue(userId, userChatId, (Object) chatIdentifier, null, null, null, null);
     }
 
     /**
@@ -116,7 +132,7 @@ public class ExportJobProducer {
      * @return task_id созданной задачи
      */
     public String enqueue(long userId, long userChatId, String chatIdentifier, String fromDate, String toDate) {
-        return enqueue(userId, userChatId, (Object) chatIdentifier, fromDate, toDate);
+        return enqueue(userId, userChatId, (Object) chatIdentifier, fromDate, toDate, null, null);
     }
 
     private static final String ACTIVE_EXPORT_PREFIX = "active_export:";
@@ -126,7 +142,7 @@ public class ExportJobProducer {
     private static final long ACTIVE_EXPORT_TTL_MINUTES = 60;
     private static final String EXPRESS_QUEUE_SUFFIX = "_express";
 
-    private String enqueue(long userId, long userChatId, Object chatId, String fromDate, String toDate) {
+    private String enqueue(long userId, long userChatId, Object chatId, String fromDate, String toDate, String keywords, String excludeKeywords) {
         String taskId = "export_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
 
         Map<String, Object> job = new HashMap<>();
@@ -141,6 +157,12 @@ public class ExportJobProducer {
         }
         if (toDate != null) {
             job.put("to_date", toDate);
+        }
+        if (keywords != null) {
+            job.put("keywords", keywords);
+        }
+        if (excludeKeywords != null) {
+            job.put("exclude_keywords", excludeKeywords);
         }
 
         try {

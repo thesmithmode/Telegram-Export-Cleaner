@@ -27,12 +27,12 @@ public class UserSession {
         AWAITING_TO_DATE
     }
 
-    private State state = State.IDLE;
-    private Object chatId;
-    private String chatDisplay;
-    private String fromDate;
-    private String toDate;
-    private Instant lastAccess = Instant.now();
+    private volatile State state = State.IDLE;
+    private volatile Object chatId;
+    private volatile String chatDisplay;
+    private volatile String fromDate;
+    private volatile String toDate;
+    private volatile Instant lastAccess = Instant.now();
 
     public State getState() {
         return state;

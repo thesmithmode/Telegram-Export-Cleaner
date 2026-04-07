@@ -60,8 +60,8 @@ class ExportWorker:
     async def _check_cancel_and_save(
         self, job: ExportRequest, messages: list[ExportedMessage], count: int
     ) -> bool:
-        """Check cancellation every 1000 messages, save to cache if cancelled. Returns True if cancelled."""
-        if count % 1000 != 0:
+        """Check cancellation every 100 messages, save to cache if cancelled. Returns True if cancelled."""
+        if count % 100 != 0:
             return False
         if not await self.is_cancelled(job.task_id):
             return False
@@ -332,6 +332,8 @@ class ExportWorker:
                 chat_title=chat_title,
                 from_date=job.from_date,
                 to_date=job.to_date,
+                keywords=job.keywords,
+                exclude_keywords=job.exclude_keywords,
             )
 
             if success:

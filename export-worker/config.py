@@ -27,6 +27,7 @@ class Settings(BaseSettings):
 
     # Java Bot API
     JAVA_API_BASE_URL: str = "http://java-bot:8080"
+    JAVA_API_KEY: Optional[str] = None
 
     # Telegram API (MTProto - for Pyrogram export)
     TELEGRAM_API_ID: int = 0
