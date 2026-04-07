@@ -26,7 +26,7 @@ public class UserSession {
     }
 
     private volatile State state = State.IDLE;
-    private volatile Object chatId;
+    private volatile String chatId;
     private volatile String chatDisplay;
     private volatile String fromDate;
     private volatile String toDate;
@@ -40,11 +40,11 @@ public class UserSession {
         this.state = state;
     }
 
-    public Object getChatId() {
+    public String getChatId() {
         return chatId;
     }
 
-    public void setChatId(Object chatId) {
+    public void setChatId(String chatId) {
         this.chatId = chatId;
     }
 

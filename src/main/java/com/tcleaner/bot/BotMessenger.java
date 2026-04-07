@@ -2,10 +2,8 @@ package com.tcleaner.bot;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Service;
-import org.telegram.telegrambots.client.okhttp.OkHttpTelegramClient;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.telegram.telegrambots.meta.generics.TelegramClient;
@@ -23,8 +21,8 @@ public class BotMessenger {
 
     private final TelegramClient telegramClient;
 
-    public BotMessenger(@Value("${telegram.bot.token}") String botToken) {
-        this.telegramClient = new OkHttpTelegramClient(botToken);
+    public BotMessenger(TelegramClient telegramClient) {
+        this.telegramClient = telegramClient;
     }
 
     /**

@@ -4,29 +4,19 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.scheduling.annotation.Scheduled;
-import org.telegram.telegrambots.client.okhttp.OkHttpTelegramClient;
 import org.telegram.telegrambots.longpolling.interfaces.LongPollingUpdateConsumer;
 import org.telegram.telegrambots.longpolling.starter.SpringLongPollingBot;
 import org.telegram.telegrambots.longpolling.util.LongPollingSingleThreadUpdateConsumer;
-import org.telegram.telegrambots.meta.api.methods.groupadministration.GetChat;
-import org.telegram.telegrambots.meta.api.objects.chat.Chat;
-import org.telegram.telegrambots.meta.api.objects.ChatShared;
 import org.telegram.telegrambots.meta.api.objects.message.Message;
 import org.telegram.telegrambots.meta.api.objects.Update;
-import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
-import org.telegram.telegrambots.meta.generics.TelegramClient;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -65,8 +55,6 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
 
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("dd.MM.yyyy");
 
-    private static final String CANONICAL_PREFIX = "canonical:";
-
     private static final String HELP_TEXT = """
             Этот бот экспортирует историю Telegram-чата и отправляет очищенный текст.
 
@@ -82,22 +70,17 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
 
     private final String botToken;
     private final ExportJobProducer jobProducer;
-    private final StringRedisTemplate redis;
     private final BotMessenger messenger;
-    private final TelegramClient telegramClient;
     private final ConcurrentHashMap<Long, UserSession> sessions = new ConcurrentHashMap<>();
 
     public ExportBot(
             @Value("${telegram.bot.token}") String botToken,
             ExportJobProducer jobProducer,
-            StringRedisTemplate redis,
             BotMessenger messenger
     ) {
         this.botToken = botToken;
         this.jobProducer = jobProducer;
-        this.redis = redis;
         this.messenger = messenger;
-        this.telegramClient = new OkHttpTelegramClient(botToken);
         log.info("Telegram-бот инициализирован");
     }
 
@@ -133,13 +116,6 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         long chatId = message.getChatId();
         long userId = message.getFrom().getId();
 
-        // Обработка выбора чата через встроенную Telegram функцию (кнопка выбора)
-        ChatShared chatShared = message.getChatShared();
-        if (chatShared != null) {
-            handleChatShared(chatId, userId, chatShared);
-            return;
-        }
-
         if (message.hasText()) {
             handleMessageText(chatId, userId, message.getText().trim());
         }
@@ -158,99 +134,6 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
 
     private void sendMainMenu(long chatId) {
         messenger.send(chatId, HELP_TEXT);
-    }
-
-    private void handleChatShared(long chatId, long userId, ChatShared chatShared) {
-        long sharedChatId = chatShared.getChatId();
-        String sharedUsername = chatShared.getUsername();
-
-        log.info("📢 ChatShared received: chatId={}, username={}, title={}",
-                 sharedChatId, sharedUsername, chatShared.getTitle());
-
-        String chatIdentifier;
-        if (sharedUsername != null && !sharedUsername.isBlank()) {
-            chatIdentifier = sharedUsername;
-            log.info("✅ Using username from picker: @{}", chatIdentifier);
-        } else {
-            log.warn("⚠️ Username is null/blank from picker. Attempting Bot API resolution for ID {}", sharedChatId);
-            chatIdentifier = resolveChatIdentifierWithFallback(sharedChatId);
-        }
-        log.info("Export via ChatShared: userId={}, target={}", userId, chatIdentifier);
-        handleChatIdentifier(chatId, userId, chatIdentifier);
-    }
-
-    private String resolveChatIdentifierWithFallback(long rawId) {
-        log.info("Resolving chat identifier for rawId={}", rawId);
-
-        // Check Redis cache first
-        try {
-            String cached = redis.opsForValue().get(CANONICAL_PREFIX + rawId);
-            if (cached != null && !cached.isBlank()) {
-                log.info("Found cached username in Redis: {} → {}", rawId, cached);
-                return cached;
-            }
-        } catch (Exception e) {
-            log.debug("Redis lookup failed: {}", e.getMessage());
-        }
-
-        // Try GetChat with different ID formats
-        List<String> variants = new ArrayList<>();
-        variants.add(String.valueOf(rawId));
-
-        if (rawId > 0) {
-            variants.add("-100" + rawId);
-        } else {
-            String s = String.valueOf(rawId);
-            if (s.startsWith("-100")) {
-                variants.add(s.substring(4));  // Try without -100 prefix
-            }
-        }
-
-        for (String id : variants) {
-            try {
-                Chat chat = telegramClient.execute(GetChat.builder().chatId(id).build());
-
-                String username = getUsernameFromChat(chat);
-
-                log.info("getChat({}): username='{}', title='{}', type='{}'",
-                    id, username, chat.getTitle(), chat.getType());
-
-                if (username != null && !username.isBlank()) {
-                    // Save to Redis for future requests (30 days TTL)
-                    try {
-                        redis.opsForValue().set(CANONICAL_PREFIX + rawId, username, 30, TimeUnit.DAYS);
-                    } catch (Exception e) {
-                        log.debug("Failed to cache username: {}", e.getMessage());
-                    }
-                    return username;
-                }
-            } catch (TelegramApiException e) {
-                log.warn("getChat({}) failed: {}", id, e.getMessage());
-            }
-        }
-
-        // Could not resolve to username
-        log.error("⚠️ Failed to resolve chat {} to username via GetChat. " +
-                "Picker may not have returned username and Bot API cannot resolve this ID. " +
-                "This chat is private or worker account needs access. Falling back to numeric ID.", rawId);
-        return String.valueOf(rawId);
-    }
-
-    private String getUsernameFromChat(Chat chat) {
-        // SDK 9.5.0: try both getUserName and getUsername
-        String username = null;
-        try {
-            // Try getUsername method
-            username = chat.getUserName();
-        } catch (Exception e) {
-            // Fallback to reflection if method doesn't exist
-            try {
-                java.lang.reflect.Method method = Chat.class.getMethod("getUserName");
-                username = (String) method.invoke(chat);
-            } catch (Exception ignored) {
-            }
-        }
-        return username;
     }
 
     private void handleCancel(long chatId, long userId) {
@@ -284,20 +167,20 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
             return;
         }
 
-        try {
-            String username = extractUsername(input);
-            if (username != null) {
-                session.setChatId(username);
-                session.setChatDisplay("@" + username);
-            } else {
-                long targetChatId = Long.parseLong(input);
-                session.setChatId(targetChatId);
-                session.setChatDisplay(String.valueOf(targetChatId));
+        String identifier = extractUsername(input);
+        if (identifier == null) {
+            // Попытка распарсить как числовой ID
+            try {
+                identifier = String.valueOf(Long.parseLong(input));
+            } catch (NumberFormatException e) {
+                messenger.send(chatId, "❌ Неверный формат. Отправьте ссылку, @username или числовой ID.");
+                return;
             }
-        } catch (NumberFormatException e) {
-            messenger.send(chatId, "❌ Неверный формат. Отправьте ссылку, @username или числовой ID.");
-            return;
         }
+
+        session.setChatId(identifier);
+        session.setChatDisplay(identifier.startsWith("@") ? identifier :
+                identifier.matches("-?\\d+") ? identifier : "@" + identifier);
 
         // Переходим в режим выбора дат
         session.setState(UserSession.State.AWAITING_FROM_DATE);
@@ -355,16 +238,11 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         }
 
         String taskId;
-        Object targetChatId = session.getChatId();
+        String targetIdentifier = session.getChatId();
 
         try {
-            if (targetChatId instanceof String username) {
-                taskId = jobProducer.enqueue(userId, chatId, username,
-                        session.getFromDate(), session.getToDate());
-            } else {
-                taskId = jobProducer.enqueue(userId, chatId, (Long) targetChatId,
-                        session.getFromDate(), session.getToDate());
-            }
+            taskId = jobProducer.enqueue(userId, chatId, targetIdentifier,
+                    session.getFromDate(), session.getToDate());
         } catch (IllegalStateException e) {
             log.warn("Попытка дублирующего экспорта от пользователя {}: {}", userId, e.getMessage());
             messenger.send(chatId, "⏳ У вас уже есть активный экспорт. Дождитесь его завершения или отправьте /cancel");
@@ -378,7 +256,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
 
         // Формируем текст подтверждения
         String dateInfo = buildDateInfoText(session);
-        boolean fromCache = jobProducer.isLikelyCached(targetChatId);
+        boolean fromCache = jobProducer.isLikelyCached(targetIdentifier);
         long pendingInQueue = jobProducer.getQueueLength();
         boolean hasActiveJob = jobProducer.hasActiveProcessingJob();
         long aheadCount = (pendingInQueue - 1) + (hasActiveJob ? 1 : 0);

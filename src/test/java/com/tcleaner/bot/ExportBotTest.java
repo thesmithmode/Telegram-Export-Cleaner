@@ -4,14 +4,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.telegram.telegrambots.meta.api.objects.chat.Chat;
-import org.telegram.telegrambots.meta.api.objects.ChatShared;
 import org.telegram.telegrambots.meta.api.objects.message.Message;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.User;
-
-import java.util.concurrent.ConcurrentHashMap;
+import org.telegram.telegrambots.meta.api.objects.chat.Chat;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -23,14 +19,12 @@ import static org.mockito.Mockito.*;
 class ExportBotTest {
 
     private ExportJobProducer jobProducerMock;
-    private StringRedisTemplate redisMock;
     private BotMessenger messengerMock;
     private ExportBot bot;
 
     @BeforeEach
     void setUp() throws Exception {
         jobProducerMock = mock(ExportJobProducer.class);
-        redisMock = mock(StringRedisTemplate.class);
         messengerMock = mock(BotMessenger.class);
 
         // По умолчанию активных экспортов нет
@@ -43,48 +37,7 @@ class ExportBotTest {
         when(jobProducerMock.getQueueLength()).thenReturn(0L);
         when(jobProducerMock.hasActiveProcessingJob()).thenReturn(false);
 
-        bot = new ExportBot("token", jobProducerMock, redisMock, messengerMock);
-    }
-
-    @Nested
-    @DisplayName("Выбор чата через встроенный Telegram механизм (ChatShared)")
-    class ChatSharedHandling {
-
-        @Test
-        @DisplayName("ChatShared с username запускает диалог дат")
-        void testChatSharedWithUsername() {
-            Update update = new Update();
-            update.setUpdateId(1);
-
-            Message message = new Message();
-            message.setMessageId(1);
-
-            Chat chat = Chat.builder()
-                    .id(123L)
-                    .type("private")
-                    .build();
-            message.setChat(chat);
-
-            User user = User.builder()
-                    .id(456L)
-                    .isBot(false)
-                    .build();
-            message.setFrom(user);
-
-            ChatShared chatShared = new ChatShared();
-            chatShared.setRequestId(1);
-            chatShared.setChatId(-1001234567890L);
-            chatShared.setUsername("test_channel");
-            chatShared.setTitle("Test Channel");
-            message.setChatShared(chatShared);
-
-            update.setMessage(message);
-
-            bot.consume(update);
-
-            // Должна быть запрос даты для выбранного чата
-            verify(messengerMock).send(123L, contains("Введите дату начала"));
-        }
+        bot = new ExportBot("token", jobProducerMock, messengerMock);
     }
 
     @Nested
