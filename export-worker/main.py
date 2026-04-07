@@ -146,6 +146,11 @@ class ExportWorker:
             logger.info("1️⃣  Connecting to Redis queue...")
             self.queue_consumer = await create_queue_consumer()
 
+            # 1.5. Recover jobs from previous crash (durability)
+            recovered = await self.queue_consumer.recover_staging_jobs()
+            if recovered:
+                logger.info(f"  Recovered {recovered} orphaned jobs — they will be reprocessed")
+
             # 2. Connect to Telegram API
             logger.info("2️⃣  Connecting to Telegram API...")
             self.telegram_client = await create_telegram_client()

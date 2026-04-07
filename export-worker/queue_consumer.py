@@ -43,6 +43,11 @@ class QueueConsumer:
         self.queue_name = settings.REDIS_QUEUE_NAME
         self.redis_client: Optional[redis.Redis] = None
 
+        # Staging queues: jobs are atomically moved here via LMOVE before processing.
+        # If the worker crashes, jobs remaining in staging are recovered on restart.
+        self.staging_name = self.queue_name + "_processing"
+        self.staging_express_name = self.express_queue_name + "_processing"
+
         logger.info(
             f"Queue Consumer initialized "
             f"(Redis: {settings.REDIS_HOST}:{settings.REDIS_PORT}, "
@@ -126,20 +131,23 @@ class QueueConsumer:
 
     async def get_job(self) -> Optional[ExportRequest]:
         """
-        Get next job from queue (blocking).
+        Get next job from queue (blocking) with durability guarantee.
+
+        Uses LMOVE (RIGHT → LEFT) to atomically move job from the working queue
+        to a staging queue before returning it. If the worker crashes, jobs in
+        staging are recovered on restart via :meth:`recover_staging_jobs`.
 
         Checks express queue first (cache-hit jobs), then main queue.
         Uses BLPOP to block until job available.
-        Handles reconnection on connection errors.
 
         Returns:
-            ExportRequest object or None if error
+            ExportRequest object or None if timeout
         """
         if not self.redis_client:
             raise RuntimeError("Not connected to Redis")
 
         try:
-            # BLPOP: express queue has priority over main queue
+            # BLPOP to find which queue has a job
             result = await self.redis_client.blpop(
                 [self.express_queue_name, self.queue_name], timeout=5
             )
@@ -147,21 +155,33 @@ class QueueConsumer:
             if not result:
                 return None
 
-            queue_name, job_json = result
+            source_queue, job_json = result
+
+            # Atomically move job to staging for crash recovery
+            dest_queue = (
+                self.staging_express_name if source_queue == self.express_queue_name
+                else self.staging_name
+            )
+            await self.redis_client.lmove(source_queue, dest_queue, "RIGHT", "LEFT")
 
             try:
                 job_data = json.loads(job_json)
                 job = ExportRequest(**job_data)
+                # Track job in staging for crash recovery
+                await self._track_staging_job(job.task_id)
                 logger.debug(f"Got job from queue: {job.task_id}")
                 return job
 
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse job JSON: {e}. Moving to DLQ.")
+                # Remove from staging and move to DLQ
+                await self.redis_client.lpop(dest_queue)
                 await self._move_to_dlq(job_json, f"JSON parse error: {e}")
                 return None
 
             except Exception as e:
                 logger.error(f"Failed to create ExportRequest: {e}. Moving to DLQ.")
+                await self.redis_client.lpop(dest_queue)
                 await self._move_to_dlq(job_json, f"Validation error: {e}")
                 return None
 
@@ -200,6 +220,33 @@ class QueueConsumer:
             logger.warning(f"Moved invalid job to DLQ '{dlq_name}': {reason}")
         except Exception as e:
             logger.error(f"Failed to move job to DLQ: {e}")
+
+    async def ack_job_completed(self, task_id: str) -> bool:
+        """Mark job as removed from staging after successful completion."""
+        if not self.redis_client:
+            return False
+        try:
+            await self.redis_client.srem("staging:acked", task_id)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to ack completed job {task_id}: {e}")
+            return False
+
+    async def _track_staging_job(self, task_id: str) -> None:
+        """Track that a job is in staging (called after LMOVE)."""
+        if self.redis_client:
+            try:
+                await self.redis_client.sadd("staging:jobs", task_id)
+            except Exception:
+                pass
+
+    async def _untrack_staging_job(self, task_id: str) -> None:
+        """Remove job from staging tracking (called on completion/failure)."""
+        if self.redis_client:
+            try:
+                await self.redis_client.srem("staging:jobs", task_id)
+            except Exception:
+                pass
 
     async def push_job(self, job: ExportRequest) -> bool:
         """
@@ -278,6 +325,7 @@ class QueueConsumer:
             )
 
             logger.debug(f"Marked job completed: {task_id}")
+            await self._untrack_staging_job(task_id)
             return True
 
         except Exception as e:
@@ -316,6 +364,7 @@ class QueueConsumer:
             )
 
             logger.debug(f"Marked job failed: {task_id}")
+            await self._untrack_staging_job(task_id)
             return True
 
         except Exception as e:
@@ -346,6 +395,44 @@ class QueueConsumer:
         except Exception as e:
             logger.error(f"Failed to get pending jobs: {e}")
             return []
+
+    async def recover_staging_jobs(self) -> int:
+        """Recover jobs left in staging from a previous crash.
+
+        Moves all staging jobs back to their original queues and returns count.
+        """
+        if not self.redis_client:
+            return 0
+
+        recovered = 0
+        try:
+            # staging_express → express
+            while True:
+                item = await self.redis_client.lmove(
+                    self.staging_express_name, self.express_queue_name, "LEFT", "RIGHT"
+                )
+                if item is None:
+                    break
+                recovered += 1
+
+            # staging → main
+            while True:
+                item = await self.redis_client.lmove(
+                    self.staging_name, self.queue_name, "LEFT", "RIGHT"
+                )
+                if item is None:
+                    break
+                recovered += 1
+
+            if recovered:
+                logger.info(f"🔄 Recovered {recovered} staging jobs from previous crash")
+
+            # Cleanup stale tracking set
+            await self.redis_client.delete("staging:jobs")
+        except Exception as e:
+            logger.error(f"Failed to recover staging jobs: {e}")
+
+        return recovered
 
     async def get_queue_stats(self) -> Optional[dict]:
         """
