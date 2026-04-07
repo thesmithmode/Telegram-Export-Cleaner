@@ -182,37 +182,70 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     }
 
     private String resolveChatIdentifierWithFallback(long rawId) {
+        log.info("Resolving chat identifier for rawId={}", rawId);
+
+        // Check Redis cache first
+        try {
+            String cached = redis.opsForValue().get(CANONICAL_PREFIX + rawId);
+            if (cached != null && !cached.isBlank()) {
+                log.info("Found cached username in Redis: {} → {}", rawId, cached);
+                return cached;
+            }
+        } catch (Exception e) {
+            log.debug("Redis lookup failed: {}", e.getMessage());
+        }
+
+        // Try GetChat with different ID formats
         List<String> variants = new ArrayList<>();
         variants.add(String.valueOf(rawId));
-        
+
         if (rawId > 0) {
             variants.add("-100" + rawId);
         } else {
             String s = String.valueOf(rawId);
             if (s.startsWith("-100")) {
-                variants.add(s.substring(4));
+                variants.add(s.substring(4));  // Try without -100 prefix
             }
         }
 
         for (String id : variants) {
             try {
                 Chat chat = telegramClient.execute(GetChat.builder().chatId(id).build());
-                String username = chat.getUserName();
+
+                // SDK 9.5.0: try both getUserName() and getUsername() methods
+                String username = null;
+                try {
+                    username = chat.getUserName();
+                } catch (Exception e1) {
+                    log.debug("getUserName() failed, trying getUsername()");
+                    try {
+                        username = chat.getUsername();
+                    } catch (Exception e2) {
+                        log.debug("getUsername() also failed");
+                    }
+                }
+
+                log.info("getChat({}): username='{}', title='{}', type='{}'",
+                    id, username, chat.getTitle(), chat.getType());
+
                 if (username != null && !username.isBlank()) {
+                    // Save to Redis for future requests
+                    try {
+                        redis.opsForValue().set(CANONICAL_PREFIX + rawId, username, Duration.ofDays(30));
+                    } catch (Exception e) {
+                        log.debug("Failed to cache username: {}", e.getMessage());
+                    }
                     return username;
                 }
             } catch (TelegramApiException e) {
-                log.debug("getChat failed for ID={}: {}", id, e.getMessage());
+                log.warn("getChat({}) failed: {}", id, e.getMessage());
             }
         }
 
-        try {
-            String username = redis.opsForValue().get(CANONICAL_PREFIX + rawId);
-            if (username != null) return username;
-        } catch (Exception e) {
-            log.debug("Redis lookup failed: {}", e.getMessage());
-        }
-
+        // Could not resolve to username
+        log.error("⚠️ Failed to resolve chat {} to username via GetChat. " +
+                "Picker may not have returned username and Bot API cannot resolve this ID. " +
+                "This chat is private or worker account needs access. Falling back to numeric ID.", rawId);
         return String.valueOf(rawId);
     }
 
