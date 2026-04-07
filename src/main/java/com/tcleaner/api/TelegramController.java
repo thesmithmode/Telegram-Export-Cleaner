@@ -2,8 +2,6 @@ package com.tcleaner.api;
 
 import com.tcleaner.core.MessageFilter;
 import com.tcleaner.core.MessageFilterFactory;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -11,9 +9,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
-
-import java.io.IOException;
-import java.util.Map;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 /**
  * REST контроллер для синхронной конвертации Telegram экспорта.
@@ -30,8 +26,6 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api")
 public class TelegramController {
-
-    private static final Logger log = LoggerFactory.getLogger(TelegramController.class);
 
     private final FileConversionService conversionService;
 
@@ -52,7 +46,7 @@ public class TelegramController {
      * @return 200 с текстовым файлом, 400 при ошибке валидации, 401 при неверном API ключе
      */
     @PostMapping("/convert")
-    public ResponseEntity<?> convert(
+    public ResponseEntity<StreamingResponseBody> convert(
             @RequestParam("file") MultipartFile file,
             @RequestParam(value = "startDate", required = false) String startDate,
             @RequestParam(value = "endDate", required = false) String endDate,
@@ -60,23 +54,16 @@ public class TelegramController {
             @RequestParam(value = "excludeKeywords", required = false) String excludeKeywords) {
 
         if (file.isEmpty()) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", "Файл пустой"));
+            throw new IllegalArgumentException("Файл пустой");
         }
 
         String originalFilename = file.getOriginalFilename();
         if (originalFilename == null || !originalFilename.endsWith(".json")) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", "Ожидается JSON файл"));
+            throw new IllegalArgumentException("Ожидается JSON файл");
         }
 
-        try {
-            MessageFilter filter = MessageFilterFactory.build(startDate, endDate, keywords, excludeKeywords);
-            return conversionService.convert(file, filter);
-        } catch (IOException ex) {
-            log.error("Ошибка ввода/вывода при конвертации", ex);
-            throw ex;
-        }
+        MessageFilter filter = MessageFilterFactory.build(startDate, endDate, keywords, excludeKeywords);
+        return conversionService.convert(file, filter);
     }
 
     /**

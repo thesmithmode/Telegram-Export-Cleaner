@@ -37,7 +37,7 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, String>> handleIllegalArgument(IllegalArgumentException ex) {
-        log.warn("Невалидный диапазон дат: {}", ex.getMessage());
+        log.warn("Ошибка валидации: {}", ex.getMessage());
         return ResponseEntity.badRequest()
                 .body(Map.of("error", ex.getMessage()));
     }
