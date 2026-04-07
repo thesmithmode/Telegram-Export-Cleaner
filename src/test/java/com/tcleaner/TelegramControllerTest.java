@@ -74,7 +74,7 @@ class TelegramControllerTest {
 
         @Test
         @DisplayName("Возвращает 400 при null originalFilename")
-        void returnsErrorWhenOriginalFilenameIsNull() {
+        void returnsErrorWhenOriginalFilenameIsNull() throws Exception {
             MockMultipartFile file = new MockMultipartFile(
                     "file", null, "application/json",
                     "{\"messages\": []}".getBytes());
@@ -89,7 +89,7 @@ class TelegramControllerTest {
 
         @Test
         @DisplayName("Возвращает 400 при пустом файле")
-        void returnsErrorWhenFileIsEmpty() {
+        void returnsErrorWhenFileIsEmpty() throws Exception {
             MockMultipartFile file = new MockMultipartFile(
                     "file", "result.json", "application/json", new byte[0]);
 
@@ -103,7 +103,7 @@ class TelegramControllerTest {
 
         @Test
         @DisplayName("Возвращает 400 при неверном расширении файла")
-        void returnsErrorWhenFileExtensionIsNotJson() {
+        void returnsErrorWhenFileExtensionIsNotJson() throws Exception {
             MockMultipartFile file = new MockMultipartFile(
                     "file", "result.txt", "text/plain", "some content".getBytes());
 
@@ -199,7 +199,7 @@ class TelegramControllerTest {
 
         @Test
         @DisplayName("Пути сервера не утекают в тело ответа при ошибке даты")
-        void errorMessageDoesNotLeakServerPaths() {
+        void errorMessageDoesNotLeakServerPaths() throws Exception {
             MockMultipartFile file = new MockMultipartFile(
                     "file", "result.json", "application/json",
                     "{\"messages\":[]}".getBytes());
@@ -214,7 +214,7 @@ class TelegramControllerTest {
 
         @Test
         @DisplayName("Возвращает 400 при невалидном формате даты")
-        void returns400WhenDateFormatIsInvalid() {
+        void returns400WhenDateFormatIsInvalid() throws Exception {
             MockMultipartFile file = new MockMultipartFile(
                     "file", "result.json", "application/json",
                     "{\"messages\":[]}".getBytes());
@@ -229,7 +229,7 @@ class TelegramControllerTest {
 
         @Test
         @DisplayName("Возвращает 400 при startDate позже endDate")
-        void returns400WhenStartDateAfterEndDate() {
+        void returns400WhenStartDateAfterEndDate() throws Exception {
             MockMultipartFile file = new MockMultipartFile(
                     "file", "result.json", "application/json",
                     "{\"messages\":[]}".getBytes());
