@@ -105,7 +105,7 @@ class ExportBotTest {
             bot.consume(createTextMessageUpdate(123L, "01.01.2024"));
 
             // Должен перейти в AWAITING_TO_DATE и запросить дату конца
-            verify(messengerMock, times(2)).send(eq(123L), contains("Введите дату конца"));
+            verify(messengerMock).send(eq(123L), contains("Введите дату конца"));
         }
 
         @Test
@@ -130,8 +130,9 @@ class ExportBotTest {
             // Шаг 2: вводим /all (весь чат)
             bot.consume(createTextMessageUpdate(123L, "/all"));
 
-            // Должна быть просьба о дате конца
-            verify(messengerMock, times(2)).send(eq(123L), contains("Введите дату конца"));
+            // Первое сообщение — "Введите дату начала", второе — "Введите дату конца"
+            verify(messengerMock).send(eq(123L), contains("Введите дату начала"));
+            verify(messengerMock).send(eq(123L), contains("Введите дату конца"));
         }
 
         @Test
