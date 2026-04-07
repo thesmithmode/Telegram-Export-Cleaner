@@ -20,8 +20,6 @@ import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardRow;
-import org.telegram.telegrambots.meta.api.objects.message.MessageOriginChannel;
-import org.telegram.telegrambots.meta.api.objects.message.MessageOriginChat;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.telegram.telegrambots.meta.generics.TelegramClient;
 
@@ -126,8 +124,8 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         long chatId = message.getChatId();
         long userId = message.getFrom().getId();
 
-        // Handle forwarded messages (for chat identification via MessageOrigin)
-        if (message.getForwardOrigin() != null) {
+        // Handle forwarded messages (for chat identification via forwardFromChat)
+        if (message.getForwardFromChat() != null) {
             handleForwardedMessage(chatId, userId, message);
             return;
         }
@@ -148,33 +146,25 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
 
     private void handleForwardedMessage(long chatId, long userId, Message message) {
         try {
-            var origin = message.getForwardOrigin();
-            String username = null;
-            String chatTitle = null;
-
-            if (origin instanceof MessageOriginChannel originChannel) {
-                Chat chat = originChannel.getChat();
-                username = chat.getUserName();
-                chatTitle = chat.getTitle();
-                log.info("📩 Forward from channel: title='{}', username='{}', id={}",
-                         chatTitle, username, chat.getId());
-            } else if (origin instanceof MessageOriginChat originChat) {
-                Chat senderChat = originChat.getSenderChat();
-                username = senderChat.getUserName();
-                chatTitle = senderChat.getTitle();
-                log.info("📩 Forward from group: title='{}', username='{}', id={}",
-                         chatTitle, username, senderChat.getId());
-            } else {
-                log.warn("Unsupported forward origin type: {}", origin.getClass().getSimpleName());
-                sendText(chatId, "⚠️ Только пересылки из публичных групп/каналов поддерживаются.");
+            Chat forwardFromChat = message.getForwardFromChat();
+            if (forwardFromChat == null) {
+                log.warn("Пересланное сообщение без информации о чате источника");
+                sendText(chatId, "⚠️ Не удалось определить источник пересланного сообщения.");
                 return;
             }
+
+            String username = forwardFromChat.getUserName();
+            String chatTitle = forwardFromChat.getTitle();
+            String chatType = forwardFromChat.getType();
+
+            log.info("📩 Forward from {}: title='{}', username='{}', id={}, type={}",
+                     chatType, chatTitle, username, forwardFromChat.getId(), chatType);
 
             if (username != null && !username.isBlank()) {
                 log.info("✅ Using username from forward: @{}", username);
                 handleExportDirect(chatId, userId, username);
             } else {
-                log.warn("Перешланный чат не имеет публичного username: {}", chatTitle);
+                log.warn("Перешланный чат не имеет публичного username: {} (id={})", chatTitle, forwardFromChat.getId());
                 sendText(chatId, "⚠️ Чат \"" + chatTitle + "\" приватный или не имеет username. " +
                                  "Перешлите сообщение из публичного чата.");
             }
