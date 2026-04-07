@@ -50,7 +50,7 @@ class ExportBotTest {
             bot.consume(createTextMessageUpdate(123L, "public_channel"));
 
             // Должно быть запрос даты (AWAITING_FROM_DATE)
-            verify(messengerMock).send(123L, contains("Введите дату начала"));
+            verify(messengerMock).send(eq(123L), contains("Введите дату начала"));
         }
 
         @Test
@@ -59,7 +59,7 @@ class ExportBotTest {
             bot.consume(createTextMessageUpdate(123L, "https://t.me/public_channel"));
 
             // Должно быть запрос даты
-            verify(messengerMock).send(123L, contains("Введите дату начала"));
+            verify(messengerMock).send(eq(123L), contains("Введите дату начала"));
         }
 
         @Test
@@ -68,7 +68,7 @@ class ExportBotTest {
             bot.consume(createTextMessageUpdate(123L, "@public_channel"));
 
             // Должно быть запрос даты
-            verify(messengerMock).send(123L, contains("Введите дату начала"));
+            verify(messengerMock).send(eq(123L), contains("Введите дату начала"));
         }
 
         @Test
@@ -77,7 +77,7 @@ class ExportBotTest {
             bot.consume(createTextMessageUpdate(123L, "-1001234567890"));
 
             // Должно быть запрос даты
-            verify(messengerMock).send(123L, contains("Введите дату начала"));
+            verify(messengerMock).send(eq(123L), contains("Введите дату начала"));
         }
 
         @Test
@@ -86,7 +86,7 @@ class ExportBotTest {
             bot.consume(createTextMessageUpdate(123L, "123 456 789"));
 
             // Должно быть сообщение об ошибке
-            verify(messengerMock).send(123L, contains("Неверный формат"));
+            verify(messengerMock).send(eq(123L), contains("Неверный формат"));
         }
     }
 
@@ -99,7 +99,7 @@ class ExportBotTest {
         void testFromDateValidFormat() {
             // Шаг 1: выбираем чат
             bot.consume(createTextMessageUpdate(123L, "test_chat"));
-            verify(messengerMock).send(123L, contains("Введите дату начала"));
+            verify(messengerMock).send(eq(123L), contains("Введите дату начала"));
 
             // Шаг 2: вводим дату
             bot.consume(createTextMessageUpdate(123L, "01.01.2024"));
@@ -118,7 +118,7 @@ class ExportBotTest {
             bot.consume(createTextMessageUpdate(123L, "2024-01-01"));
 
             // Должно быть сообщение об ошибке
-            verify(messengerMock).send(123L, contains("Неверный формат"));
+            verify(messengerMock).send(eq(123L), contains("Неверный формат"));
         }
 
         @Test
@@ -184,7 +184,7 @@ class ExportBotTest {
             bot.consume(createTextMessageUpdate(123L, "31-12-2024"));
 
             // Должно быть сообщение об ошибке
-            verify(messengerMock).send(123L, contains("Неверный формат"));
+            verify(messengerMock).send(eq(123L), contains("Неверный формат"));
         }
     }
 
@@ -201,7 +201,7 @@ class ExportBotTest {
             bot.consume(createTextMessageUpdate(123L, "/cancel"));
 
             verify(jobProducerMock).cancelExport(123L);
-            verify(messengerMock).send(123L, contains("отменён"));
+            verify(messengerMock).send(eq(123L), contains("отменён"));
         }
 
         @Test
@@ -212,7 +212,7 @@ class ExportBotTest {
             bot.consume(createTextMessageUpdate(123L, "/cancel"));
 
             verify(jobProducerMock, never()).cancelExport(anyLong());
-            verify(messengerMock).send(123L, contains("Нет активного экспорта"));
+            verify(messengerMock).send(eq(123L), contains("Нет активного экспорта"));
         }
 
         @Test
@@ -265,7 +265,7 @@ class ExportBotTest {
         void testStartAndHelpCommands() {
             bot.consume(createTextMessageUpdate(123L, "/start"));
 
-            verify(messengerMock).send(123L, contains("Этот бот экспортирует"));
+            verify(messengerMock).send(eq(123L), contains("Этот бот экспортирует"));
         }
 
         @Test
