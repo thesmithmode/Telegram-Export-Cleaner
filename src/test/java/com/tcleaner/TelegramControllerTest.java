@@ -1,6 +1,7 @@
 package com.tcleaner;
 import com.tcleaner.api.FileConversionService;
 import com.tcleaner.api.TelegramController;
+import com.tcleaner.core.TelegramExporter;
 import com.tcleaner.core.TelegramExporterInterface;
 
 import org.junit.jupiter.api.DisplayName;
