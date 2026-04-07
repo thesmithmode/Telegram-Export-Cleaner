@@ -23,7 +23,7 @@ import java.util.regex.Pattern;
 /**
  * Telegram-бот для запуска экспорта чатов.
  *
- * <p>Принимает только текстовые команды: username (@channel), ссылку (https://t.me/channel)
+ * <p>Принимает текстовые команды: username (@channel), ссылку (https://t.me/channel)
  * или числовой ID. Поэтапный диалог для выбора диапазона дат.</p>
  *
  * <h3>Состояния сессии</h3>

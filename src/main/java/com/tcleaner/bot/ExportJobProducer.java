@@ -23,15 +23,24 @@ import java.util.concurrent.TimeUnit;
  * метод бросает {@link IllegalStateException} вместо добавления дублирующей задачи.
  * Это устраняет race condition между {@link #getActiveExport(long)} и {@code enqueue()}.</p>
  *
+ * <h3>Двойная очередь</h3>
+ * <p>Если данные чата уже в кэше ({@link #isLikelyCached(Object)} возвращает true),
+ * задача помещается в приоритетную очередь ({@code <queueName>_express}).
+ * Иначе — в основную очередь ({@code <queueName>}).</p>
+ *
  * <p>Формат JSON-задачи:</p>
  * <pre>
  * {
- *   "task_id":     "uuid",
- *   "user_id":     12345,
- *   "user_chat_id": 12345,
- *   "chat_id":     -100123456789 или "username",
- *   "limit":       0,
- *   "offset_id":   0
+ *   "task_id":       "uuid",
+ *   "user_id":       12345,
+ *   "user_chat_id":  12345,
+ *   "chat_id":       -100123456789 или "username",
+ *   "limit":         0,
+ *   "offset_id":     0,
+ *   "from_date":     "2024-01-01T00:00:00",  // опционально
+ *   "to_date":       "2024-12-31T23:59:59",  // опционально
+ *   "keywords":      "java,spring",          // опционально
+ *   "exclude_keywords": "test,debug"         // опционально
  * }
  * </pre>
  */
@@ -62,14 +71,22 @@ public class ExportJobProducer {
     }
 
     /**
-     * Добавляет задачу на экспорт в конец Redis-очереди (RPUSH).
+     * Добавляет задачу на экспорт в Redis-очередь.
      *
-     * <p>Атомарно резервирует слот через Redis SET NX перед добавлением в очередь.
+     * <p>Это основной метод, используемый всеми перегруженными версиями {@code enqueue()}.
+     * Атомарно резервирует слот через Redis SET NX перед добавлением в очередь.
      * Если у пользователя уже есть активный экспорт — бросает {@link IllegalStateException}.</p>
      *
-     * @param userId     Telegram user ID пользователя, сделавшего запрос
-     * @param userChatId Telegram chat ID — куда вернуть результат (обычно равен userId)
-     * @param chatId     ID чата, историю которого нужно экспортировать
+     * <p>Если данные чата уже в кэше, задача помещается в приоритетную очередь
+     * ({@code <queueName>_express}) для ускоренной обработки.</p>
+     *
+     * @param userId          Telegram user ID пользователя, сделавшего запрос
+     * @param userChatId      Telegram chat ID — куда вернуть результат (обычно равен userId)
+     * @param chatId          ID чата, историю которого нужно экспортировать (числовой или username)
+     * @param fromDate        начальная дата в ISO формате (nullable)
+     * @param toDate          конечная дата в ISO формате (nullable)
+     * @param keywords        ключевые слова для включения, через запятую (nullable)
+     * @param excludeKeywords ключевые слова для исключения, через запятую (nullable)
      * @return task_id созданной задачи
      * @throws IllegalStateException если у пользователя уже есть активный экспорт
      * @throws RuntimeException      если не удалось сериализовать задачу или записать в Redis

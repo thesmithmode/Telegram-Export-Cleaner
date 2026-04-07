@@ -32,9 +32,13 @@ import java.util.Map;
  *
  * <h2>Endpoints</h2>
  * <ul>
- *   <li>{@code POST /api/convert} — загрузка файла {@code result.json} (multipart)</li>
- *   <li>{@code GET  /api/health}  — проверка доступности сервиса</li>
+ *   <li>{@code POST /api/convert} — загрузка файла {@code result.json} (multipart). Требует API ключ.</li>
+ *   <li>{@code GET  /api/health}  — проверка доступности сервиса. Без API ключа.</li>
  * </ul>
+ *
+ * <h2>Авторизация</h2>
+ * <p>Запросы к {@code /api/convert} требуют заголовок {@code X-API-Key}.
+ * Проверку выполняет {@link com.tcleaner.api.ApiKeyFilter}.</p>
  *
  * <h2>Память</h2>
  * <p>Обработка выполняется через Jackson Streaming API: сообщения читаются по одному
@@ -64,12 +68,15 @@ public class TelegramController {
      * <p>Принимает multipart/form-data запрос с файлом {@code result.json}.
      * Возвращает текстовый файл с обработанными сообщениями в теле ответа.</p>
      *
+     * <p>Требует заголовок {@code X-API-Key} (проверяется в {@link com.tcleaner.api.ApiKeyFilter}).
+     * При отсутствии или неверном ключе фильтр возвращает 401 Unauthorized.</p>
+     *
      * @param file            загруженный файл {@code result.json}
      * @param startDate       начальная дата фильтра в формате {@code YYYY-MM-DD}, или {@code null}
      * @param endDate         конечная дата фильтра в формате {@code YYYY-MM-DD}, или {@code null}
      * @param keywords        ключевые слова для включения сообщений, через запятую, или {@code null}
      * @param excludeKeywords ключевые слова для исключения сообщений, через запятую, или {@code null}
-     * @return 200 с текстовым файлом, 400 при ошибке валидации, 500 при внутренней ошибке
+     * @return 200 с текстовым файлом, 400 при ошибке валидации, 401 при неверном API ключе, 500 при внутренней ошибке
      */
     @PostMapping("/convert")
     public ResponseEntity<?> convert(
