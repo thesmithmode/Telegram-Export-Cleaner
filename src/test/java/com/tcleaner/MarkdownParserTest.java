@@ -352,7 +352,7 @@ class MarkdownParserTest {
                   {"type": "bold", "text": "World"}
                 ]
                 """);
-            
+
             String result = MarkdownParser.parseText(node);
             assertThat(result).isEqualTo("Hello **World**");
         }
@@ -370,6 +370,81 @@ class MarkdownParserTest {
         void returnsEmptyForNull() {
             String result = MarkdownParser.parseText((JsonNode) null);
             assertThat(result).isEmpty();
+        }
+    }
+
+    @Nested
+    @DisplayName("Парсинг text_link с валидацией URL")
+    class ParseTextLinkWithValidation {
+
+        @Test
+        @DisplayName("Парсит безопасный text_link")
+        void parsesSecureTextLink() throws Exception {
+            String json = "{\"type\": \"text_link\", \"text\": \"click me\", \"href\": \"https://example.com\"}";
+            JsonNode entity = objectMapper.readTree(json);
+
+            String result = MarkdownParser.parseEntity(entity);
+            assertThat(result).isEqualTo("[click me](https://example.com)");
+        }
+
+        @Test
+        @DisplayName("Блокирует javascript: XSS")
+        void blocksJavascriptXss() throws Exception {
+            String json = "{\"type\": \"text_link\", \"text\": \"click\", \"href\": \"javascript:alert('xss')\"}";
+            JsonNode entity = objectMapper.readTree(json);
+
+            String result = MarkdownParser.parseEntity(entity);
+            assertThat(result).isEqualTo("[click](#)");
+        }
+
+        @Test
+        @DisplayName("Блокирует data: XSS")
+        void blocksDataXss() throws Exception {
+            String json = "{\"type\": \"text_link\", \"text\": \"malicious\", \"href\": \"data:text/html,<script>alert(1)</script>\"}";
+            JsonNode entity = objectMapper.readTree(json);
+
+            String result = MarkdownParser.parseEntity(entity);
+            assertThat(result).isEqualTo("[malicious](#)");
+        }
+
+        @Test
+        @DisplayName("Блокирует vbscript: XSS")
+        void blocksVbscriptXss() throws Exception {
+            String json = "{\"type\": \"text_link\", \"text\": \"link\", \"href\": \"vbscript:msgbox('xss')\"}";
+            JsonNode entity = objectMapper.readTree(json);
+
+            String result = MarkdownParser.parseEntity(entity);
+            assertThat(result).isEqualTo("[link](#)");
+        }
+
+        @Test
+        @DisplayName("Разрешает относительные ссылки")
+        void allowsRelativeLinks() throws Exception {
+            String json = "{\"type\": \"text_link\", \"text\": \"relative\", \"href\": \"/path/to/page\"}";
+            JsonNode entity = objectMapper.readTree(json);
+
+            String result = MarkdownParser.parseEntity(entity);
+            assertThat(result).isEqualTo("[relative](/path/to/page)");
+        }
+
+        @Test
+        @DisplayName("Разрешает mailto: ссылки")
+        void allowsMailtoLinks() throws Exception {
+            String json = "{\"type\": \"text_link\", \"text\": \"email\", \"href\": \"mailto:test@example.com\"}";
+            JsonNode entity = objectMapper.readTree(json);
+
+            String result = MarkdownParser.parseEntity(entity);
+            assertThat(result).isEqualTo("[email](mailto:test@example.com)");
+        }
+
+        @Test
+        @DisplayName("Разрешает Telegram ссылки")
+        void allowsTelegramLinks() throws Exception {
+            String json = "{\"type\": \"text_link\", \"text\": \"tg\", \"href\": \"tg://user?id=123\"}";
+            JsonNode entity = objectMapper.readTree(json);
+
+            String result = MarkdownParser.parseEntity(entity);
+            assertThat(result).isEqualTo("[tg](tg://user?id=123)");
         }
     }
 
