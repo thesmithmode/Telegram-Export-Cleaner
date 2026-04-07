@@ -160,11 +160,16 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     private void handleChatShared(long chatId, long userId, ChatShared chatShared) {
         long sharedChatId = chatShared.getChatId();
         String sharedUsername = chatShared.getUsername();
-        
+
+        log.info("📢 ChatShared received: chatId={}, username={}, title={}",
+                 sharedChatId, sharedUsername, chatShared.getTitle());
+
         String chatIdentifier;
         if (sharedUsername != null && !sharedUsername.isBlank()) {
             chatIdentifier = sharedUsername;
+            log.info("✅ Using username from picker: @{}", chatIdentifier);
         } else {
+            log.warn("⚠️ Username is null/blank from picker. Attempting Bot API resolution for ID {}", sharedChatId);
             chatIdentifier = resolveChatIdentifierWithFallback(sharedChatId);
         }
         log.info("Export via ChatShared: userId={}, target={}", userId, chatIdentifier);
