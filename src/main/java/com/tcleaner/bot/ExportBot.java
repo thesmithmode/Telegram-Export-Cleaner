@@ -36,6 +36,29 @@ import java.util.regex.Pattern;
 
 /**
  * Telegram-бот для запуска экспорта чатов (Версия 9.5.0).
+ *
+ * <p>Реализует интерактивный wizard для выбора способа идентификации чата:</p>
+ * <ul>
+ *   <li>Пересланное сообщение из целевого чата/канала (forward-based identification)</li>
+ *   <li>Ссылка вида https://t.me/username</li>
+ *   <li>Username или числовой ID</li>
+ * </ul>
+ *
+ * <p>После идентификации бот предлагает выбрать диапазон дат и запускает
+ * асинхронный export через {@link ExportJobProducer} в Redis-очередь.</p>
+ *
+ * <h3>Состояния сессии</h3>
+ * <p>Каждый пользователь имеет {@link UserSession} в памяти. Состояния:</p>
+ * <ul>
+ *   <li>IDLE — ожидание команды или сообщения</li>
+ *   <li>AWAITING_DATE_CHOICE — выбор способа ввода дат</li>
+ *   <li>AWAITING_FROM_DATE — ввод начальной даты</li>
+ *   <li>AWAITING_TO_DATE — ввод конечной даты</li>
+ * </ul>
+ *
+ * <h3>Защита</h3>
+ * <p>Защита от параллельных экспортов одного пользователя через Redis SET NX.
+ * Сессии автоматически очищаются через {@link #evictStaleSessions()} каждые 30 минут.</p>
  */
 @Component
 @ConditionalOnExpression("'${telegram.bot.token:}' != ''")
@@ -144,6 +167,18 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         }
     }
 
+    /**
+     * Обработка пересланного сообщения для определения целевого чата.
+     *
+     * <p>Извлекает информацию о чате-источнике из поля {@code forward_from_chat}
+     * и пытается получить username. Если username найден — автоматически запускает
+     * выбор диапазона дат. Если чат приватный — предлагает пользователю
+     * выбрать другой способ идентификации.</p>
+     *
+     * @param chatId  Telegram chat ID, куда вернуть ответ
+     * @param userId  Telegram user ID, сделавший запрос
+     * @param message объект Message с информацией о пересланном сообщении
+     */
     private void handleForwardedMessage(long chatId, long userId, Message message) {
         try {
             Chat forwardFromChat = message.getForwardFromChat();
@@ -185,6 +220,17 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         }
     }
 
+    /**
+     * Обработка текстового ввода в зависимости от текущего состояния сессии.
+     *
+     * <p>В режиме AWAITING_FROM_DATE: парсит дату в формате dd.MM.yyyy.
+     * В режиме AWAITING_TO_DATE: парсит дату в формате dd.MM.yyyy.
+     * В режиме IDLE: ищет username, ссылку или числовой ID.</p>
+     *
+     * @param chatId Telegram chat ID
+     * @param userId Telegram user ID
+     * @param text   введённый текст пользователя
+     */
     private void handleTextInput(long chatId, long userId, String text) {
         UserSession session = getSession(userId);
         switch (session.getState()) {
