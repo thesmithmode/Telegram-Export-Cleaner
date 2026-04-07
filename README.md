@@ -71,6 +71,13 @@ https://t.me/c/123456789/1
 - Основная очередь (`telegram_export`) — новые задачи
 - Приоритетная очередь (`telegram_export_express`) — задачи с закэшированными данными чата
 
+**Структура Java-модуля:**
+- `ExportBot` — приём команд от пользователя (только private chat)
+- `ExportJobProducer` — управление Redis-очередью и блокировками
+- `TelegramController` + `FileConversionService` — REST API конвертации
+- `ApiExceptionHandler` — глобальная обработка исключений
+- `TelegramExporter` — парсинг JSON (Tree Model и Streaming)
+
 ---
 
 ## Установка

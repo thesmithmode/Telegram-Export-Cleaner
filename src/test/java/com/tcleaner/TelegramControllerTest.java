@@ -1,6 +1,5 @@
 package com.tcleaner;
-import com.tcleaner.core.TelegramExporter;
-import com.tcleaner.core.TelegramExporterException;
+import com.tcleaner.api.FileConversionService;
 import com.tcleaner.api.TelegramController;
 import com.tcleaner.core.TelegramExporterInterface;
 
@@ -36,14 +35,20 @@ import static org.mockito.Mockito.mock;
 @DisplayName("TelegramController")
 class TelegramControllerTest {
 
-    private final TelegramExporter exporter = new TelegramExporter();
-    private final TelegramController controller = new TelegramController(exporter);
+    private final TelegramController controller;
+    private final TelegramExporterInterface mockExporter;
+
+    TelegramControllerTest() throws IOException {
+        mockExporter = mock(TelegramExporterInterface.class);
+        FileConversionService conversionService = new FileConversionService(mockExporter);
+        this.controller = new TelegramController(conversionService);
+    }
 
     @Test
-    @DisplayName("Конструктор принимает интерфейс TelegramExporterInterface")
-    void constructorAcceptsInterface() {
-        TelegramExporterInterface mockExporter = mock(TelegramExporterInterface.class);
-        TelegramController controllerWithMock = new TelegramController(mockExporter);
+    @DisplayName("Конструктор принимает FileConversionService")
+    void constructorAcceptsService() {
+        FileConversionService mockService = mock(FileConversionService.class);
+        TelegramController controllerWithMock = new TelegramController(mockService);
         assertThat(controllerWithMock).isNotNull();
     }
 
@@ -106,7 +111,7 @@ class TelegramControllerTest {
                 return 1;
             }).when(mockExporter).processFileStreaming(any(Path.class), any(), any(Writer.class));
 
-            TelegramController ctrl = new TelegramController(mockExporter);
+            TelegramController ctrl = new TelegramController(new FileConversionService(mockExporter));
             MockMultipartFile file = new MockMultipartFile(
                     "file", "result.json", "application/json",
                     "{\"messages\":[]}".getBytes());
@@ -128,7 +133,7 @@ class TelegramControllerTest {
                 return 2;
             }).when(mockExporter).processFileStreaming(any(Path.class), any(), any(Writer.class));
 
-            TelegramController ctrl = new TelegramController(mockExporter);
+            TelegramController ctrl = new TelegramController(new FileConversionService(mockExporter));
             MockMultipartFile file = new MockMultipartFile(
                     "file", "result.json", "application/json",
                     "{\"messages\":[]}".getBytes());
@@ -146,7 +151,7 @@ class TelegramControllerTest {
             doAnswer(inv -> 0)
                     .when(mockExporter).processFileStreaming(any(Path.class), any(), any(Writer.class));
 
-            TelegramController ctrl = new TelegramController(mockExporter);
+            TelegramController ctrl = new TelegramController(new FileConversionService(mockExporter));
             MockMultipartFile file = new MockMultipartFile(
                     "file", "result.json", "application/json",
                     "{\"messages\":[]}".getBytes());
@@ -162,10 +167,10 @@ class TelegramControllerTest {
         void exporterException_returns400WithErrorCode() throws IOException {
             TelegramExporterInterface mockExporter = mock(TelegramExporterInterface.class);
             doAnswer(inv -> {
-                throw new TelegramExporterException("INVALID_JSON", "Невалидный JSON");
+                throw new com.tcleaner.core.TelegramExporterException("INVALID_JSON", "Невалидный JSON");
             }).when(mockExporter).processFileStreaming(any(Path.class), any(), any(Writer.class));
 
-            TelegramController ctrl = new TelegramController(mockExporter);
+            TelegramController ctrl = new TelegramController(new FileConversionService(mockExporter));
             MockMultipartFile file = new MockMultipartFile(
                     "file", "result.json", "application/json",
                     "not json".getBytes());
