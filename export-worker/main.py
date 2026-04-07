@@ -58,17 +58,18 @@ class ExportWorker:
         self.jobs_failed = 0
 
     async def _check_cancel_and_save(
-        self, job: ExportRequest, messages: list[ExportedMessage], count: int
+        self, job: ExportRequest, all_messages: list[ExportedMessage], count: int
     ) -> bool:
-        """Check cancellation every 100 messages, save to cache if cancelled. Returns True if cancelled."""
+        """Check cancellation every 100 messages, save ALL accumulated messages to cache if cancelled.
+        Returns True if cancelled."""
         if count % 100 != 0:
             return False
         if not await self.is_cancelled(job.task_id):
             return False
         logger.info(f"🛑 Export {job.task_id} cancelled by user at {count} messages")
-        if self.message_cache and self.message_cache.enabled and messages:
-            await self.message_cache.store_messages(job.chat_id, messages)
-            logger.info(f"  Saved {count} messages to cache before cancel")
+        if self.message_cache and self.message_cache.enabled and all_messages:
+            await self.message_cache.store_messages(job.chat_id, all_messages)
+            logger.info(f"  Saved {len(all_messages)} messages to cache before cancel")
         await self.clear_active_export(job.user_id)
         return True
 

@@ -14,6 +14,7 @@ Java API endpoints used:
 import json
 import logging
 import asyncio
+import io
 import re
 from datetime import datetime
 from typing import Optional
@@ -269,8 +270,6 @@ class JavaBotClient:
         if settings.JAVA_API_KEY:
             headers["X-API-Key"] = settings.JAVA_API_KEY
 
-        # Build multipart form data
-        files = {"file": ("result.json", result_json_bytes, "application/json")}
         data = {}
         if from_date:
             data["startDate"] = from_date[:10]  # Java expects YYYY-MM-DD
@@ -282,6 +281,10 @@ class JavaBotClient:
             data["excludeKeywords"] = exclude_keywords
 
         while retry_count <= self.max_retries:
+            # Rebuild multipart form data on each retry — httpx consumes the
+            # payload on the first POST, so reusing the same dict would send
+            # an empty body on subsequent attempts.
+            files = {"file": ("result.json", io.BytesIO(result_json_bytes), "application/json")}
             try:
                 response = await self._http_client.post(
                     url,
