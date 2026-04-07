@@ -35,8 +35,7 @@ public class BotMessenger {
      * <p><strong>Потокобезопасен:</strong> может быть вызван из разных потоков одновременно.</p>
      *
      * @param chatId ID Telegram чата
-     * @param text   текст сообщения (не null)
-     * @throws NullPointerException если text == null
+     * @param text   текст сообщения
      */
     public void send(long chatId, String text) {
         SendMessage message = SendMessage.builder()

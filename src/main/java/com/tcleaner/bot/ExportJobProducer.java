@@ -278,6 +278,7 @@ public class ExportJobProducer {
      * Автоматически очищает протухшие ключи: если задача уже completed/failed
      * или отсутствует в очереди и не в processing — считается завершённой.
      *
+     * @param userId Telegram user ID пользователя
      * @return task_id активного экспорта или null
      */
     public String getActiveExport(long userId) {
@@ -322,6 +323,8 @@ public class ExportJobProducer {
      * Отправляет сигнал отмены экспорта.
      * Если задача ещё в очереди (не взята воркером) — удаляет её через LREM.
      * Если задача уже обрабатывается — устанавливает флаг cancel_export для воркера.
+     *
+     * @param userId Telegram user ID пользователя
      */
     public void cancelExport(long userId) {
         String taskId = redis.opsForValue().get(ACTIVE_EXPORT_PREFIX + userId);

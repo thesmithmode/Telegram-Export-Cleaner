@@ -13,20 +13,20 @@ import java.util.List;
  * - italic → *text*
  * - strikethrough → ~~text~~
  * - code → `text`
- * - pre → ```\ntext\n```
- * - link → text
+ * - pre → ```text``` или ```language\ntext\n``` (если указан язык)
+ * - link → text (как есть)
  * - text_link → [text](href)
  * - mention → @username (если text уже начинается с @, не дублирует символ)
  * - mention_name → text (именованное упоминание)
- * - hashtag → #hashtag
+ * - hashtag → #hashtag (если text уже начинается с #, не дублирует символ)
  * - cashtag → $symbol (если text не начинается с $, добавляет символ)
  * - email → email
  * - phone → phone
  * - spoiler → ||text||
  * - underline → <u>text</u>
  * - blockquote → > text
- * - custom_emoji → [emoji_ID]
- * - bot_command → /command
+ * - custom_emoji → [emoji_document_id]
+ * - bot_command → text (содержит "/" в исходном JSON)
  * - bank_card → [CARD] (карточные номера маскируются)
  */
 public class MarkdownParser {
