@@ -64,7 +64,7 @@ class SecurityConfigTest {
         // Если ключ не настроен, ApiKeyFilter пропускает всё (см. ApiKeyFilter.java:31)
         mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
                 .multipart("/api/convert")
-                .file(new org.springframework.mock.web.MockMultipartFile("file", "test.json", "application/json", "[]".getBytes())))
+                .file(new org.springframework.mock.web.MockMultipartFile("file", "test.json", "application/json", "{\"messages\": []}".getBytes())))
             .andExpect(status().isOk()); // OK потому что запрос корректный и api.key пустой (не требуется)
     }
 }
