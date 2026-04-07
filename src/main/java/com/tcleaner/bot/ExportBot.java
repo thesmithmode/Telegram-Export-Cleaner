@@ -39,6 +39,7 @@ import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -229,9 +230,9 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
                     id, username, chat.getTitle(), chat.getType());
 
                 if (username != null && !username.isBlank()) {
-                    // Save to Redis for future requests
+                    // Save to Redis for future requests (30 days TTL)
                     try {
-                        redis.opsForValue().set(CANONICAL_PREFIX + rawId, username, Duration.ofDays(30));
+                        redis.opsForValue().set(CANONICAL_PREFIX + rawId, username, 30, TimeUnit.DAYS);
                     } catch (Exception e) {
                         log.debug("Failed to cache username: {}", e.getMessage());
                     }
