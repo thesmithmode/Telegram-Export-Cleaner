@@ -53,6 +53,9 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     private static final Pattern TME_LINK_PATTERN =
             Pattern.compile("https?://t\\.me/([a-zA-Z][a-zA-Z0-9_]{3,})");
 
+    private static final Pattern USERNAME_PATTERN =
+            Pattern.compile("^[a-zA-Z][a-zA-Z0-9_]{3,}$");
+
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("dd.MM.yyyy");
 
     private static final String HELP_TEXT = """
@@ -330,8 +333,16 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     static String extractUsername(String input) {
         Matcher matcher = TME_LINK_PATTERN.matcher(input);
         if (matcher.find()) return matcher.group(1);
-        if (input.startsWith("@")) return input.substring(1);
-        try { Long.parseLong(input); return null; } catch (Exception e) { return input; }
+        if (input.startsWith("@")) {
+            String username = input.substring(1);
+            return USERNAME_PATTERN.matcher(username).matches() ? username : null;
+        }
+        try {
+            Long.parseLong(input);
+            return null;
+        } catch (NumberFormatException e) {
+            return USERNAME_PATTERN.matcher(input).matches() ? input : null;
+        }
     }
 
     static LocalDate parseDate(String text) {

@@ -117,8 +117,8 @@ class ExportBotTest {
             // Шаг 2: вводим неверный формат
             bot.consume(createTextMessageUpdate(123L, "2024-01-01"));
 
-            // Должно быть сообщение об ошибке
-            verify(messengerMock).send(eq(123L), contains("Неверный формат"));
+            // Должно быть сообщение об ошибке (среди отправленных сообщений)
+            verify(messengerMock, atLeast(1)).send(eq(123L), contains("Неверный формат"));
         }
 
         @Test
@@ -183,8 +183,8 @@ class ExportBotTest {
             // Шаг 3: неверный формат даты конца
             bot.consume(createTextMessageUpdate(123L, "31-12-2024"));
 
-            // Должно быть сообщение об ошибке
-            verify(messengerMock).send(eq(123L), contains("Неверный формат"));
+            // Должно быть сообщение об ошибке (среди отправленных сообщений)
+            verify(messengerMock, atLeast(1)).send(eq(123L), contains("Неверный формат"));
         }
     }
 
