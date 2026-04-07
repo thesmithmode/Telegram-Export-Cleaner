@@ -11,7 +11,6 @@ import org.telegram.telegrambots.longpolling.interfaces.LongPollingUpdateConsume
 import org.telegram.telegrambots.longpolling.starter.SpringLongPollingBot;
 import org.telegram.telegrambots.longpolling.util.LongPollingSingleThreadUpdateConsumer;
 import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
-import org.telegram.telegrambots.meta.api.methods.groupadministration.GetChat;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText;
 import org.telegram.telegrambots.meta.api.objects.chat.Chat;
@@ -19,13 +18,10 @@ import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
 import org.telegram.telegrambots.meta.api.objects.message.Message;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardRow;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButton;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButtonRequestChat;
-import org.telegram.telegrambots.meta.api.objects.ChatShared;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
+import org.telegram.telegrambots.meta.api.objects.message.MessageOriginChannel;
+import org.telegram.telegrambots.meta.api.objects.message.MessageOriginChat;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.telegram.telegrambots.meta.generics.TelegramClient;
 
@@ -36,10 +32,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -57,18 +50,14 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
 
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("dd.MM.yyyy");
 
-    static final String PICKER_REQUEST_ID_GROUP = "1";
-    static final String PICKER_REQUEST_ID_CHANNEL = "2";
-
-    private static final String CANONICAL_PREFIX = "canonical:";
 
     private static final String HELP_TEXT = """
             Этот бот экспортирует историю Telegram-чата и отправляет очищенный текст.
 
-            Нажмите кнопку ниже чтобы выбрать группу или канал, или введите вручную:
-            • Ссылку: https://t.me/durov
-            • Username: @durov или durov
-            • ID чата: -1001234567890
+            Выберите способ:
+            • Перешлите любое сообщение из нужного чата/канала
+            • Или введите ссылку: https://t.me/durov
+            • Или напишите username: @durov или durov
 
             Для приватных чатов аккаунт должен быть их участником.
             """;
@@ -137,9 +126,9 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         long chatId = message.getChatId();
         long userId = message.getFrom().getId();
 
-        ChatShared chatShared = message.getChatShared();
-        if (chatShared != null) {
-            handleChatShared(chatId, userId, chatShared);
+        // Handle forwarded messages (for chat identification via MessageOrigin)
+        if (message.getForwardOrigin() != null) {
+            handleForwardedMessage(chatId, userId, message);
             return;
         }
 
@@ -157,23 +146,42 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         }
     }
 
-    private void handleChatShared(long chatId, long userId, ChatShared chatShared) {
-        long sharedChatId = chatShared.getChatId();
-        String sharedUsername = chatShared.getUsername();
+    private void handleForwardedMessage(long chatId, long userId, Message message) {
+        try {
+            var origin = message.getForwardOrigin();
+            String username = null;
+            String chatTitle = null;
 
-        log.info("📢 ChatShared received: chatId={}, username={}, title={}",
-                 sharedChatId, sharedUsername, chatShared.getTitle());
+            if (origin instanceof MessageOriginChannel originChannel) {
+                Chat chat = originChannel.getChat();
+                username = chat.getUserName();
+                chatTitle = chat.getTitle();
+                log.info("📩 Forward from channel: title='{}', username='{}', id={}",
+                         chatTitle, username, chat.getId());
+            } else if (origin instanceof MessageOriginChat originChat) {
+                Chat senderChat = originChat.getSenderChat();
+                username = senderChat.getUserName();
+                chatTitle = senderChat.getTitle();
+                log.info("📩 Forward from group: title='{}', username='{}', id={}",
+                         chatTitle, username, senderChat.getId());
+            } else {
+                log.warn("Unsupported forward origin type: {}", origin.getClass().getSimpleName());
+                sendText(chatId, "⚠️ Только пересылки из публичных групп/каналов поддерживаются.");
+                return;
+            }
 
-        String chatIdentifier;
-        if (sharedUsername != null && !sharedUsername.isBlank()) {
-            chatIdentifier = sharedUsername;
-            log.info("✅ Using username from picker: @{}", chatIdentifier);
-        } else {
-            log.warn("⚠️ Username is null/blank from picker. Attempting Bot API resolution for ID {}", sharedChatId);
-            chatIdentifier = resolveChatIdentifierWithFallback(sharedChatId);
+            if (username != null && !username.isBlank()) {
+                log.info("✅ Using username from forward: @{}", username);
+                handleExportDirect(chatId, userId, username);
+            } else {
+                log.warn("Перешланный чат не имеет публичного username: {}", chatTitle);
+                sendText(chatId, "⚠️ Чат \"" + chatTitle + "\" приватный или не имеет username. " +
+                                 "Перешлите сообщение из публичного чата.");
+            }
+        } catch (Exception e) {
+            log.error("Error processing forwarded message: {}", e.getMessage(), e);
+            sendText(chatId, "❌ Ошибка при обработке пересланного сообщения.");
         }
-        log.info("Export via ChatShared: userId={}, target={}", userId, chatIdentifier);
-        handleExportDirect(chatId, userId, chatIdentifier);
     }
 
     private void handleMessageText(long chatId, long userId, String text) {
@@ -185,64 +193,6 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         } else {
             handleTextInput(chatId, userId, text);
         }
-    }
-
-    private String resolveChatIdentifierWithFallback(long rawId) {
-        log.info("Resolving chat identifier for rawId={}", rawId);
-
-        // Check Redis cache first
-        try {
-            String cached = redis.opsForValue().get(CANONICAL_PREFIX + rawId);
-            if (cached != null && !cached.isBlank()) {
-                log.info("Found cached username in Redis: {} → {}", rawId, cached);
-                return cached;
-            }
-        } catch (Exception e) {
-            log.debug("Redis lookup failed: {}", e.getMessage());
-        }
-
-        // Try GetChat with different ID formats
-        List<String> variants = new ArrayList<>();
-        variants.add(String.valueOf(rawId));
-
-        if (rawId > 0) {
-            variants.add("-100" + rawId);
-        } else {
-            String s = String.valueOf(rawId);
-            if (s.startsWith("-100")) {
-                variants.add(s.substring(4));  // Try without -100 prefix
-            }
-        }
-
-        for (String id : variants) {
-            try {
-                Chat chat = telegramClient.execute(GetChat.builder().chatId(id).build());
-
-                // SDK 9.5.0: use reflection to get username (method may be getUserName or getUsername)
-                String username = getUsernameFromChat(chat);
-
-                log.info("getChat({}): username='{}', title='{}', type='{}'",
-                    id, username, chat.getTitle(), chat.getType());
-
-                if (username != null && !username.isBlank()) {
-                    // Save to Redis for future requests (30 days TTL)
-                    try {
-                        redis.opsForValue().set(CANONICAL_PREFIX + rawId, username, 30, TimeUnit.DAYS);
-                    } catch (Exception e) {
-                        log.debug("Failed to cache username: {}", e.getMessage());
-                    }
-                    return username;
-                }
-            } catch (TelegramApiException e) {
-                log.warn("getChat({}) failed: {}", id, e.getMessage());
-            }
-        }
-
-        // Could not resolve to username
-        log.error("⚠️ Failed to resolve chat {} to username via GetChat. " +
-                "Picker may not have returned username and Bot API cannot resolve this ID. " +
-                "This chat is private or worker account needs access. Falling back to numeric ID.", rawId);
-        return String.valueOf(rawId);
     }
 
     private void handleTextInput(long chatId, long userId, String text) {
@@ -484,45 +434,10 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     }
 
     private void sendMainMenu(long chatId, String text) {
-        KeyboardButtonRequestChat groupRequest = KeyboardButtonRequestChat.builder()
-                .requestId(PICKER_REQUEST_ID_GROUP)
-                .chatIsChannel(false)
-                .requestUsername(Boolean.TRUE)
-                .build();
-
-        KeyboardButton groupButton = KeyboardButton.builder()
-                .text("💬 Выбрать группу")
-                .requestChat(groupRequest)
-                .build();
-
-        KeyboardButtonRequestChat channelRequest = KeyboardButtonRequestChat.builder()
-                .requestId(PICKER_REQUEST_ID_CHANNEL)
-                .chatIsChannel(true)
-                .requestUsername(Boolean.TRUE)
-                .build();
-
-        KeyboardButton channelButton = KeyboardButton.builder()
-                .text("📢 Выбрать канал")
-                .requestChat(channelRequest)
-                .build();
-
-        KeyboardRow groupRow = new KeyboardRow();
-        groupRow.add(groupButton);
-        
-        KeyboardRow channelRow = new KeyboardRow();
-        channelRow.add(channelButton);
-
-        ReplyKeyboardMarkup markup = ReplyKeyboardMarkup.builder()
-                .keyboardRow(groupRow)
-                .keyboardRow(channelRow)
-                .resizeKeyboard(true)
-                .oneTimeKeyboard(true)
-                .build();
-
+        // No picker buttons needed - instructions in HELP_TEXT guide users to forward messages
         SendMessage msg = SendMessage.builder()
                 .chatId(String.valueOf(chatId))
                 .text(text)
-                .replyMarkup(markup)
                 .build();
         try { telegramClient.execute(msg); } catch (Exception e) { log.error("Menu fail: {}", e.getMessage()); }
     }
@@ -679,13 +594,5 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
 
     private void answerCallback(String id) {
         try { telegramClient.execute(AnswerCallbackQuery.builder().callbackQueryId(id).build()); } catch (Exception ignored) {}
-    }
-
-    /**
-     * Extract username from Chat object.
-     * Returns the username if available, null otherwise.
-     */
-    private String getUsernameFromChat(Chat chat) {
-        return chat.getUserName();
     }
 }
