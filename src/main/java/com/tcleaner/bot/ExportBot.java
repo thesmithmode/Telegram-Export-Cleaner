@@ -23,12 +23,12 @@ import java.util.regex.Pattern;
 /**
  * Telegram-бот для запуска экспорта чатов.
  *
- * <p>Принимает текстовые команды: username (@channel), ссылку (https://t.me/channel)
- * или числовой ID. Поэтапный диалог для выбора диапазона дат.</p>
+ * <p>Принимает только два формата ввода: username (@channel) и ссылку (https://t.me/channel).
+ * Поэтапный диалог для выбора диапазона дат.</p>
  *
  * <h3>Состояния сессии</h3>
  * <ul>
- *   <li>IDLE — ожидание username, ссылки или ID чата</li>
+ *   <li>IDLE — ожидание username или ссылки</li>
  *   <li>AWAITING_FROM_DATE — ввод начальной даты (дд.мм.гггг) или /all</li>
  *   <li>AWAITING_TO_DATE — ввод конечной даты (дд.мм.гггг) или /today</li>
  * </ul>
@@ -37,9 +37,11 @@ import java.util.regex.Pattern;
  * <ul>
  *   <li>/start, /help — справка</li>
  *   <li>/cancel — отмена активного экспорта</li>
- *   <li>@username, https://t.me/username, числовой ID — запуск диалога</li>
+ *   <li>@username, https://t.me/username — запуск диалога</li>
  *   <li>/all, /today — быстрые переходы в диалоге дат</li>
  * </ul>
+ *
+ * <p>Бот работает только в личных сообщениях (private chat). Сообщения из групп игнорируются.</p>
  *
  * <p>Защита от параллельных экспортов через Redis SET NX.
  * Сессии автоматически очищаются через {@link #evictStaleSessions()} каждые 30 минут.</p>
@@ -54,7 +56,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
             Pattern.compile("https?://t\\.me/([a-zA-Z][a-zA-Z0-9_]{3,})");
 
     private static final Pattern USERNAME_PATTERN =
-            Pattern.compile("^[a-zA-Z][a-zA-Z0-9_]{3,}$");
+            Pattern.compile("^@([a-zA-Z][a-zA-Z0-9_]{3,})$");
 
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("dd.MM.yyyy");
 
@@ -62,9 +64,8 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
             Этот бот экспортирует историю Telegram-чата и отправляет очищенный текст.
 
             Отправьте одно из:
-            • username: @durov или durov
+            • username: @durov
             • ссылка: https://t.me/durov
-            • числовой ID: -123456789
 
             Для приватных чатов аккаунт должен быть их участником.
 
@@ -172,18 +173,12 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
 
         String identifier = extractUsername(input);
         if (identifier == null) {
-            // Попытка распарсить как числовой ID
-            try {
-                identifier = String.valueOf(Long.parseLong(input));
-            } catch (NumberFormatException e) {
-                messenger.send(chatId, "❌ Неверный формат. Отправьте ссылку, @username или числовой ID.");
-                return;
-            }
+            messenger.send(chatId, "❌ Неверный формат. Отправьте ссылку (https://t.me/channel) или @username.");
+            return;
         }
 
         session.setChatId(identifier);
-        session.setChatDisplay(identifier.startsWith("@") ? identifier :
-                identifier.matches("-?\\d+") ? identifier : "@" + identifier);
+        session.setChatDisplay("@" + identifier);
 
         // Переходим в режим выбора дат
         session.setState(UserSession.State.AWAITING_FROM_DATE);
@@ -331,18 +326,13 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     }
 
     static String extractUsername(String input) {
+        // Пробуем как ссылку https://t.me/username
         Matcher matcher = TME_LINK_PATTERN.matcher(input);
         if (matcher.find()) return matcher.group(1);
-        if (input.startsWith("@")) {
-            String username = input.substring(1);
-            return USERNAME_PATTERN.matcher(username).matches() ? username : null;
-        }
-        try {
-            Long.parseLong(input);
-            return null;
-        } catch (NumberFormatException e) {
-            return USERNAME_PATTERN.matcher(input).matches() ? input : null;
-        }
+        // Пробуем как @username или username (без @)
+        Matcher usernameMatcher = USERNAME_PATTERN.matcher(input);
+        if (usernameMatcher.matches()) return usernameMatcher.group(1);
+        return null;
     }
 
     static LocalDate parseDate(String text) {

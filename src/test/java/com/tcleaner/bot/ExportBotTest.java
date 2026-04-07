@@ -45,15 +45,6 @@ class ExportBotTest {
     class DirectChatIdentifierInput {
 
         @Test
-        @DisplayName("Пользователь может ввести username напрямую")
-        void testDirectUsernameInput() {
-            bot.consume(createTextMessageUpdate(123L, "public_channel"));
-
-            // Должно быть запрос даты (AWAITING_FROM_DATE)
-            verify(messengerMock).send(eq(123L), contains("Введите дату начала"));
-        }
-
-        @Test
         @DisplayName("Пользователь может ввести ссылку t.me")
         void testDirectLinkInput() {
             bot.consume(createTextMessageUpdate(123L, "https://t.me/public_channel"));
@@ -72,12 +63,21 @@ class ExportBotTest {
         }
 
         @Test
-        @DisplayName("Пользователь может ввести числовой ID")
-        void testDirectNumericIdInput() {
+        @DisplayName("Числовой ID отклоняется")
+        void testNumericIdRejected() {
             bot.consume(createTextMessageUpdate(123L, "-1001234567890"));
 
-            // Должно быть запрос даты
-            verify(messengerMock).send(eq(123L), contains("Введите дату начала"));
+            // Должно быть сообщение об ошибке
+            verify(messengerMock).send(eq(123L), contains("Неверный формат"));
+        }
+
+        @Test
+        @DisplayName("Username без @ отклоняется")
+        void testUsernameWithoutAtRejected() {
+            bot.consume(createTextMessageUpdate(123L, "public_channel"));
+
+            // Должно быть сообщение об ошибке
+            verify(messengerMock).send(eq(123L), contains("Неверный формат"));
         }
 
         @Test
@@ -98,7 +98,7 @@ class ExportBotTest {
         @DisplayName("Пользователь может ввести дату начала дд.мм.гггг")
         void testFromDateValidFormat() {
             // Шаг 1: выбираем чат
-            bot.consume(createTextMessageUpdate(123L, "test_chat"));
+            bot.consume(createTextMessageUpdate(123L, "@test_chat"));
             verify(messengerMock).send(eq(123L), contains("Введите дату начала"));
 
             // Шаг 2: вводим дату
@@ -112,7 +112,7 @@ class ExportBotTest {
         @DisplayName("Неверный формат даты отклоняется")
         void testFromDateInvalidFormat() {
             // Шаг 1: выбираем чат
-            bot.consume(createTextMessageUpdate(123L, "test_chat"));
+            bot.consume(createTextMessageUpdate(123L, "@test_chat"));
 
             // Шаг 2: вводим неверный формат
             bot.consume(createTextMessageUpdate(123L, "2024-01-01"));
@@ -125,7 +125,7 @@ class ExportBotTest {
         @DisplayName("/all переходит прямо в AWAITING_TO_DATE")
         void testFromDateAllCommand() {
             // Шаг 1: выбираем чат
-            bot.consume(createTextMessageUpdate(123L, "test_chat"));
+            bot.consume(createTextMessageUpdate(123L, "@test_chat"));
 
             // Шаг 2: вводим /all (весь чат)
             bot.consume(createTextMessageUpdate(123L, "/all"));
@@ -139,7 +139,7 @@ class ExportBotTest {
         @DisplayName("/today в AWAITING_TO_DATE запускает экспорт")
         void testToDateTodayCommand() {
             // Шаг 1: выбираем чат
-            bot.consume(createTextMessageUpdate(123L, "test_chat"));
+            bot.consume(createTextMessageUpdate(123L, "@test_chat"));
 
             // Шаг 2: вводим /all
             bot.consume(createTextMessageUpdate(123L, "/all"));
@@ -156,7 +156,7 @@ class ExportBotTest {
         @DisplayName("Полный flow: username → от даты → до даты → экспорт")
         void testCompleteDateRangeFlow() {
             // Шаг 1: username
-            bot.consume(createTextMessageUpdate(123L, "my_channel"));
+            bot.consume(createTextMessageUpdate(123L, "@my_channel"));
 
             // Шаг 2: дата начала
             bot.consume(createTextMessageUpdate(123L, "01.01.2024"));
@@ -176,7 +176,7 @@ class ExportBotTest {
         @DisplayName("Неверная дата конца отклоняется")
         void testToDateInvalidFormat() {
             // Шаг 1: username
-            bot.consume(createTextMessageUpdate(123L, "my_channel"));
+            bot.consume(createTextMessageUpdate(123L, "@my_channel"));
 
             // Шаг 2: дата начала
             bot.consume(createTextMessageUpdate(123L, "01.01.2024"));
@@ -221,7 +221,7 @@ class ExportBotTest {
         void testDuplicateExportBlocked() {
             when(jobProducerMock.getActiveExport(123L)).thenReturn("export_existing");
 
-            bot.consume(createTextMessageUpdate(123L, "my_channel"));
+            bot.consume(createTextMessageUpdate(123L, "@my_channel"));
 
             verify(messengerMock).send(eq(123L), contains("уже есть активный экспорт"));
             verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), any(), any(), any());
@@ -233,7 +233,7 @@ class ExportBotTest {
             when(jobProducerMock.enqueue(anyLong(), anyLong(), any(String.class), any(), any()))
                     .thenThrow(new IllegalStateException("Экспорт уже активен"));
 
-            bot.consume(createTextMessageUpdate(123L, "my_channel"));
+            bot.consume(createTextMessageUpdate(123L, "@my_channel"));
             bot.consume(createTextMessageUpdate(123L, "/all"));
             bot.consume(createTextMessageUpdate(123L, "/today"));
 
@@ -249,13 +249,13 @@ class ExportBotTest {
         @DisplayName("Сессия сбрасывается в IDLE после успешного экспорта")
         void testSessionResetAfterExport() {
             // Запускаем полный flow
-            bot.consume(createTextMessageUpdate(123L, "my_channel"));
+            bot.consume(createTextMessageUpdate(123L, "@my_channel"));
             bot.consume(createTextMessageUpdate(123L, "/all"));
             bot.consume(createTextMessageUpdate(123L, "/today"));
 
             // После экспорта сессия должна быть сброшена
             // Проверим это следующим сообщением от пользователя
-            bot.consume(createTextMessageUpdate(123L, "another_channel"));
+            bot.consume(createTextMessageUpdate(123L, "@another_channel"));
 
             // Если сессия была сброшена, то это будет IDLE → AWAITING_FROM_DATE
             verify(messengerMock, times(4)).send(eq(123L), any());
