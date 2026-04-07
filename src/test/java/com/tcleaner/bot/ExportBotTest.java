@@ -261,7 +261,6 @@ class ExportBotTest {
 
             // Выбираем чат и переходим в date range режим
             bot.consume(createTextMessageUpdate(123L, "test_chat"));
-            bot.consume(chatSelected);
 
             CallbackQuery cbDateRange = createCallbackQuery(123L, "date_range");
             bot.consume(createCallbackUpdate(cbDateRange));
@@ -375,7 +374,6 @@ class ExportBotTest {
                     .thenThrow(new IllegalStateException("Export already active"));
 
             bot.consume(createTextMessageUpdate(123L, "test_chat"));
-            bot.consume(chatSelected);
 
             CallbackQuery cbExportAll = createCallbackQuery(123L, "export_all");
             bot.consume(createCallbackUpdate(cbExportAll));
