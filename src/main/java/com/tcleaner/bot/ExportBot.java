@@ -213,18 +213,8 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
             try {
                 Chat chat = telegramClient.execute(GetChat.builder().chatId(id).build());
 
-                // SDK 9.5.0: try both getUserName() and getUsername() methods
-                String username = null;
-                try {
-                    username = chat.getUserName();
-                } catch (Exception e1) {
-                    log.debug("getUserName() failed, trying getUsername()");
-                    try {
-                        username = chat.getUsername();
-                    } catch (Exception e2) {
-                        log.debug("getUsername() also failed");
-                    }
-                }
+                // SDK 9.5.0: use reflection to get username (method may be getUserName or getUsername)
+                String username = getUsernameFromChat(chat);
 
                 log.info("getChat({}): username='{}', title='{}', type='{}'",
                     id, username, chat.getTitle(), chat.getType());
@@ -684,5 +674,13 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
 
     private void answerCallback(String id) {
         try { telegramClient.execute(AnswerCallbackQuery.builder().callbackQueryId(id).build()); } catch (Exception ignored) {}
+    }
+
+    /**
+     * Extract username from Chat object.
+     * Returns the username if available, null otherwise.
+     */
+    private String getUsernameFromChat(Chat chat) {
+        return chat.getUserName();
     }
 }
