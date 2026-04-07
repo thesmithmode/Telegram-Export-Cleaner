@@ -48,6 +48,8 @@ class JavaBotClient:
         chat_title: Optional[str] = None,
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
+        keywords: Optional[str] = None,
+        exclude_keywords: Optional[str] = None,
     ) -> bool:
         """
         Process export result:
@@ -76,7 +78,13 @@ class JavaBotClient:
         result_bytes = json.dumps(result_json, ensure_ascii=False).encode("utf-8")
 
         # Upload to Java /api/convert and get cleaned text
-        cleaned_text = await self._upload_to_java(result_bytes)
+        cleaned_text = await self._upload_to_java(
+            result_bytes, 
+            from_date=from_date, 
+            to_date=to_date,
+            keywords=keywords,
+            exclude_keywords=exclude_keywords
+        )
 
         if cleaned_text is None:
             logger.error(f"❌ Java API processing failed for task {task_id}")
@@ -240,7 +248,14 @@ class JavaBotClient:
 
         return transformed if transformed else entities
 
-    async def _upload_to_java(self, result_json_bytes: bytes) -> Optional[str]:
+    async def _upload_to_java(
+        self, 
+        result_json_bytes: bytes,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+        keywords: Optional[str] = None,
+        exclude_keywords: Optional[str] = None,
+    ) -> Optional[str]:
         """
         POST result.json to /api/convert as multipart, return cleaned text.
 
@@ -250,11 +265,29 @@ class JavaBotClient:
         retry_count = 0
         base_delay = settings.RETRY_BASE_DELAY
 
+        headers = {}
+        if settings.JAVA_API_KEY:
+            headers["X-API-Key"] = settings.JAVA_API_KEY
+
+        # Build multipart form data
+        files = {"file": ("result.json", result_json_bytes, "application/json")}
+        data = {}
+        if from_date:
+            data["startDate"] = from_date[:10]  # Java expects YYYY-MM-DD
+        if to_date:
+            data["endDate"] = to_date[:10]      # Java expects YYYY-MM-DD
+        if keywords:
+            data["keywords"] = keywords
+        if exclude_keywords:
+            data["excludeKeywords"] = exclude_keywords
+
         while retry_count <= self.max_retries:
             try:
                 response = await self._http_client.post(
                     url,
-                    files={"file": ("result.json", result_json_bytes, "application/json")},
+                    files=files,
+                    data=data,
+                    headers=headers,
                 )
 
                 if response.status_code == 200:

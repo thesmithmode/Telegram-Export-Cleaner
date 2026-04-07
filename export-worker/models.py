@@ -74,6 +74,8 @@ class ExportRequest(BaseModel):
     offset_id: int = Field(default=0, description="Start from message ID")
     from_date: Optional[str] = Field(None, description="ISO date filter (YYYY-MM-DD, YYYY-MM-DDTHH:MM or YYYY-MM-DDTHH:MM:SS)")
     to_date: Optional[str] = Field(None, description="ISO date filter (YYYY-MM-DD, YYYY-MM-DDTHH:MM or YYYY-MM-DDTHH:MM:SS)")
+    keywords: Optional[str] = Field(None, description="Comma-separated keywords to include")
+    exclude_keywords: Optional[str] = Field(None, description="Comma-separated keywords to exclude")
 
     @field_validator("from_date", "to_date", mode="before")
     @classmethod
