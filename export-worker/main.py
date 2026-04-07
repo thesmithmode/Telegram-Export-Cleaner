@@ -378,6 +378,15 @@ class ExportWorker:
                 await self.java_client._notify_user_failure(
                     job.user_chat_id, job.task_id, str(e)
                 )
+            # Всегда отправляем ответ об ошибке через Java API
+            if self.java_client:
+                await self.java_client.send_response(
+                    task_id=job.task_id,
+                    status="failed",
+                    messages=[],
+                    error=str(e),
+                    user_chat_id=job.user_chat_id,
+                )
             await self.queue_consumer.mark_job_failed(job.task_id, str(e))
             self.jobs_failed += 1
             self.log_memory_usage("JOB_ERROR")

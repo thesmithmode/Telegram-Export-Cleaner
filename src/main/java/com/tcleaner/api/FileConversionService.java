@@ -10,6 +10,7 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import java.io.BufferedWriter;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
@@ -49,11 +50,19 @@ public class FileConversionService {
         try {
             file.transferTo(inputFile.toFile());
 
+            // Execute export BEFORE committing response so exceptions can be mapped
+            // to proper HTTP status codes by the controller's try-catch.
+            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+            try (OutputStreamWriter writer = new OutputStreamWriter(buffer, StandardCharsets.UTF_8)) {
+                exporter.processFileStreaming(inputFile, filter, writer);
+                writer.flush();
+            }
+            final byte[] content = buffer.toByteArray();
+
             StreamingResponseBody body = outputStream -> {
-                try (BufferedWriter writer = new BufferedWriter(
-                        new OutputStreamWriter(outputStream, StandardCharsets.UTF_8))) {
-                    exporter.processFileStreaming(inputFile, filter, writer);
-                    writer.flush();
+                try {
+                    outputStream.write(content);
+                    outputStream.flush();
                 } finally {
                     cleanupTempFile(inputFile);
                 }

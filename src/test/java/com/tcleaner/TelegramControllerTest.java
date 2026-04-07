@@ -246,11 +246,14 @@ class TelegramControllerTest {
         @Test
         @DisplayName("Реальный экспорт: одно сообщение обрабатывается корректно")
         void realExport_singleMessage() throws Exception {
+            TelegramExporter realExporter = new TelegramExporter();
+            TelegramController ctrl = new TelegramController(new FileConversionService(realExporter));
+
             MockMultipartFile file = new MockMultipartFile(
                     "file", "result.json", "application/json",
                     "{\"messages\":[{\"id\":1,\"type\":\"message\",\"date\":\"2025-06-24T10:00:00\",\"text\":\"Hello\"}]}".getBytes());
 
-            ResponseEntity<?> response = controller.convert(file, null, null, null, null);
+            ResponseEntity<?> response = ctrl.convert(file, null, null, null, null);
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat(executeStreamingBody(response)).isEqualTo("20250624 Hello\n");
