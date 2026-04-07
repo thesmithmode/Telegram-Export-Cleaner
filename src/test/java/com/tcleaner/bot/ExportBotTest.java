@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.telegram.telegrambots.meta.api.objects.chat.Chat;
+import org.telegram.telegrambots.meta.api.objects.ChatShared;
 import org.telegram.telegrambots.meta.api.objects.message.Message;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.User;
@@ -14,6 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.*;
@@ -26,7 +28,7 @@ class ExportBotTest {
     private ExportBot bot;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         jobProducerMock = mock(ExportJobProducer.class);
         redisMock = mock(StringRedisTemplate.class);
         messengerMock = mock(BotMessenger.class);
@@ -42,6 +44,45 @@ class ExportBotTest {
         when(jobProducerMock.hasActiveProcessingJob()).thenReturn(false);
 
         bot = new ExportBot("token", jobProducerMock, redisMock, messengerMock);
+    }
+
+    @Nested
+    @DisplayName("Выбор чата через встроенный Telegram механизм (ChatShared)")
+    class ChatSharedHandling {
+
+        @Test
+        @DisplayName("ChatShared с username запускает диалог дат")
+        void testChatSharedWithUsername() {
+            Update update = new Update();
+            update.setUpdateId(1);
+
+            Message message = new Message();
+            message.setMessageId(1);
+
+            Chat chat = new Chat();
+            chat.setId(123L);
+            chat.setType("private");
+            message.setChat(chat);
+
+            User user = new User();
+            user.setId(456L);
+            user.setIsBot(false);
+            message.setFrom(user);
+
+            ChatShared chatShared = new ChatShared();
+            chatShared.setRequestId(1);
+            chatShared.setChatId(-1001234567890L);
+            chatShared.setUsername("test_channel");
+            chatShared.setTitle("Test Channel");
+            message.setChatShared(chatShared);
+
+            update.setMessage(message);
+
+            bot.consume(update);
+
+            // Должна быть запрос даты для выбранного чата
+            verify(messengerMock).send(123L, contains("Введите дату начала"));
+        }
     }
 
     @Nested
@@ -329,9 +370,5 @@ class ExportBotTest {
 
         update.setMessage(message);
         return update;
-    }
-
-    private String contains(String substring) {
-        return org.mockito.ArgumentMatchers.contains(substring);
     }
 }
