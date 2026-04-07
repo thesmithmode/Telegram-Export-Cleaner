@@ -473,7 +473,9 @@ class ExportWorker:
 
         # Fetch each missing date range from Telegram
         fresh_messages: list[ExportedMessage] = []
-        fetched_count = len(cached_messages)  # Считаем cached в прогресс
+        fetched_count = len(cached_messages)
+        # all_fetched accumulates ALL messages for cancel-save
+        all_fetched: list[ExportedMessage] = list(cached_messages)
         for gap_from, gap_to in missing:
             gap_from_dt = datetime.fromisoformat(gap_from + "T00:00:00+00:00")
             gap_to_dt = datetime.fromisoformat(gap_to + "T23:59:59+00:00")
@@ -489,8 +491,9 @@ class ExportWorker:
                     to_date=gap_to_dt,
                 ):
                     gap_msgs.append(msg)
+                    all_fetched.append(msg)
                     fetched_count += 1
-                    if await self._check_cancel_and_save(job, gap_msgs, fetched_count):
+                    if await self._check_cancel_and_save(job, all_fetched, fetched_count):
                         return None
                     if tracker:
                         await tracker.track(fetched_count)
@@ -548,6 +551,8 @@ class ExportWorker:
         fetched_count = 0
 
         # Step 1: fetch messages NEWER than cache
+        # all_fetched accumulates ALL messages across all fetch phases for cancel-save
+        all_fetched: list[ExportedMessage] = list(fresh_messages)
         try:
             async for msg in self.telegram_client.get_chat_history(
                 chat_id=job.chat_id,
@@ -556,8 +561,9 @@ class ExportWorker:
                 min_id=cache_max_id,
             ):
                 fresh_messages.append(msg)
+                all_fetched.append(msg)
                 fetched_count += 1
-                if await self._check_cancel_and_save(job, fresh_messages, fetched_count):
+                if await self._check_cancel_and_save(job, all_fetched, fetched_count):
                     return None
                 if tracker:
                     await tracker.track(fetched_count)
@@ -568,7 +574,7 @@ class ExportWorker:
             logger.info(f"  Fetched {len(fresh_messages)} new messages above cache max {cache_max_id}")
             await self.message_cache.store_messages(job.chat_id, fresh_messages)
 
-        # Step 2: fill ID gaps (use lowest cached range start, not 1)
+        # Step 2: fill ID gaps
         full_min = min(r[0] for r in cached_ranges)
         full_max = max(cache_max_id, fresh_messages[0].id if fresh_messages else cache_max_id)
         missing = await self.message_cache.get_missing_ranges(job.chat_id, full_min, full_max)
@@ -584,7 +590,8 @@ class ExportWorker:
                 ):
                     gap_msgs.append(msg)
                     fetched_count += 1
-                    if await self._check_cancel_and_save(job, gap_msgs, fetched_count):
+                    all_fetched.append(gap_msgs[-1])
+                    if await self._check_cancel_and_save(job, all_fetched, fetched_count):
                         return None
                     if tracker:
                         await tracker.track(fetched_count)
@@ -596,7 +603,7 @@ class ExportWorker:
                 await self.message_cache.store_messages(job.chat_id, gap_msgs)
                 fresh_messages.extend(gap_msgs)
 
-        # Step 3: fetch messages OLDER than cache minimum (full export only)
+        # Step 3: fetch messages OLDER than cache minimum
         if not job.limit or job.limit <= 0:
             cache_min_id = min(r[0] for r in cached_ranges)
             if cache_min_id > 1:
@@ -610,7 +617,8 @@ class ExportWorker:
                     ):
                         older_msgs.append(msg)
                         fetched_count += 1
-                        if await self._check_cancel_and_save(job, older_msgs, fetched_count):
+                        all_fetched.append(older_msgs[-1])
+                        if await self._check_cancel_and_save(job, all_fetched, fetched_count):
                             return None
                         if tracker:
                             await tracker.track(fetched_count)

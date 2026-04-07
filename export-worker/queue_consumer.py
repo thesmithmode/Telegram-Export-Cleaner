@@ -134,9 +134,10 @@ class QueueConsumer:
         """
         Get next job from queue (blocking) with durability guarantee.
 
-        Uses LMOVE (RIGHT → LEFT) to atomically move job from the working queue
-        to a staging queue before returning it. If the worker crashes, jobs in
-        staging are recovered on restart via :meth:`recover_staging_jobs`.
+        BLPOP removes the job from the working queue. The same job is then
+        pushed to a staging queue via RPUSH so that if the worker crashes
+        mid-processing, the job can be recovered on restart via
+        :meth:`recover_staging_jobs`.
 
         Checks express queue first (cache-hit jobs), then main queue.
         Uses BLPOP to block until job available.
@@ -158,12 +159,13 @@ class QueueConsumer:
 
             source_queue, job_json = result
 
-            # Atomically move job to staging for crash recovery
+            # BLPOP already removed the job — push the SAME job to staging
+            # for crash recovery. Using RPUSH preserves the job payload.
             dest_queue = (
                 self.staging_express_name if source_queue == self.express_queue_name
                 else self.staging_name
             )
-            await self.redis_client.lmove(source_queue, dest_queue, "RIGHT", "LEFT")
+            await self.redis_client.rpush(dest_queue, job_json)
 
             try:
                 job_data = json.loads(job_json)

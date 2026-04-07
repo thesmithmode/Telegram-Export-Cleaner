@@ -776,7 +776,7 @@ class TestProgressTracker:
             mock_java_client.send_progress_update = AsyncMock(return_value=None)
 
             tracker = ProgressTracker(
-                java_client=mock_java_client,
+                client=mock_java_client,
                 user_chat_id=123,
                 task_id="task_1"
             )
