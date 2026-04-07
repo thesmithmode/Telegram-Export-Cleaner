@@ -6,58 +6,43 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
-import org.telegram.telegrambots.client.okhttp.OkHttpTelegramClient;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.telegram.telegrambots.longpolling.interfaces.LongPollingUpdateConsumer;
 import org.telegram.telegrambots.longpolling.starter.SpringLongPollingBot;
 import org.telegram.telegrambots.longpolling.util.LongPollingSingleThreadUpdateConsumer;
-import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
-import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
-import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText;
-import org.telegram.telegrambots.meta.api.objects.chat.Chat;
-import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
 import org.telegram.telegrambots.meta.api.objects.message.Message;
 import org.telegram.telegrambots.meta.api.objects.Update;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardRow;
-import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
-import org.telegram.telegrambots.meta.generics.TelegramClient;
-
-import org.springframework.scheduling.annotation.Scheduled;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeParseException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Telegram-бот для запуска экспорта чатов (Версия 9.5.0).
+ * Telegram-бот для запуска экспорта чатов.
  *
- * <p>Реализует интерактивный wizard для выбора способа идентификации чата:</p>
- * <ul>
- *   <li>Пересланное сообщение из целевого чата/канала (forward-based identification)</li>
- *   <li>Ссылка вида https://t.me/username</li>
- *   <li>Username или числовой ID</li>
- * </ul>
- *
- * <p>После идентификации бот предлагает выбрать диапазон дат и запускает
- * асинхронный export через {@link ExportJobProducer} в Redis-очередь.</p>
+ * <p>Принимает только текстовые команды: username (@channel), ссылку (https://t.me/channel)
+ * или числовой ID. Поэтапный диалог для выбора диапазона дат.</p>
  *
  * <h3>Состояния сессии</h3>
- * <p>Каждый пользователь имеет {@link UserSession} в памяти. Состояния:</p>
  * <ul>
- *   <li>IDLE — ожидание команды или сообщения</li>
- *   <li>AWAITING_DATE_CHOICE — выбор способа ввода дат</li>
- *   <li>AWAITING_FROM_DATE — ввод начальной даты</li>
- *   <li>AWAITING_TO_DATE — ввод конечной даты</li>
+ *   <li>IDLE — ожидание username, ссылки или ID чата</li>
+ *   <li>AWAITING_FROM_DATE — ввод начальной даты (дд.мм.гггг) или /all</li>
+ *   <li>AWAITING_TO_DATE — ввод конечной даты (дд.мм.гггг) или /today</li>
  * </ul>
  *
- * <h3>Защита</h3>
- * <p>Защита от параллельных экспортов одного пользователя через Redis SET NX.
+ * <h3>Команды</h3>
+ * <ul>
+ *   <li>/start, /help — справка</li>
+ *   <li>/cancel — отмена активного экспорта</li>
+ *   <li>@username, https://t.me/username, числовой ID — запуск диалога</li>
+ *   <li>/all, /today — быстрые переходы в диалоге дат</li>
+ * </ul>
+ *
+ * <p>Защита от параллельных экспортов через Redis SET NX.
  * Сессии автоматически очищаются через {@link #evictStaleSessions()} каждые 30 минут.</p>
  */
 @Component
@@ -71,43 +56,36 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
 
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("dd.MM.yyyy");
 
-
     private static final String HELP_TEXT = """
             Этот бот экспортирует историю Telegram-чата и отправляет очищенный текст.
 
-            Выберите способ:
-            • Перешлите любое сообщение из нужного чата/канала
-            • Или введите ссылку: https://t.me/durov
-            • Или напишите username: @durov или durov
+            Отправьте одно из:
+            • username: @durov или durov
+            • ссылка: https://t.me/durov
+            • числовой ID: -123456789
 
             Для приватных чатов аккаунт должен быть их участником.
-            """;
 
-    static final String CB_EXPORT_ALL = "export_all";
-    static final String CB_DATE_RANGE = "date_range";
-    static final String CB_FROM_START = "from_start";
-    static final String CB_TO_TODAY = "to_today";
-    static final String CB_BACK_TO_MAIN = "back_main";
-    static final String CB_BACK_TO_DATE_CHOICE = "back_date_choice";
-    static final String CB_BACK_TO_FROM_DATE = "back_from_date";
-    static final String CB_CANCEL_EXPORT = "cancel_export";
+            Команды: /cancel (отмена активного экспорта)
+            """;
 
     private final String botToken;
     private final ExportJobProducer jobProducer;
     private final StringRedisTemplate redis;
-    private final TelegramClient telegramClient;
+    private final BotMessenger messenger;
     private final ConcurrentHashMap<Long, UserSession> sessions = new ConcurrentHashMap<>();
 
     public ExportBot(
             @Value("${telegram.bot.token}") String botToken,
             ExportJobProducer jobProducer,
-            StringRedisTemplate redis
+            StringRedisTemplate redis,
+            BotMessenger messenger
     ) {
         this.botToken = botToken;
         this.jobProducer = jobProducer;
         this.redis = redis;
-        this.telegramClient = new OkHttpTelegramClient(botToken);
-        log.info("Telegram-бот инициализирован через SpringLongPollingBot");
+        this.messenger = messenger;
+        log.info("Telegram-бот инициализирован");
     }
 
     @Override
@@ -130,138 +108,62 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     }
 
     private void processUpdate(Update update) {
-        if (update.hasCallbackQuery()) {
-            handleCallbackSafe(update.getCallbackQuery());
-            return;
-        }
-
         if (!update.hasMessage()) {
             return;
         }
 
         Message message = update.getMessage();
         if (!"private".equals(message.getChat().getType())) {
-            return;
+            return; // Бот работает только в личных чатах
         }
 
         long chatId = message.getChatId();
         long userId = message.getFrom().getId();
-
-        // Handle forwarded messages (for chat identification via forwardFromChat)
-        if (message.getForwardFromChat() != null) {
-            handleForwardedMessage(chatId, userId, message);
-            return;
-        }
 
         if (message.hasText()) {
             handleMessageText(chatId, userId, message.getText().trim());
         }
     }
 
-    private void handleCallbackSafe(CallbackQuery callback) {
-        try {
-            handleCallback(callback);
-        } catch (Exception e) {
-            log.error("Callback error for user {}: {}", callback.getFrom().getId(), e.getMessage());
-            answerCallback(callback.getId());
-        }
-    }
-
-    /**
-     * Обработка пересланного сообщения для определения целевого чата.
-     *
-     * <p>Извлекает информацию о чате-источнике из поля {@code forward_from_chat}
-     * и пытается получить username. Если username найден — автоматически запускает
-     * выбор диапазона дат. Если чат приватный — предлагает пользователю
-     * выбрать другой способ идентификации.</p>
-     *
-     * @param chatId  Telegram chat ID, куда вернуть ответ
-     * @param userId  Telegram user ID, сделавший запрос
-     * @param message объект Message с информацией о пересланном сообщении
-     */
-    private void handleForwardedMessage(long chatId, long userId, Message message) {
-        try {
-            Chat forwardFromChat = message.getForwardFromChat();
-            if (forwardFromChat == null) {
-                log.warn("Пересланное сообщение без информации о чате источника");
-                sendText(chatId, "⚠️ Не удалось определить источник пересланного сообщения.");
-                return;
-            }
-
-            String username = forwardFromChat.getUserName();
-            String chatTitle = forwardFromChat.getTitle();
-            String chatType = forwardFromChat.getType();
-
-            log.info("📩 Forward from {}: title='{}', username='{}', id={}, type={}",
-                     chatType, chatTitle, username, forwardFromChat.getId(), chatType);
-
-            if (username != null && !username.isBlank()) {
-                log.info("✅ Using username from forward: @{}", username);
-                handleExportDirect(chatId, userId, username, true);
-            } else {
-                log.warn("Перешланный чат не имеет публичного username: {} (id={})", chatTitle, forwardFromChat.getId());
-                sendText(chatId, "⚠️ Чат \"" + chatTitle + "\" приватный или не имеет username. " +
-                                 "Перешлите сообщение из публичного чата.");
-            }
-        } catch (Exception e) {
-            log.error("Error processing forwarded message: {}", e.getMessage(), e);
-            sendText(chatId, "❌ Ошибка при обработке пересланного сообщения.");
-        }
-    }
-
     private void handleMessageText(long chatId, long userId, String text) {
         if (text.startsWith("/start") || text.startsWith("/help")) {
             getSession(userId).reset();
-            sendMainMenu(chatId, HELP_TEXT);
-        } else if (text.startsWith("/export")) {
-            handleExport(chatId, userId, text);
+            messenger.send(chatId, HELP_TEXT);
+        } else if (text.startsWith("/cancel")) {
+            handleCancel(chatId, userId);
         } else {
             handleTextInput(chatId, userId, text);
         }
     }
 
-    /**
-     * Обработка текстового ввода в зависимости от текущего состояния сессии.
-     *
-     * <p>В режиме AWAITING_FROM_DATE: парсит дату в формате dd.MM.yyyy.
-     * В режиме AWAITING_TO_DATE: парсит дату в формате dd.MM.yyyy.
-     * В режиме IDLE: ищет username, ссылку или числовой ID.</p>
-     *
-     * @param chatId Telegram chat ID
-     * @param userId Telegram user ID
-     * @param text   введённый текст пользователя
-     */
+    private void handleCancel(long chatId, long userId) {
+        String activeTaskId = jobProducer.getActiveExport(userId);
+        if (activeTaskId == null) {
+            messenger.send(chatId, "❌ Нет активного экспорта.");
+            return;
+        }
+        jobProducer.cancelExport(userId);
+        messenger.send(chatId, "✅ Экспорт " + activeTaskId + " отменён.");
+        getSession(userId).reset();
+    }
+
     private void handleTextInput(long chatId, long userId, String text) {
         UserSession session = getSession(userId);
         switch (session.getState()) {
             case AWAITING_FROM_DATE -> handleFromDateInput(chatId, userId, text);
             case AWAITING_TO_DATE -> handleToDateInput(chatId, userId, text);
-            default -> handleExportDirect(chatId, userId, text);
+            default -> handleChatIdentifier(chatId, userId, text);
         }
     }
 
-    private void handleExport(long chatId, long userId, String text) {
-        String[] parts = text.split("\\s+", 2);
-        if (parts.length < 2 || parts[1].isBlank()) {
-            sendMainMenu(chatId, HELP_TEXT);
-            return;
-        }
-        handleExportDirect(chatId, userId, parts[1].trim());
-    }
-
-    private void handleExportDirect(long chatId, long userId, String input) {
-        handleExportDirect(chatId, userId, input, false);
-    }
-
-    private void handleExportDirect(long chatId, long userId, String input, boolean autoStart) {
+    private void handleChatIdentifier(long chatId, long userId, String input) {
         UserSession session = getSession(userId);
+
+        // Проверяем активный экспорт
         String activeTaskId = jobProducer.getActiveExport(userId);
         if (activeTaskId != null) {
-            InlineKeyboardMarkup cancelKeyboard = InlineKeyboardMarkup.builder()
-                .keyboardRow(new InlineKeyboardRow(
-                    InlineKeyboardButton.builder().text("❌ Отменить").callbackData(CB_CANCEL_EXPORT).build()))
-                .build();
-            sendWithInlineKeyboard(chatId, "⏳ У вас уже есть активный экспорт (" + activeTaskId + ").", cancelKeyboard);
+            messenger.send(chatId, "⏳ У вас уже есть активный экспорт (" + activeTaskId +
+                    ").\nДождитесь его завершения или отправьте /cancel");
             return;
         }
 
@@ -276,134 +178,62 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
                 session.setChatDisplay(String.valueOf(targetChatId));
             }
         } catch (NumberFormatException e) {
-            sendText(chatId, "Неверный формат. Отправьте ссылку или @username.");
+            messenger.send(chatId, "❌ Неверный формат. Отправьте ссылку, @username или числовой ID.");
             return;
         }
 
-        if (autoStart) {
-            // Для пересланных сообщений с username автоматически запускаем экспорт всего чата
-            session.setFromDate(null);
-            session.setToDate(null);
-            startExport(chatId, userId, 0);
-        } else {
-            session.setState(UserSession.State.AWAITING_DATE_CHOICE);
-            sendDateChoiceMenu(chatId, session.getChatDisplay());
-        }
-    }
-
-    private void handleCallback(CallbackQuery callback) {
-        if (callback.getMessage() == null) {
-            log.warn("Callback без message field от пользователя {}", callback.getFrom().getId());
-            answerCallback(callback.getId());
-            return;
-        }
-
-        long chatId = callback.getFrom().getId();
-        long userId = callback.getFrom().getId();
-        String data = callback.getData();
-        int messageId = callback.getMessage().getMessageId();
-        UserSession session = getSession(userId);
-        answerCallback(callback.getId());
-
-        switch (data) {
-            case CB_EXPORT_ALL -> {
-                session.setFromDate(null);
-                session.setToDate(null);
-                startExport(chatId, userId, messageId);
-            }
-            case CB_DATE_RANGE -> {
-                session.setState(UserSession.State.AWAITING_FROM_DATE);
-                editMessage(chatId, messageId,
-                        "📅 Чат: " + session.getChatDisplay()
-                        + "\n\nВведите начальную дату в формате дд.мм.гггг"
-                        + "\nНапример: 01.01.2024",
-                        buildFromDateKeyboard());
-            }
-            case CB_FROM_START -> {
-                session.setFromDate(null);
-                session.setState(UserSession.State.AWAITING_TO_DATE);
-                editMessage(chatId, messageId,
-                        "📅 Чат: " + session.getChatDisplay()
-                        + "\nОт: начало чата"
-                        + "\n\nВведите конечную дату в формате дд.мм.гггг"
-                        + "\nНапример: 31.12.2025",
-                        buildToDateKeyboard());
-            }
-            case CB_TO_TODAY -> {
-                session.setToDate(null);
-                startExport(chatId, userId, messageId);
-            }
-            case CB_BACK_TO_MAIN -> {
-                session.reset();
-                editMessage(chatId, messageId, HELP_TEXT, null);
-            }
-            case CB_BACK_TO_DATE_CHOICE -> {
-                session.setFromDate(null);
-                session.setToDate(null);
-                session.setState(UserSession.State.AWAITING_DATE_CHOICE);
-                editMessage(chatId, messageId,
-                        buildDateChoiceText(session.getChatDisplay()),
-                        buildDateChoiceKeyboard());
-            }
-            case CB_BACK_TO_FROM_DATE -> {
-                session.setToDate(null);
-                session.setState(UserSession.State.AWAITING_FROM_DATE);
-                editMessage(chatId, messageId,
-                        "📅 Чат: " + session.getChatDisplay()
-                        + "\n\nВведите начальную дату в формате дд.мм.гггг"
-                        + "\nНапример: 01.01.2024",
-                        buildFromDateKeyboard());
-            }
-            case CB_CANCEL_EXPORT -> {
-                jobProducer.cancelExport(userId);
-                editMessage(chatId, messageId, "✅ Экспорт отменён.", null);
-            }
-            default -> log.warn("Неизвестный callback: {}", data);
-        }
+        // Переходим в режим выбора дат
+        session.setState(UserSession.State.AWAITING_FROM_DATE);
+        messenger.send(chatId, "📋 Чат: " + session.getChatDisplay() +
+                "\n\nВведите дату начала (дд.мм.гггг) или /all для всего чата");
     }
 
     private void handleFromDateInput(long chatId, long userId, String text) {
-        LocalDate date = parseDate(text);
-        if (date == null) {
-            sendText(chatId, "❌ Неверный формат (дд.мм.гггг)");
-            return;
-        }
         UserSession session = getSession(userId);
-        session.setFromDate(date.atStartOfDay().toString());
+
+        if ("/all".equalsIgnoreCase(text)) {
+            session.setFromDate(null);
+        } else {
+            LocalDate date = parseDate(text);
+            if (date == null) {
+                messenger.send(chatId, "❌ Неверный формат (дд.мм.гггг или /all)");
+                return;
+            }
+            session.setFromDate(date.atStartOfDay().toString());
+        }
+
         session.setState(UserSession.State.AWAITING_TO_DATE);
-        sendWithInlineKeyboard(chatId, "📅 От: " + date.format(DATE_FORMAT) + "\nВведите конечную дату:", buildToDateKeyboard());
+        String fromText = session.getFromDate() == null ? "начало чата" :
+                LocalDate.parse(session.getFromDate().substring(0, 10)).format(DATE_FORMAT);
+        messenger.send(chatId, "📅 От: " + fromText +
+                "\n\nВведите дату конца (дд.мм.гггг) или /today для сегодня");
     }
 
     private void handleToDateInput(long chatId, long userId, String text) {
-        LocalDate date = parseDate(text);
-        if (date == null) {
-            sendText(chatId, "❌ Неверный формат");
-            return;
-        }
-        getSession(userId).setToDate(date.atTime(23, 59, 59).toString());
-        startExport(chatId, userId, 0);
-    }
-
-    private void startExport(long chatId, long userId, int editMessageId) {
         UserSession session = getSession(userId);
 
-        // Проверяем, нет ли активного экспорта
+        if ("/today".equalsIgnoreCase(text)) {
+            session.setToDate(null);
+        } else {
+            LocalDate date = parseDate(text);
+            if (date == null) {
+                messenger.send(chatId, "❌ Неверный формат (дд.мм.гггг или /today)");
+                return;
+            }
+            session.setToDate(date.atTime(23, 59, 59).toString());
+        }
+
+        startExport(chatId, userId);
+    }
+
+    private void startExport(long chatId, long userId) {
+        UserSession session = getSession(userId);
+
+        // Финальная проверка активного экспорта (на случай race condition)
         String activeTaskId = jobProducer.getActiveExport(userId);
         if (activeTaskId != null) {
-            String text = "⏳ У вас уже есть активный экспорт (" + activeTaskId
-                    + ").\nДождитесь его завершения или отмените.";
-            InlineKeyboardMarkup cancelKeyboard = InlineKeyboardMarkup.builder()
-                    .keyboardRow(new InlineKeyboardRow(
-                            InlineKeyboardButton.builder()
-                                    .text("❌ Отменить текущий экспорт")
-                                    .callbackData(CB_CANCEL_EXPORT)
-                                    .build()))
-                    .build();
-            if (editMessageId > 0) {
-                editMessage(chatId, editMessageId, text, cancelKeyboard);
-            } else {
-                sendWithInlineKeyboard(chatId, text, cancelKeyboard);
-            }
+            messenger.send(chatId, "⏳ У вас уже есть активный экспорт (" + activeTaskId +
+                    ").\nДождитесь его завершения или отправьте /cancel");
             return;
         }
 
@@ -419,137 +249,43 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
                         session.getFromDate(), session.getToDate());
             }
         } catch (IllegalStateException e) {
-            // Экспорт уже активен — race condition побеждён на уровне SET NX
             log.warn("Попытка дублирующего экспорта от пользователя {}: {}", userId, e.getMessage());
-            sendText(chatId, "⏳ У вас уже есть активный экспорт. Дождитесь его завершения или отмените.");
+            messenger.send(chatId, "⏳ У вас уже есть активный экспорт. Дождитесь его завершения или отправьте /cancel");
             return;
         } catch (Exception e) {
             log.error("Ошибка при постановке задачи в очередь: {}", e.getMessage(), e);
-            sendText(chatId, "Произошла ошибка при добавлении задачи. Попробуйте позже.");
+            messenger.send(chatId, "❌ Произошла ошибка при добавлении задачи. Попробуйте позже.");
             session.reset();
             return;
         }
 
+        // Формируем текст подтверждения
         String dateInfo = buildDateInfoText(session);
-
-        // Проверяем, пойдёт ли задача в express-очередь (кэш доступен)
         boolean fromCache = jobProducer.isLikelyCached(targetChatId);
-
         long pendingInQueue = jobProducer.getQueueLength();
         boolean hasActiveJob = jobProducer.hasActiveProcessingJob();
-        // pendingInQueue включает нашу задачу (только что добавлена).
-        // hasActiveJob — воркер прямо сейчас обрабатывает задачу (уже снята из очереди через BLPOP).
         long aheadCount = (pendingInQueue - 1) + (hasActiveJob ? 1 : 0);
         long myPosition = pendingInQueue + (hasActiveJob ? 1 : 0);
+
         String queueInfo;
         if (fromCache) {
             queueInfo = "\n\n⚡ Данные в кэше — результат будет быстро!";
         } else if (aheadCount == 0) {
             queueInfo = "\n\n⚙️ Задача поставлена в работу, ожидайте...";
         } else {
-            queueInfo = String.format(
-                    "\n\n📋 Вы в очереди: позиция %d\nВпереди %d задач(и)", myPosition, aheadCount);
+            queueInfo = String.format("\n\n📋 Вы в очереди: позиция %d\nВпереди %d задач(и)", myPosition, aheadCount);
         }
 
         String resultText = String.format(
                 "⏳ Задача принята!\n\nID: %s\nЧат: %s%s%s",
                 taskId, session.getChatDisplay(), dateInfo, queueInfo);
 
-        InlineKeyboardMarkup cancelKeyboard = InlineKeyboardMarkup.builder()
-                .keyboardRow(new InlineKeyboardRow(
-                        InlineKeyboardButton.builder()
-                                .text("❌ Отменить экспорт")
-                                .callbackData(CB_CANCEL_EXPORT)
-                                .build()))
-                .build();
-
-        int sentMsgId;
-        if (editMessageId > 0) {
-            editMessage(chatId, editMessageId, resultText, cancelKeyboard);
-            sentMsgId = editMessageId;
-        } else {
-            sentMsgId = sendWithInlineKeyboardGetId(chatId, resultText, cancelKeyboard);
-        }
-        if (sentMsgId > 0) {
-            jobProducer.storeQueueMsgId(taskId, chatId, sentMsgId);
-        }
+        messenger.send(chatId, resultText);
 
         log.info("Пользователь {} запросил экспорт чата {}, taskId={}, from={}, to={}",
                 userId, session.getChatDisplay(), taskId, session.getFromDate(), session.getToDate());
 
         session.reset();
-    }
-
-    private void sendMainMenu(long chatId, String text) {
-        // No picker buttons needed - instructions in HELP_TEXT guide users to forward messages
-        SendMessage msg = SendMessage.builder()
-                .chatId(String.valueOf(chatId))
-                .text(text)
-                .build();
-        try { telegramClient.execute(msg); } catch (Exception e) { log.error("Menu fail: {}", e.getMessage()); }
-    }
-
-    private void sendDateChoiceMenu(long chatId, String display) {
-        InlineKeyboardMarkup kb = InlineKeyboardMarkup.builder()
-                .keyboardRow(new InlineKeyboardRow(InlineKeyboardButton.builder().text("📦 Весь чат").callbackData(CB_EXPORT_ALL).build()))
-                .keyboardRow(new InlineKeyboardRow(InlineKeyboardButton.builder().text("📅 Указать даты").callbackData(CB_DATE_RANGE).build()))
-                .build();
-        sendWithInlineKeyboard(chatId, "📋 Чат: " + display + "\nВыберите диапазон:", kb);
-    }
-
-    private String buildDateChoiceText(String chatDisplay) {
-        return "📋 Чат: " + chatDisplay
-                + "\n\nВыберите диапазон экспорта:";
-    }
-
-    private InlineKeyboardMarkup buildDateChoiceKeyboard() {
-        return InlineKeyboardMarkup.builder()
-                .keyboardRow(new InlineKeyboardRow(
-                        InlineKeyboardButton.builder()
-                                .text("📦 Весь чат")
-                                .callbackData(CB_EXPORT_ALL)
-                                .build()))
-                .keyboardRow(new InlineKeyboardRow(
-                        InlineKeyboardButton.builder()
-                                .text("📅 Указать диапазон дат")
-                                .callbackData(CB_DATE_RANGE)
-                                .build()))
-                .keyboardRow(new InlineKeyboardRow(
-                        InlineKeyboardButton.builder()
-                                .text("◀️ Назад")
-                                .callbackData(CB_BACK_TO_MAIN)
-                                .build()))
-                .build();
-    }
-
-    private InlineKeyboardMarkup buildFromDateKeyboard() {
-        return InlineKeyboardMarkup.builder()
-                .keyboardRow(new InlineKeyboardRow(
-                        InlineKeyboardButton.builder()
-                                .text("⏮ С начала чата")
-                                .callbackData(CB_FROM_START)
-                                .build()))
-                .keyboardRow(new InlineKeyboardRow(
-                        InlineKeyboardButton.builder()
-                                .text("◀️ Назад")
-                                .callbackData(CB_BACK_TO_DATE_CHOICE)
-                                .build()))
-                .build();
-    }
-
-    private InlineKeyboardMarkup buildToDateKeyboard() {
-        return InlineKeyboardMarkup.builder()
-                .keyboardRow(new InlineKeyboardRow(
-                        InlineKeyboardButton.builder()
-                                .text("⏭ До сегодня")
-                                .callbackData(CB_TO_TODAY)
-                                .build()))
-                .keyboardRow(new InlineKeyboardRow(
-                        InlineKeyboardButton.builder()
-                                .text("◀️ Назад")
-                                .callbackData(CB_BACK_TO_FROM_DATE)
-                                .build()))
-                .build();
     }
 
     /**
@@ -572,17 +308,6 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         return session;
     }
 
-    static String extractUsername(String input) {
-        Matcher matcher = TME_LINK_PATTERN.matcher(input);
-        if (matcher.find()) return matcher.group(1);
-        if (input.startsWith("@")) return input.substring(1);
-        try { Long.parseLong(input); return null; } catch (Exception e) { return input; }
-    }
-
-    static LocalDate parseDate(String text) {
-        try { return LocalDate.parse(text.trim(), DATE_FORMAT); } catch (Exception e) { return null; }
-    }
-
     private String buildDateInfoText(UserSession session) {
         if (session.getFromDate() == null && session.getToDate() == null) {
             return "";
@@ -603,43 +328,14 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         return sb.toString();
     }
 
-    private int sendWithInlineKeyboardGetId(long chatId, String text, InlineKeyboardMarkup keyboard) {
-        SendMessage message = SendMessage.builder()
-                .chatId(String.valueOf(chatId))
-                .text(text)
-                .replyMarkup(keyboard)
-                .build();
-        try {
-            Message sent = telegramClient.execute(message);
-            return sent != null ? sent.getMessageId() : 0;
-        } catch (TelegramApiException e) {
-            log.error("Не удалось отправить сообщение с кнопками в chat {}: {}", chatId, e.getMessage());
-            return 0;
-        }
+    static String extractUsername(String input) {
+        Matcher matcher = TME_LINK_PATTERN.matcher(input);
+        if (matcher.find()) return matcher.group(1);
+        if (input.startsWith("@")) return input.substring(1);
+        try { Long.parseLong(input); return null; } catch (Exception e) { return input; }
     }
 
-    private void sendText(long chatId, String text) {
-        SendMessage m = SendMessage.builder().chatId(String.valueOf(chatId)).text(text).build();
-        try { telegramClient.execute(m); } catch (Exception e) { log.error("Send fail: {}", e.getMessage()); }
-    }
-
-    private void sendWithInlineKeyboard(long chatId, String text, InlineKeyboardMarkup kb) {
-        SendMessage m = SendMessage.builder().chatId(String.valueOf(chatId)).text(text).replyMarkup(kb).build();
-        try { telegramClient.execute(m); } catch (Exception e) { log.error("Send KB fail: {}", e.getMessage()); }
-    }
-
-    private void editMessage(long chatId, int messageId, String text, InlineKeyboardMarkup kb) {
-        EditMessageText.EditMessageTextBuilder<?, ?> builder = EditMessageText.builder()
-                .chatId(String.valueOf(chatId))
-                .messageId(messageId)
-                .text(text);
-        if (kb != null) {
-            builder.replyMarkup(kb);
-        }
-        try { telegramClient.execute(builder.build()); } catch (Exception ignored) {}
-    }
-
-    private void answerCallback(String id) {
-        try { telegramClient.execute(AnswerCallbackQuery.builder().callbackQueryId(id).build()); } catch (Exception ignored) {}
+    static LocalDate parseDate(String text) {
+        try { return LocalDate.parse(text.trim(), DATE_FORMAT); } catch (Exception e) { return null; }
     }
 }
