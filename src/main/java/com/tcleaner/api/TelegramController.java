@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
+import java.io.IOException;
 import java.util.Map;
 
 /**
@@ -53,7 +54,8 @@ public class TelegramController {
             @RequestParam(value = "startDate", required = false) String startDate,
             @RequestParam(value = "endDate", required = false) String endDate,
             @RequestParam(value = "keywords", required = false) String keywords,
-            @RequestParam(value = "excludeKeywords", required = false) String excludeKeywords) {
+            @RequestParam(value = "excludeKeywords", required = false) String excludeKeywords)
+            throws IOException {
 
         if (file.isEmpty()) {
             throw new IllegalArgumentException("Файл пустой");
