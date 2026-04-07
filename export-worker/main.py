@@ -190,7 +190,7 @@ class ExportWorker:
             cache_redis = aioredis.Redis(
                 host=settings.REDIS_HOST,
                 port=settings.REDIS_PORT,
-                db=settings.REDIS_DB,
+                db=(settings.REDIS_DB + 1) % 16,  # Separate DB for cache (next DB number)
                 password=settings.REDIS_PASSWORD,
                 decode_responses=False,
             )
@@ -693,16 +693,9 @@ class ExportWorker:
         except Exception as e:
             error = f"Export failed: {str(e)}"
             logger.error(f"❌ {error}")
-            await self.java_client.send_response(
-                task_id=job.task_id,
-                status="failed",
-                messages=messages,
-                error=error,
-                error_code="EXPORT_ERROR",
-                user_chat_id=job.user_chat_id,
-            )
-            await self.queue_consumer.mark_job_failed(job.task_id, error)
-            return None
+            # Re-raise so the caller (process_job) handles notification consistently,
+            # avoiding duplicate failure messages to the user.
+            raise
 
         if tracker:
             await tracker.finalize(len(messages))
