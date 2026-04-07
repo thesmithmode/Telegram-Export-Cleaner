@@ -197,7 +197,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
 
             if (username != null && !username.isBlank()) {
                 log.info("✅ Using username from forward: @{}", username);
-                handleExportDirect(chatId, userId, username);
+                handleExportDirect(chatId, userId, username, true);
             } else {
                 log.warn("Перешланный чат не имеет публичного username: {} (id={})", chatTitle, forwardFromChat.getId());
                 sendText(chatId, "⚠️ Чат \"" + chatTitle + "\" приватный или не имеет username. " +
@@ -250,6 +250,10 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     }
 
     private void handleExportDirect(long chatId, long userId, String input) {
+        handleExportDirect(chatId, userId, input, false);
+    }
+
+    private void handleExportDirect(long chatId, long userId, String input, boolean autoStart) {
         UserSession session = getSession(userId);
         String activeTaskId = jobProducer.getActiveExport(userId);
         if (activeTaskId != null) {
@@ -276,8 +280,15 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
             return;
         }
 
-        session.setState(UserSession.State.AWAITING_DATE_CHOICE);
-        sendDateChoiceMenu(chatId, session.getChatDisplay());
+        if (autoStart) {
+            // Для пересланных сообщений с username автоматически запускаем экспорт всего чата
+            session.setFromDate(null);
+            session.setToDate(null);
+            startExport(chatId, userId, 0);
+        } else {
+            session.setState(UserSession.State.AWAITING_DATE_CHOICE);
+            sendDateChoiceMenu(chatId, session.getChatDisplay());
+        }
     }
 
     private void handleCallback(CallbackQuery callback) {
