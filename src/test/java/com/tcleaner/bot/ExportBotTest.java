@@ -293,6 +293,7 @@ class ExportBotTest {
             message.setChat(chat);
             User user = User.builder()
                     .id(456L)
+                    .firstName("Test")
                     .isBot(false)
                     .build();
             message.setFrom(user);
@@ -323,6 +324,7 @@ class ExportBotTest {
 
         User user = User.builder()
                 .id(userId)
+                .firstName("Test")
                 .isBot(false)
                 .build();
         message.setFrom(user);
