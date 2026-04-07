@@ -4,36 +4,43 @@ import com.tcleaner.api.FileConversionService;
 import com.tcleaner.api.TelegramController;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.bean.MockBean;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Тесты конфигурации безопасности.
+ * Тесты безопасности API.
  *
- * <p>Используем {@code @WebMvcTest} вместо {@code @SpringBootTest},
- * чтобы не поднимать полный контекст (Redis, ExportJobProducer и т.д.).
- * Загружаются контроллеры, фильтры (ApiKeyFilter) и SecurityConfig.
- * FileConversionService мокается, т.к. это @Service.</p>
+ * <p>Используем standalone MockMvc без Spring-контекста,
+ * чтобы не поднимать Redis, ExportJobProducer и другие сервисы.</p>
  */
-@WebMvcTest(TelegramController.class)
 @DisplayName("SecurityConfig")
 class SecurityConfigTest {
 
-    @Autowired
-    private MockMvc mockMvc;
+    private final MockMvc mockMvc;
 
-    @MockBean
-    private FileConversionService conversionService;
+    SecurityConfigTest() throws Exception {
+        FileConversionService mockService = mock(FileConversionService.class);
+        when(mockService.convert(any(), isNull())).thenReturn(
+                ResponseEntity.ok()
+                        .contentType(MediaType.TEXT_PLAIN)
+                        .body((StreamingResponseBody) outputStream -> outputStream.write(new byte[0]))
+        );
+
+        TelegramController controller = new TelegramController(mockService);
+        this.mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
+    }
 
     @Test
     @DisplayName("Health endpoint публичный — без аутентификации")
@@ -45,15 +52,8 @@ class SecurityConfigTest {
     @Test
     @DisplayName("Convert endpoint работает без API ключа когда api.key пустой")
     void testConvertEndpointRequiresApiKey() throws Exception {
-        // По умолчанию api.key пустой в тестах, ApiKeyFilter пропускает всё
-        when(conversionService.convert(any(), isNull())).thenReturn(
-                org.springframework.http.ResponseEntity.ok()
-                        .contentType(MediaType.TEXT_PLAIN)
-                        .body(outputStream -> outputStream.write(new byte[0]))
-        );
-
         mockMvc.perform(multipart("/api/convert")
-                .file(new org.springframework.mock.web.MockMultipartFile(
+                .file(new MockMultipartFile(
                         "file", "test.json", "application/json",
                         "{\"messages\": []}".getBytes())))
             .andExpect(status().isOk());
