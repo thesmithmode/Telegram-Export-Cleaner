@@ -407,7 +407,7 @@ class TestGetPendingJobs:
     """Tests for get_pending_jobs."""
 
     async def test_returns_parsed_jobs(self):
-        """Should return list of ExportRequest from queue without removing them."""
+        """Should return dict with jobs list and total_count from queue without removing them."""
         job1 = ExportRequest(task_id="t1", user_id=1, chat_id=100)
         job2 = ExportRequest(task_id="t2", user_id=2, chat_id=200)
 
@@ -420,6 +420,7 @@ class TestGetPendingJobs:
 
             consumer = QueueConsumer()
             mock_client = AsyncMock()
+            mock_client.llen = AsyncMock(side_effect=lambda key: 2 if "express" in key else 0)
             mock_client.lrange = AsyncMock(return_value=[
                 json.dumps(job1.model_dump()),
                 json.dumps(job2.model_dump()),
@@ -428,13 +429,14 @@ class TestGetPendingJobs:
 
             result = await consumer.get_pending_jobs()
 
-            assert len(result) == 2
-            assert result[0].task_id == "t1"
-            assert result[1].task_id == "t2"
-            mock_client.lrange.assert_called_once_with("telegram_export", 0, -1)
+            assert result["total_count"] == 2
+            assert len(result["jobs"]) == 2
+            assert result["jobs"][0].task_id == "t1"
+            assert result["jobs"][1].task_id == "t2"
+            mock_client.lrange.assert_called()
 
     async def test_returns_empty_on_no_client(self):
-        """Should return empty list if not connected."""
+        """Should return empty dict if not connected."""
         with patch('queue_consumer.settings') as mock_settings:
             mock_settings.REDIS_HOST = "redis"
             mock_settings.REDIS_PORT = 6379
@@ -445,7 +447,7 @@ class TestGetPendingJobs:
             consumer = QueueConsumer()
             # redis_client is None by default
             result = await consumer.get_pending_jobs()
-            assert result == []
+            assert result == {"jobs": [], "total_count": 0}
 
     async def test_skips_invalid_json(self):
         """Should skip items that fail to parse."""
@@ -460,6 +462,7 @@ class TestGetPendingJobs:
 
             consumer = QueueConsumer()
             mock_client = AsyncMock()
+            mock_client.llen = AsyncMock(side_effect=lambda key: 2 if "express" in key else 0)
             mock_client.lrange = AsyncMock(return_value=[
                 "not valid json {",
                 json.dumps(valid_job.model_dump()),
@@ -468,8 +471,8 @@ class TestGetPendingJobs:
 
             result = await consumer.get_pending_jobs()
 
-            assert len(result) == 1
-            assert result[0].task_id == "t1"
+            assert len(result["jobs"]) == 1
+            assert result["jobs"][0].task_id == "t1"
 
 
 @pytest.mark.asyncio

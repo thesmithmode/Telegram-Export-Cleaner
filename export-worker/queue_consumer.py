@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 JOB_MARKER_TTL = 3600  # 1 hour — TTL for completed/failed job markers in Redis
+MAX_PENDING_RETURN = 100  # Max number of pending jobs to deserialize (prevents OOM)
 
 
 class QueueConsumer:
@@ -371,30 +372,55 @@ class QueueConsumer:
             logger.error(f"Failed to mark job failed: {e}")
             return False
 
-    async def get_pending_jobs(self) -> list[ExportRequest]:
+    async def get_pending_jobs(self) -> dict:
         """
-        Return all pending jobs from queue without removing them (LRANGE 0 -1).
+        Return pending jobs from queue without removing them, limited to first MAX_PENDING_RETURN.
 
-        Used to notify users of their updated queue position before processing starts.
+        Uses LLEN to get the true total count (O(1)) and LRANGE 0..MAX_PENDING_RETURN-1
+        to deserialize only a bounded number of jobs (prevents OOM on large queues).
+
+        Returns:
+            Dict with keys:
+                - jobs: list of ExportRequest (up to MAX_PENDING_RETURN items)
+                - total_count: int, the actual total number of pending jobs across both queues
         """
         if not self.redis_client:
-            return []
+            return {"jobs": [], "total_count": 0}
 
         try:
-            # Include both queues; express jobs are ahead in priority
-            express_items = await self.redis_client.lrange(self.express_queue_name, 0, -1)
-            main_items = await self.redis_client.lrange(self.queue_name, 0, -1)
+            # Get true totals via LLEN (O(1), no memory cost)
+            express_total = await self.redis_client.llen(self.express_queue_name)
+            main_total = await self.redis_client.llen(self.queue_name)
+            total_count = express_total + main_total
+
+            # Deserialize only the first MAX_PENDING_RETURN items
+            express_limit = min(express_total, MAX_PENDING_RETURN)
+            remaining = MAX_PENDING_RETURN - express_limit
+            main_limit = min(main_total, remaining)
+
             jobs = []
-            for item in express_items + main_items:
-                try:
-                    job_data = json.loads(item)
-                    jobs.append(ExportRequest(**job_data))
-                except Exception:
-                    pass
-            return jobs
+            if express_limit > 0:
+                express_items = await self.redis_client.lrange(self.express_queue_name, 0, express_limit - 1)
+                for item in express_items:
+                    try:
+                        job_data = json.loads(item)
+                        jobs.append(ExportRequest(**job_data))
+                    except Exception:
+                        pass
+            if main_limit > 0:
+                main_items = await self.redis_client.lrange(self.queue_name, 0, main_limit - 1)
+                for item in main_items:
+                    try:
+                        job_data = json.loads(item)
+                        jobs.append(ExportRequest(**job_data))
+                    except Exception:
+                        pass
+
+            return {"jobs": jobs, "total_count": total_count}
+
         except Exception as e:
             logger.error(f"Failed to get pending jobs: {e}")
-            return []
+            return {"jobs": [], "total_count": 0}
 
     async def recover_staging_jobs(self) -> int:
         """Recover jobs left in staging from a previous crash.

@@ -77,23 +77,35 @@ class ExportWorker:
         """Check if export was cancelled by user."""
         if not self.control_redis:
             return False
-        val = await self.control_redis.get(f"cancel_export:{task_id}")
-        return val is not None
+        try:
+            val = await self.control_redis.get(f"cancel_export:{task_id}")
+            return val is not None
+        except Exception:
+            return False
 
     async def clear_active_export(self, user_id: int):
         """Clear active export marker for user."""
         if self.control_redis:
-            await self.control_redis.delete(f"active_export:{user_id}")
+            try:
+                await self.control_redis.delete(f"active_export:{user_id}")
+            except Exception:
+                pass
 
     async def set_active_processing_job(self, task_id: str):
         """Сообщаем Java-боту что воркер сейчас занят этой задачей."""
         if self.control_redis:
-            await self.control_redis.set("active_processing_job", task_id, ex=3600)
+            try:
+                await self.control_redis.set("active_processing_job", task_id, ex=3600)
+            except Exception:
+                pass
 
     async def clear_active_processing_job(self):
         """Сбрасываем флаг занятости воркера."""
         if self.control_redis:
-            await self.control_redis.delete("active_processing_job")
+            try:
+                await self.control_redis.delete("active_processing_job")
+            except Exception:
+                pass
 
     def _create_tracker(self, job: ExportRequest) -> Optional[ProgressTracker]:
         """Create a ProgressTracker if user notifications are possible."""
@@ -166,6 +178,8 @@ class ExportWorker:
                 db=settings.REDIS_DB,
                 password=settings.REDIS_PASSWORD,
                 decode_responses=True,
+                socket_timeout=10,
+                socket_connect_timeout=5,
             )
 
             # Передаём Redis-клиент в Telegram-клиент для canonical-маппинга
@@ -705,8 +719,9 @@ class ExportWorker:
         if not self.control_redis or not self.java_client:
             return
         try:
-            pending = await self.queue_consumer.get_pending_jobs()
-            total = len(pending)
+            pending_result = await self.queue_consumer.get_pending_jobs()
+            pending = pending_result["jobs"]
+            total = pending_result["total_count"]
             # Notify the job that is about to start
             val = await self.control_redis.get(f"queue_msg:{current_task_id}")
             if val:
