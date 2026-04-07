@@ -203,8 +203,12 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         }
 
         session.setState(UserSession.State.AWAITING_TO_DATE);
-        String fromText = session.getFromDate() == null ? "начало чата" :
-                LocalDate.parse(session.getFromDate().substring(0, 10)).format(DATE_FORMAT);
+        String fromText;
+        if (session.getFromDate() == null) {
+            fromText = "начало чата";
+        } else {
+            fromText = LocalDate.parse(session.getFromDate().substring(0, 10)).format(DATE_FORMAT);
+        }
         messenger.send(chatId, "📅 От: " + fromText +
                 "\n\nВведите дату конца (дд.мм.гггг) или /today для сегодня");
     }
@@ -250,9 +254,11 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         } catch (Exception e) {
             log.error("Ошибка при постановке задачи в очередь: {}", e.getMessage(), e);
             messenger.send(chatId, "❌ Произошла ошибка при добавлении задачи. Попробуйте позже.");
-            session.reset();
             return;
         }
+
+        // Успешно поставили в очередь — сбрасываем сессию
+        session.reset();
 
         // Формируем текст подтверждения
         String dateInfo = buildDateInfoText(session);
@@ -279,8 +285,6 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
 
         log.info("Пользователь {} запросил экспорт чата {}, taskId={}, from={}, to={}",
                 userId, session.getChatDisplay(), taskId, session.getFromDate(), session.getToDate());
-
-        session.reset();
     }
 
     /**

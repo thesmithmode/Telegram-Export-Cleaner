@@ -26,10 +26,17 @@ public class BotMessenger {
     }
 
     /**
-     * Отправляет текстовое сообщение в чат.
+     * Отправляет текстовое сообщение в Telegram чат.
      *
-     * @param chatId ID чата
-     * @param text   текст сообщения
+     * <p>Метод синхронный и блокирует поток на время HTTP-запроса.
+     * При ошибке отправки только логирует ошибку, не пробрасывает исключение.
+     * Гарантирует, что сообщение отправится или будет залогировано.</p>
+     *
+     * <p><strong>Потокобезопасен:</strong> может быть вызван из разных потоков одновременно.</p>
+     *
+     * @param chatId ID Telegram чата
+     * @param text   текст сообщения (не null)
+     * @throws NullPointerException если text == null
      */
     public void send(long chatId, String text) {
         SendMessage message = SendMessage.builder()
@@ -38,6 +45,7 @@ public class BotMessenger {
                 .build();
         try {
             telegramClient.execute(message);
+            log.debug("Сообщение отправлено в чат {}: {} символов", chatId, text.length());
         } catch (TelegramApiException e) {
             log.error("Не удалось отправить сообщение в чат {}: {}", chatId, e.getMessage());
         }
