@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import java.io.ByteArrayOutputStream;
@@ -31,7 +32,7 @@ class SecurityConfigTest {
 
     SecurityConfigTest() throws Exception {
         FileConversionService mockService = mock(FileConversionService.class);
-        when(mockService.convert(any(MockMultipartFile.class), any(MessageFilter.class))).thenReturn(
+        when(mockService.convert(any(MultipartFile.class), any(MessageFilter.class))).thenReturn(
                 ResponseEntity.ok()
                         .contentType(org.springframework.http.MediaType.TEXT_PLAIN)
                         .body((StreamingResponseBody) outputStream -> outputStream.write(new byte[0]))
