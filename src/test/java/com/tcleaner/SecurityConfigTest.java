@@ -16,8 +16,9 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.nullable;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /**
  * Тесты безопасности API.
@@ -32,11 +33,11 @@ class SecurityConfigTest {
 
     SecurityConfigTest() throws Exception {
         FileConversionService mockService = mock(FileConversionService.class);
-        when(mockService.convert(any(MultipartFile.class), any(MessageFilter.class))).thenReturn(
-                ResponseEntity.ok()
+        StreamingResponseBody responseBody = outputStream -> outputStream.write(new byte[0]);
+        doReturn(ResponseEntity.ok()
                         .contentType(org.springframework.http.MediaType.TEXT_PLAIN)
-                        .body((StreamingResponseBody) outputStream -> outputStream.write(new byte[0]))
-        );
+                        .body(responseBody))
+                .when(mockService).convert(any(MultipartFile.class), nullable(MessageFilter.class));
 
         this.controller = new TelegramController(mockService);
     }
