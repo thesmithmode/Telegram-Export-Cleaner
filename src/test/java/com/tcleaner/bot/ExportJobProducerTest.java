@@ -1,6 +1,8 @@
 package com.tcleaner.bot;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -9,11 +11,9 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.utility.DockerImageName;
+import redis.embedded.RedisServer;
 
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Map;
 
@@ -22,24 +22,34 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Тесты для ExportJobProducer — проверяет добавление задач в Redis.
+ * Используется embedded Redis вместо testcontainers для ускорения тестов.
  */
 @SpringBootTest
-@Testcontainers
 @DisplayName("ExportJobProducer — добавление задач в Redis")
 class ExportJobProducerTest {
 
-    @Container
-    static GenericContainer<?> redis =
-            new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
-                    .withExposedPorts(6379);
+    private static RedisServer redisServer;
+
+    @BeforeAll
+    static void startRedis() throws IOException {
+        redisServer = new RedisServer(6379);
+        redisServer.start();
+    }
+
+    @AfterAll
+    static void stopRedis() {
+        if (redisServer != null) {
+            redisServer.stop();
+        }
+    }
 
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry registry) {
         Path tmp = Path.of(System.getProperty("java.io.tmpdir"));
         registry.add("app.storage.import-path", () -> tmp.resolve("tcleaner-test/import").toString());
         registry.add("app.storage.export-path", () -> tmp.resolve("tcleaner-test/export").toString());
-        registry.add("spring.data.redis.host", redis::getHost);
-        registry.add("spring.data.redis.port", () -> redis.getMappedPort(6379));
+        registry.add("spring.data.redis.host", () -> "localhost");
+        registry.add("spring.data.redis.port", () -> 6379);
         registry.add("spring.autoconfigure.exclude", () -> "");
     }
 
