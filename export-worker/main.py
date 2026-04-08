@@ -583,9 +583,12 @@ class ExportWorker:
             await self.message_cache.store_messages(job.chat_id, fresh_messages)
 
         # Step 2: fill ID gaps
+        logger.info(f"  Step 2: Computing missing ID ranges...")
         full_min = min(r[0] for r in cached_ranges)
         full_max = max(cache_max_id, fresh_messages[0].id if fresh_messages else cache_max_id)
+        logger.info(f"    Range to check: [{full_min}, {full_max}]")
         missing = await self.message_cache.get_missing_ranges(job.chat_id, full_min, full_max)
+        logger.info(f"    Found {len(missing)} gaps: {missing}")
 
         for gap_low, gap_high in missing:
             gap_msgs: list[ExportedMessage] = []
@@ -612,8 +615,10 @@ class ExportWorker:
                 fresh_messages.extend(gap_msgs)
 
         # Step 3: fetch messages OLDER than cache minimum
+        logger.info(f"  Step 3: Fetching older messages...")
         if not job.limit or job.limit <= 0:
             cache_min_id = min(r[0] for r in cached_ranges)
+            logger.info(f"    Cache min ID: {cache_min_id}")
             if cache_min_id > 1:
                 older_msgs: list[ExportedMessage] = []
                 try:
@@ -638,11 +643,20 @@ class ExportWorker:
                     await self.message_cache.store_messages(job.chat_id, older_msgs)
                     fresh_messages.extend(older_msgs)
 
-        # Читаем все сообщения из кэша — fresh_messages уже сохранены туда выше,
-        # поэтому повторный merge с fresh_messages не нужен (они уже включены).
-        actual_min = 0 if (not job.limit or job.limit <= 0) else full_min
-        messages = await self.message_cache.get_messages(job.chat_id, actual_min, full_max)
-        logger.info(f"  Total after cache merge: {len(messages)} messages")
+        # Вместо чтения всего диапазона из Redis (медленно для 250k+ сообщений),
+        # читаем только из cached_ranges и мержим с fresh_messages в памяти
+        logger.info(f"  Final step: Merging fresh messages with cached...")
+        cached_messages: list[ExportedMessage] = []
+
+        # Read from cached ranges (original data before fresh)
+        for r_low, r_high in cached_ranges:
+            chunk = await self.message_cache.get_messages(job.chat_id, r_low, r_high)
+            cached_messages.extend(chunk)
+            logger.debug(f"    Read {len(chunk)} messages from cached range [{r_low}, {r_high}]")
+
+        # Merge cached + fresh (fresh overwrites cached if there are dupes)
+        messages = self.message_cache.merge_and_sort(cached_messages, fresh_messages)
+        logger.info(f"  ✅ Total after merge: {len(messages)} messages (cached: {len(cached_messages)}, fresh: {len(fresh_messages)})")
 
         if tracker:
             await tracker.finalize(len(messages))
