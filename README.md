@@ -52,8 +52,10 @@ https://t.me/c/123456789/1
 - Redis-очередь с кэшированием по ID и датам (ускоренный повторный экспорт)
 - Двойная очередь: приоритетная для закэшированных данных, основная для новых
 - Async Python worker с резолвингом canonical ID и поддержкой отмены экспорта
-- Streaming JSON парсинг (эффективно для файлов любого размера)
+- **Streaming JSON парсинг и потоковая передача результатов** (эффективно для файлов любого размера, без буферизации в памяти)
 - REST API для синхронной конвертации файлов с фильтрацией
+- **Graceful shutdown** с SIGTERM для контролируемого завершения (Java и Python)
+- Redis `volatile-lru` policy для защиты критических данных очередей от вытеснения
 
 ---
 
@@ -74,9 +76,10 @@ https://t.me/c/123456789/1
 **Структура Java-модуля:**
 - `ExportBot` — приём команд от пользователя (только private chat)
 - `ExportJobProducer` — управление Redis-очередью и блокировками
-- `TelegramController` + `FileConversionService` — REST API конвертации
-- `ApiExceptionHandler` — глобальная обработка исключений
-- `TelegramExporter` — парсинг JSON (Tree Model и Streaming)
+- `TelegramController` + `FileConversionService` — REST API конвертации (потоковая передача результатов через `StreamingResponseBody`)
+- `ApiExceptionHandler` — глобальная обработка исключений (@ControllerAdvice)
+- `TelegramExporter` — парсинг JSON (Tree Model и Streaming API)
+- `ApiKeyFilter` — аутентификация по X-API-Key
 
 ---
 
@@ -150,3 +153,61 @@ curl -X POST http://localhost:8080/api/convert \
 ### GET /api/health
 
 Проверка состояния сервиса. **Не требует API ключа.**
+
+---
+
+## Особенности реализации
+
+### Потоковая передача результатов (Streaming)
+
+**REST API** (`/api/convert`) использует `StreamingResponseBody` для потоковой передачи результатов напрямую в HTTP response stream, без буферизации в памяти. Это позволяет экспортировать файлы любого размера без риска OOM.
+
+```java
+// Результат пишется напрямую в outputStream
+StreamingResponseBody body = outputStream -> {
+    try (OutputStreamWriter writer = new OutputStreamWriter(outputStream, StandardCharsets.UTF_8)) {
+        exporter.processFileStreaming(inputFile, filter, writer);
+        writer.flush();
+    }
+};
+```
+
+### Redis конфигурация
+
+Redis использует `volatile-lru` политику вытеснения:
+- Eviction только ключей **с TTL** (Key expiration)
+- Критические данные (очереди без TTL) защищены от вытеснения
+- Максимум памяти: 256MB (Docker limit: 512MB)
+
+```bash
+redis-server --maxmemory 256mb --maxmemory-policy volatile-lru
+```
+
+### Отмена экспорта (Cancel Support)
+
+Пользователь может отменить экспорт во время выполнения. Python worker проверяет флаг отмены каждые 100 сообщений:
+
+1. Java Bot ставит флаг: `cancel_export:{task_id}` в Redis
+2. Python worker проверяет: `is_cancelled(task_id)`
+3. При отмене сохраняет накопленные сообщения в cache
+4. Удаляет маркер активного экспорта
+
+Отмена реализована в `ExportWorker._check_cancel_and_save()` и `is_cancelled()`.
+
+### Graceful Shutdown
+
+Оба контейнера настроены на graceful shutdown:
+
+**Java:**
+```dockerfile
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["sh", "-c", "exec java ..." ]  # exec для замены PID
+```
+
+**Python:**
+```dockerfile
+STOPSIGNAL SIGTERM
+# Обработка SIGTERM → контроллируемое завершение
+```
+
+---
