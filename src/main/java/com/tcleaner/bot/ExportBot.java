@@ -345,22 +345,6 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         try { telegramClient.execute(m); } catch (Exception e) { log.error("Send fail: {}", e.getMessage()); }
     }
 
-    private void sendWithInlineKeyboard(long chatId, String text, InlineKeyboardMarkup kb) {
-        SendMessage m = SendMessage.builder().chatId(String.valueOf(chatId)).text(text).replyMarkup(kb).build();
-        try { telegramClient.execute(m); } catch (Exception e) { log.error("Send KB fail: {}", e.getMessage()); }
-    }
-
-    private void editMessage(long chatId, int messageId, String text, InlineKeyboardMarkup kb) {
-        EditMessageText.EditMessageTextBuilder<?, ?> builder = EditMessageText.builder()
-                .chatId(String.valueOf(chatId))
-                .messageId(messageId)
-                .text(text);
-        if (kb != null) {
-            builder.replyMarkup(kb);
-        }
-        try { telegramClient.execute(builder.build()); } catch (Exception ignored) {}
-    }
-
     private void answerCallback(String id) {
         try { telegramClient.execute(AnswerCallbackQuery.builder().callbackQueryId(id).build()); } catch (Exception ignored) {}
     }
