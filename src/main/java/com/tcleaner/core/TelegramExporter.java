@@ -123,11 +123,7 @@ public class TelegramExporter implements TelegramExporterInterface {
      */
     public List<String> processFile(Path inputPath, MessageFilter filter) throws IOException {
         log.debug("Начало обработки файла: {}", inputPath);
-
-        if (!Files.exists(inputPath)) {
-            log.error("Файл не найден: {}", inputPath);
-            throw new TelegramExporterException("FILE_NOT_FOUND", "Файл не найден: " + inputPath);
-        }
+        validateInputFile(inputPath);
 
         JsonNode root;
         try {
@@ -199,11 +195,7 @@ public class TelegramExporter implements TelegramExporterInterface {
     public int processFileStreaming(Path inputPath, MessageFilter filter, Writer out)
             throws IOException {
         log.debug("Streaming-обработка файла: {}", inputPath);
-
-        if (!Files.exists(inputPath)) {
-            log.error("Файл не найден: {}", inputPath);
-            throw new TelegramExporterException("FILE_NOT_FOUND", "Файл не найден: " + inputPath);
-        }
+        validateInputFile(inputPath);
 
         int written = 0;
         try (JsonParser parser = objectMapper.getFactory().createParser(inputPath.toFile())) {
@@ -258,6 +250,19 @@ public class TelegramExporter implements TelegramExporterInterface {
             }
         }
         return false;
+    }
+
+    /**
+     * Проверяет существование входного файла.
+     *
+     * @param inputPath путь к файлу
+     * @throws TelegramExporterException с кодом FILE_NOT_FOUND если файл не существует
+     */
+    private void validateInputFile(Path inputPath) {
+        if (!Files.exists(inputPath)) {
+            log.error("Файл не найден: {}", inputPath);
+            throw new TelegramExporterException("FILE_NOT_FOUND", "Файл не найден: " + inputPath);
+        }
     }
 
 }

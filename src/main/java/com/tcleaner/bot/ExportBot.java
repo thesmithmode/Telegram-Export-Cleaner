@@ -162,16 +162,12 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     }
 
     private void handleChatIdentifier(long chatId, long userId, String input) {
-        UserSession session = getSession(userId);
-
         // Проверяем активный экспорт
-        String activeTaskId = jobProducer.getActiveExport(userId);
-        if (activeTaskId != null) {
-            messenger.send(chatId, "⏳ У вас уже есть активный экспорт ("
-                    + activeTaskId + ").\nДождитесь его завершения или отправьте /cancel");
+        if (checkActiveExportAndNotify(chatId, userId)) {
             return;
         }
 
+        UserSession session = getSession(userId);
         String identifier = extractUsername(input);
         if (identifier == null) {
             messenger.send(chatId, "❌ Неверный формат. Отправьте ссылку (https://t.me/channel) или @username.");
@@ -233,10 +229,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         UserSession session = getSession(userId);
 
         // Финальная проверка активного экспорта (на случай race condition)
-        String activeTaskId = jobProducer.getActiveExport(userId);
-        if (activeTaskId != null) {
-            messenger.send(chatId, "⏳ У вас уже есть активный экспорт ("
-                    + activeTaskId + ").\nДождитесь его завершения или отправьте /cancel");
+        if (checkActiveExportAndNotify(chatId, userId)) {
             return;
         }
 
@@ -249,10 +242,12 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         } catch (IllegalStateException e) {
             log.warn("Попытка дублирующего экспорта от пользователя {}: {}", userId, e.getMessage());
             messenger.send(chatId, "⏳ У вас уже есть активный экспорт. Дождитесь его завершения или отправьте /cancel");
+            session.reset();
             return;
         } catch (Exception e) {
             log.error("Ошибка при постановке задачи в очередь: {}", e.getMessage(), e);
             messenger.send(chatId, "❌ Произошла ошибка при добавлении задачи. Попробуйте позже.");
+            session.reset();
             return;
         }
 
@@ -284,6 +279,20 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
 
         log.info("Пользователь {} запросил экспорт чата {}, taskId={}, from={}, to={}",
                 userId, session.getChatDisplay(), taskId, session.getFromDate(), session.getToDate());
+    }
+
+    /**
+     * Проверяет наличие активного экспорта у пользователя.
+     * Если есть — отправляет уведомление и возвращает true.
+     */
+    private boolean checkActiveExportAndNotify(long chatId, long userId) {
+        String activeTaskId = jobProducer.getActiveExport(userId);
+        if (activeTaskId != null) {
+            messenger.send(chatId, "⏳ У вас уже есть активный экспорт ("
+                    + activeTaskId + ").\nДождитесь его завершения или отправьте /cancel");
+            return true;
+        }
+        return false;
     }
 
     /**

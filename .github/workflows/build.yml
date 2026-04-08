@@ -67,6 +67,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Extract python-worker metadata
         id: python_meta
@@ -85,6 +87,8 @@ jobs:
           push: true
           tags: ${{ steps.python_meta.outputs.tags }}
           labels: ${{ steps.python_meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   # ─── 3. Деплой на сервер ─────────────────────────────────────────────────────
   deploy:
@@ -142,7 +146,7 @@ jobs:
                 depends_on: { java-bot: { condition: service_healthy } }
                 restart: unless-stopped
                 healthcheck:
-                  test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8080\")' 2>/dev/null || exit 1"]
+                  test: ["CMD-SHELL", "pgrep -f 'python.*main.py' || exit 1"]
                   interval: 15s
                   timeout: 5s
                   retries: 3
@@ -169,8 +173,9 @@ jobs:
             echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
             docker compose pull
             docker compose up -d --remove-orphans
-            docker image prune -f
-            docker container prune -f
+            # Clean up only our project images (avoid deleting other containers on server)
+            docker image prune --filter "until=24h" -f
+            docker container prune --filter "until=24h" -f
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_ACTOR: ${{ github.actor }}

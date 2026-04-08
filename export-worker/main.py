@@ -21,7 +21,7 @@ import signal
 import sys
 import shutil
 import psutil
-from datetime import datetime, timezone
+from datetime import date as date_cls, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -119,7 +119,7 @@ class ExportWorker:
         """Log current memory usage for monitoring weak server resources."""
         try:
             mem = psutil.virtual_memory()
-            cpu_percent = psutil.cpu_percent(interval=0.1)
+            cpu_percent = psutil.cpu_percent(interval=None)
             logger.info(
                 f"📊 Resource usage [{stage}]: "
                 f"Memory {mem.percent}% ({mem.available/1024/1024:.0f}MB free), "
@@ -398,7 +398,6 @@ class ExportWorker:
         from_date: str, to_date: str, missing: list[tuple[str, str]]
     ) -> list[tuple[str, str]]:
         """Compute cached date ranges = [from_date, to_date] minus missing gaps."""
-        from datetime import date as date_cls, timedelta
         if not missing:
             return [(from_date, to_date)]
 
