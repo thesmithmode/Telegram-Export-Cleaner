@@ -5,7 +5,7 @@ Loads settings from environment variables with defaults.
 """
 
 from typing import Optional
-from pydantic import ConfigDict
+from pydantic import ConfigDict, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -60,6 +60,35 @@ class Settings(BaseSettings):
 
     # Logging
     LOG_LEVEL: str = "INFO"
+
+    @field_validator("TELEGRAM_API_ID")
+    @classmethod
+    def validate_api_id(cls, v: int) -> int:
+        if v == 0:
+            raise ValueError(
+                "TELEGRAM_API_ID must be set. "
+                "Get it from https://my.telegram.org/apps"
+            )
+        return v
+
+    @field_validator("TELEGRAM_API_HASH")
+    @classmethod
+    def validate_api_hash(cls, v: str) -> str:
+        if not v or v == "":
+            raise ValueError(
+                "TELEGRAM_API_HASH must be set. "
+                "Get it from https://my.telegram.org/apps"
+            )
+        return v
+
+    @field_validator("TELEGRAM_PHONE_NUMBER")
+    @classmethod
+    def validate_phone(cls, v: str) -> str:
+        if not v or v == "":
+            raise ValueError(
+                "TELEGRAM_PHONE_NUMBER must be set (e.g. +1234567890)"
+            )
+        return v
 
 
 # Global settings instance
