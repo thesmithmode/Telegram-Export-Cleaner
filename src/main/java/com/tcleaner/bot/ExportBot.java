@@ -249,10 +249,12 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         } catch (IllegalStateException e) {
             log.warn("Попытка дублирующего экспорта от пользователя {}: {}", userId, e.getMessage());
             messenger.send(chatId, "⏳ У вас уже есть активный экспорт. Дождитесь его завершения или отправьте /cancel");
+            session.reset();
             return;
         } catch (Exception e) {
             log.error("Ошибка при постановке задачи в очередь: {}", e.getMessage(), e);
             messenger.send(chatId, "❌ Произошла ошибка при добавлении задачи. Попробуйте позже.");
+            session.reset();
             return;
         }
 
