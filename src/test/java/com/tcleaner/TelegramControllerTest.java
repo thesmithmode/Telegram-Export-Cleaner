@@ -10,6 +10,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
@@ -42,15 +43,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * </ul>
  */
 @WebMvcTest(TelegramController.class)
-@Import({ApiKeyFilter.class, ApiExceptionHandler.class})
+@Import({FileConversionService.class, ApiExceptionHandler.class})
+@AutoConfigureMockMvc(addFilters = false)
 @DisplayName("TelegramController")
 class TelegramControllerTest {
 
     @MockitoBean
-    private FileConversionService mockConversionService;
-
-    @MockitoBean
-    private ApiKeyFilter mockApiKeyFilter;
+    private com.tcleaner.core.TelegramExporterInterface mockExporter;
 
     @Autowired
     private MockMvc mockMvc;
