@@ -48,9 +48,9 @@ public class FileConversionService {
 
         try {
             file.transferTo(inputFile.toFile());
-        } catch (Exception e) {
+        } catch (IOException e) {
             cleanupTempFile(inputFile);
-            throw new RuntimeException("Не удалось сохранить загруженный файл", e);
+            throw e;
         }
 
         StreamingResponseBody body = outputStream -> {
