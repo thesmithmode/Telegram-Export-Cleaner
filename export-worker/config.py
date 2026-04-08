@@ -81,17 +81,13 @@ class Settings(BaseSettings):
             )
         return v
 
-    @field_validator("TELEGRAM_PHONE_NUMBER")
+    @field_validator("TELEGRAM_PHONE_NUMBER", mode="after")
     @classmethod
-    def validate_phone(cls, v: str, info) -> str:
-        # Phone number required only if using file-based session (no SESSION_STRING)
-        has_session_string = info.data.get("TELEGRAM_SESSION_STRING")
-        if not has_session_string and (not v or v == ""):
-            raise ValueError(
-                "TELEGRAM_PHONE_NUMBER must be set (e.g. +1234567890) "
-                "when TELEGRAM_SESSION_STRING is not provided"
-            )
-        return v
+    def validate_phone(cls, v: str) -> str:
+        # Phone number is optional when SESSION_STRING is used (production)
+        # Only required for file-based session (development)
+        # Return empty string if not provided - will use SESSION_STRING instead
+        return v or ""
 
 
 # Global settings instance
