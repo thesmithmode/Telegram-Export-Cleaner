@@ -219,7 +219,7 @@ class TelegramControllerTest {
                 Writer w = inv.getArgument(2);
                 w.write("20250624 Hello\n");
                 return 1;
-            }).when(mockExporter).processFileStreaming(any(Path.class), nullable(), any(Writer.class));
+            }).when(mockExporter).processFileStreaming(any(Path.class), nullable(com.tcleaner.core.MessageFilter.class), any(Writer.class));
 
             MockMultipartFile file = new MockMultipartFile(
                     "file", "result.json", "application/json",
