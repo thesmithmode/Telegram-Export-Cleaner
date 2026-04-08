@@ -1,7 +1,6 @@
 package com.tcleaner.core;
 
 import com.tcleaner.format.DateFormatter;
-import com.tcleaner.format.MarkdownParser;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import java.time.LocalDate;
