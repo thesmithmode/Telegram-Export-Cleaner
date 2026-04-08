@@ -142,7 +142,7 @@ jobs:
                 depends_on: { java-bot: { condition: service_healthy } }
                 restart: unless-stopped
                 healthcheck:
-                  test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8080\")' 2>/dev/null || exit 1"]
+                  test: ["CMD-SHELL", "pgrep -f 'python.*main.py' || exit 1"]
                   interval: 15s
                   timeout: 5s
                   retries: 3
