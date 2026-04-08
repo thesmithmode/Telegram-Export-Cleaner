@@ -169,8 +169,9 @@ jobs:
             echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
             docker compose pull
             docker compose up -d --remove-orphans
-            docker image prune -f
-            docker container prune -f
+            # Clean up only our project images (avoid deleting other containers on server)
+            docker image prune --filter "until=24h" -f
+            docker container prune --filter "until=24h" -f
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_ACTOR: ${{ github.actor }}
