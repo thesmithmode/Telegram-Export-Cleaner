@@ -38,6 +38,17 @@ class JavaBotClient:
         self._http_client = httpx.AsyncClient(timeout=self.timeout)
         logger.info(f"Java API Client initialized (URL: {self.base_url})")
 
+    def _build_bot_url(self, method: str) -> str:
+        """Build Telegram Bot API URL for the given method.
+
+        Args:
+            method: Bot API method name (e.g. 'sendMessage', 'sendDocument')
+
+        Returns:
+            Full URL with bot token
+        """
+        return f"https://api.telegram.org/bot{self.bot_token}/{method}"
+
     async def send_response(
         self,
         task_id: str,
@@ -398,7 +409,7 @@ class JavaBotClient:
         file_bytes: bytes, filename: str, caption: str
     ) -> bool:
         """Send a single file via Telegram Bot API sendDocument."""
-        url = f"https://api.telegram.org/bot{self.bot_token}/sendDocument"
+        url = self._build_bot_url("sendDocument")
 
         try:
             response = await self._http_client.post(
@@ -511,7 +522,7 @@ class JavaBotClient:
 
         try:
             if progress_message_id:
-                url = f"https://api.telegram.org/bot{self.bot_token}/editMessageText"
+                url = self._build_bot_url("editMessageText")
                 response = await self._http_client.post(
                     url,
                     data={
@@ -524,7 +535,7 @@ class JavaBotClient:
                     return progress_message_id
                 return None
             else:
-                url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+                url = self._build_bot_url("sendMessage")
                 response = await self._http_client.post(
                     url, data={"chat_id": user_chat_id, "text": text}
                 )
@@ -573,7 +584,7 @@ class JavaBotClient:
         else:
             text = f"📋 Очередь: позиция {position} из {total}\nВпереди {position - 1} задач(и)"
         try:
-            url = f"https://api.telegram.org/bot{self.bot_token}/editMessageText"
+            url = self._build_bot_url("editMessageText")
             await self._http_client.post(
                 url,
                 data={"chat_id": user_chat_id, "message_id": msg_id, "text": text},
@@ -585,7 +596,7 @@ class JavaBotClient:
         self, user_chat_id: int, task_id: str, error: str
     ) -> None:
         """Send failure notification to user via Telegram Bot API."""
-        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        url = self._build_bot_url("sendMessage")
         text = f"❌ Export failed (task {task_id})\n\nReason: {error}"
 
         try:
@@ -595,7 +606,7 @@ class JavaBotClient:
 
     async def _notify_user_empty(self, user_chat_id: int, task_id: str) -> None:
         """Notify user that no messages were found for the export."""
-        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        url = self._build_bot_url("sendMessage")
         text = (
             f"ℹ️ Экспорт завершён (task {task_id})\n\n"
             "Сообщений не найдено. Возможно, чат пуст или в указанном диапазоне дат нет сообщений."
