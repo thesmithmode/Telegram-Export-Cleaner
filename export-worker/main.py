@@ -21,7 +21,7 @@ import signal
 import sys
 import shutil
 import psutil
-from datetime import datetime, timezone
+from datetime import date as date_cls, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -58,17 +58,18 @@ class ExportWorker:
         self.jobs_failed = 0
 
     async def _check_cancel_and_save(
-        self, job: ExportRequest, messages: list[ExportedMessage], count: int
+        self, job: ExportRequest, all_messages: list[ExportedMessage], count: int
     ) -> bool:
-        """Check cancellation every 100 messages, save to cache if cancelled. Returns True if cancelled."""
+        """Check cancellation every 100 messages, save ALL accumulated messages to cache if cancelled.
+        Returns True if cancelled."""
         if count % 100 != 0:
             return False
         if not await self.is_cancelled(job.task_id):
             return False
         logger.info(f"🛑 Export {job.task_id} cancelled by user at {count} messages")
-        if self.message_cache and self.message_cache.enabled and messages:
-            await self.message_cache.store_messages(job.chat_id, messages)
-            logger.info(f"  Saved {count} messages to cache before cancel")
+        if self.message_cache and self.message_cache.enabled and all_messages:
+            await self.message_cache.store_messages(job.chat_id, all_messages)
+            logger.info(f"  Saved {len(all_messages)} messages to cache before cancel")
         await self.clear_active_export(job.user_id)
         return True
 
@@ -76,23 +77,35 @@ class ExportWorker:
         """Check if export was cancelled by user."""
         if not self.control_redis:
             return False
-        val = await self.control_redis.get(f"cancel_export:{task_id}")
-        return val is not None
+        try:
+            val = await self.control_redis.get(f"cancel_export:{task_id}")
+            return val is not None
+        except Exception:
+            return False
 
     async def clear_active_export(self, user_id: int):
         """Clear active export marker for user."""
         if self.control_redis:
-            await self.control_redis.delete(f"active_export:{user_id}")
+            try:
+                await self.control_redis.delete(f"active_export:{user_id}")
+            except Exception:
+                pass
 
     async def set_active_processing_job(self, task_id: str):
         """Сообщаем Java-боту что воркер сейчас занят этой задачей."""
         if self.control_redis:
-            await self.control_redis.set("active_processing_job", task_id, ex=3600)
+            try:
+                await self.control_redis.set("active_processing_job", task_id, ex=3600)
+            except Exception:
+                pass
 
     async def clear_active_processing_job(self):
         """Сбрасываем флаг занятости воркера."""
         if self.control_redis:
-            await self.control_redis.delete("active_processing_job")
+            try:
+                await self.control_redis.delete("active_processing_job")
+            except Exception:
+                pass
 
     def _create_tracker(self, job: ExportRequest) -> Optional[ProgressTracker]:
         """Create a ProgressTracker if user notifications are possible."""
@@ -106,7 +119,7 @@ class ExportWorker:
         """Log current memory usage for monitoring weak server resources."""
         try:
             mem = psutil.virtual_memory()
-            cpu_percent = psutil.cpu_percent(interval=0.1)
+            cpu_percent = psutil.cpu_percent(interval=None)
             logger.info(
                 f"📊 Resource usage [{stage}]: "
                 f"Memory {mem.percent}% ({mem.available/1024/1024:.0f}MB free), "
@@ -145,6 +158,11 @@ class ExportWorker:
             logger.info("1️⃣  Connecting to Redis queue...")
             self.queue_consumer = await create_queue_consumer()
 
+            # 1.5. Recover jobs from previous crash (durability)
+            recovered = await self.queue_consumer.recover_staging_jobs()
+            if recovered:
+                logger.info(f"  Recovered {recovered} orphaned jobs — they will be reprocessed")
+
             # 2. Connect to Telegram API
             logger.info("2️⃣  Connecting to Telegram API...")
             self.telegram_client = await create_telegram_client()
@@ -160,6 +178,8 @@ class ExportWorker:
                 db=settings.REDIS_DB,
                 password=settings.REDIS_PASSWORD,
                 decode_responses=True,
+                socket_timeout=10,
+                socket_connect_timeout=5,
             )
 
             # Передаём Redis-клиент в Telegram-клиент для canonical-маппинга
@@ -170,7 +190,7 @@ class ExportWorker:
             cache_redis = aioredis.Redis(
                 host=settings.REDIS_HOST,
                 port=settings.REDIS_PORT,
-                db=settings.REDIS_DB,
+                db=(settings.REDIS_DB + 1) % 16,  # Separate DB for cache (next DB number)
                 password=settings.REDIS_PASSWORD,
                 decode_responses=False,
             )
@@ -358,6 +378,15 @@ class ExportWorker:
                 await self.java_client._notify_user_failure(
                     job.user_chat_id, job.task_id, str(e)
                 )
+            # Всегда отправляем ответ об ошибке через Java API
+            if self.java_client:
+                await self.java_client.send_response(
+                    task_id=job.task_id,
+                    status="failed",
+                    messages=[],
+                    error=str(e),
+                    user_chat_id=job.user_chat_id,
+                )
             await self.queue_consumer.mark_job_failed(job.task_id, str(e))
             self.jobs_failed += 1
             self.log_memory_usage("JOB_ERROR")
@@ -369,7 +398,6 @@ class ExportWorker:
         from_date: str, to_date: str, missing: list[tuple[str, str]]
     ) -> list[tuple[str, str]]:
         """Compute cached date ranges = [from_date, to_date] minus missing gaps."""
-        from datetime import date as date_cls, timedelta
         if not missing:
             return [(from_date, to_date)]
 
@@ -453,7 +481,9 @@ class ExportWorker:
 
         # Fetch each missing date range from Telegram
         fresh_messages: list[ExportedMessage] = []
-        fetched_count = len(cached_messages)  # Считаем cached в прогресс
+        fetched_count = len(cached_messages)
+        # all_fetched accumulates ALL messages for cancel-save
+        all_fetched: list[ExportedMessage] = list(cached_messages)
         for gap_from, gap_to in missing:
             gap_from_dt = datetime.fromisoformat(gap_from + "T00:00:00+00:00")
             gap_to_dt = datetime.fromisoformat(gap_to + "T23:59:59+00:00")
@@ -469,8 +499,9 @@ class ExportWorker:
                     to_date=gap_to_dt,
                 ):
                     gap_msgs.append(msg)
+                    all_fetched.append(msg)
                     fetched_count += 1
-                    if await self._check_cancel_and_save(job, gap_msgs, fetched_count):
+                    if await self._check_cancel_and_save(job, all_fetched, fetched_count):
                         return None
                     if tracker:
                         await tracker.track(fetched_count)
@@ -528,6 +559,8 @@ class ExportWorker:
         fetched_count = 0
 
         # Step 1: fetch messages NEWER than cache
+        # all_fetched accumulates ALL messages across all fetch phases for cancel-save
+        all_fetched: list[ExportedMessage] = list(fresh_messages)
         try:
             async for msg in self.telegram_client.get_chat_history(
                 chat_id=job.chat_id,
@@ -536,8 +569,9 @@ class ExportWorker:
                 min_id=cache_max_id,
             ):
                 fresh_messages.append(msg)
+                all_fetched.append(msg)
                 fetched_count += 1
-                if await self._check_cancel_and_save(job, fresh_messages, fetched_count):
+                if await self._check_cancel_and_save(job, all_fetched, fetched_count):
                     return None
                 if tracker:
                     await tracker.track(fetched_count)
@@ -548,7 +582,7 @@ class ExportWorker:
             logger.info(f"  Fetched {len(fresh_messages)} new messages above cache max {cache_max_id}")
             await self.message_cache.store_messages(job.chat_id, fresh_messages)
 
-        # Step 2: fill ID gaps (use lowest cached range start, not 1)
+        # Step 2: fill ID gaps
         full_min = min(r[0] for r in cached_ranges)
         full_max = max(cache_max_id, fresh_messages[0].id if fresh_messages else cache_max_id)
         missing = await self.message_cache.get_missing_ranges(job.chat_id, full_min, full_max)
@@ -564,7 +598,8 @@ class ExportWorker:
                 ):
                     gap_msgs.append(msg)
                     fetched_count += 1
-                    if await self._check_cancel_and_save(job, gap_msgs, fetched_count):
+                    all_fetched.append(gap_msgs[-1])
+                    if await self._check_cancel_and_save(job, all_fetched, fetched_count):
                         return None
                     if tracker:
                         await tracker.track(fetched_count)
@@ -576,7 +611,7 @@ class ExportWorker:
                 await self.message_cache.store_messages(job.chat_id, gap_msgs)
                 fresh_messages.extend(gap_msgs)
 
-        # Step 3: fetch messages OLDER than cache minimum (full export only)
+        # Step 3: fetch messages OLDER than cache minimum
         if not job.limit or job.limit <= 0:
             cache_min_id = min(r[0] for r in cached_ranges)
             if cache_min_id > 1:
@@ -590,7 +625,8 @@ class ExportWorker:
                     ):
                         older_msgs.append(msg)
                         fetched_count += 1
-                        if await self._check_cancel_and_save(job, older_msgs, fetched_count):
+                        all_fetched.append(older_msgs[-1])
+                        if await self._check_cancel_and_save(job, all_fetched, fetched_count):
                             return None
                         if tracker:
                             await tracker.track(fetched_count)
@@ -673,16 +709,9 @@ class ExportWorker:
         except Exception as e:
             error = f"Export failed: {str(e)}"
             logger.error(f"❌ {error}")
-            await self.java_client.send_response(
-                task_id=job.task_id,
-                status="failed",
-                messages=messages,
-                error=error,
-                error_code="EXPORT_ERROR",
-                user_chat_id=job.user_chat_id,
-            )
-            await self.queue_consumer.mark_job_failed(job.task_id, error)
-            return None
+            # Re-raise so the caller (process_job) handles notification consistently,
+            # avoiding duplicate failure messages to the user.
+            raise
 
         if tracker:
             await tracker.finalize(len(messages))
@@ -699,8 +728,9 @@ class ExportWorker:
         if not self.control_redis or not self.java_client:
             return
         try:
-            pending = await self.queue_consumer.get_pending_jobs()
-            total = len(pending)
+            pending_result = await self.queue_consumer.get_pending_jobs()
+            pending = pending_result["jobs"]
+            total = pending_result["total_count"]
             # Notify the job that is about to start
             val = await self.control_redis.get(f"queue_msg:{current_task_id}")
             if val:

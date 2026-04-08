@@ -41,7 +41,7 @@ public class SecurityConfig {
                 .sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/health").permitAll()
-                .anyRequest().permitAll()) // Permit all but ApiKeyFilter will handle auth
+                .anyRequest().permitAll()) // Auth handled exclusively by ApiKeyFilter
             .addFilterBefore(apiKeyFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();

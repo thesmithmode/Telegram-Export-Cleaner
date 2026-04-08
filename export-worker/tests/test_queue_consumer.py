@@ -407,7 +407,7 @@ class TestGetPendingJobs:
     """Tests for get_pending_jobs."""
 
     async def test_returns_parsed_jobs(self):
-        """Should return list of ExportRequest from queue without removing them."""
+        """Should return dict with jobs list and total_count from queue without removing them."""
         job1 = ExportRequest(task_id="t1", user_id=1, chat_id=100)
         job2 = ExportRequest(task_id="t2", user_id=2, chat_id=200)
 
@@ -420,6 +420,7 @@ class TestGetPendingJobs:
 
             consumer = QueueConsumer()
             mock_client = AsyncMock()
+            mock_client.llen = AsyncMock(side_effect=lambda key: 2 if "express" in key else 0)
             mock_client.lrange = AsyncMock(return_value=[
                 json.dumps(job1.model_dump()),
                 json.dumps(job2.model_dump()),
@@ -428,13 +429,14 @@ class TestGetPendingJobs:
 
             result = await consumer.get_pending_jobs()
 
-            assert len(result) == 2
-            assert result[0].task_id == "t1"
-            assert result[1].task_id == "t2"
-            mock_client.lrange.assert_called_once_with("telegram_export", 0, -1)
+            assert result["total_count"] == 2
+            assert len(result["jobs"]) == 2
+            assert result["jobs"][0].task_id == "t1"
+            assert result["jobs"][1].task_id == "t2"
+            mock_client.lrange.assert_called()
 
     async def test_returns_empty_on_no_client(self):
-        """Should return empty list if not connected."""
+        """Should return empty dict if not connected."""
         with patch('queue_consumer.settings') as mock_settings:
             mock_settings.REDIS_HOST = "redis"
             mock_settings.REDIS_PORT = 6379
@@ -445,7 +447,7 @@ class TestGetPendingJobs:
             consumer = QueueConsumer()
             # redis_client is None by default
             result = await consumer.get_pending_jobs()
-            assert result == []
+            assert result == {"jobs": [], "total_count": 0}
 
     async def test_skips_invalid_json(self):
         """Should skip items that fail to parse."""
@@ -460,6 +462,7 @@ class TestGetPendingJobs:
 
             consumer = QueueConsumer()
             mock_client = AsyncMock()
+            mock_client.llen = AsyncMock(side_effect=lambda key: 2 if "express" in key else 0)
             mock_client.lrange = AsyncMock(return_value=[
                 "not valid json {",
                 json.dumps(valid_job.model_dump()),
@@ -468,8 +471,8 @@ class TestGetPendingJobs:
 
             result = await consumer.get_pending_jobs()
 
-            assert len(result) == 1
-            assert result[0].task_id == "t1"
+            assert len(result["jobs"]) == 1
+            assert result["jobs"][0].task_id == "t1"
 
 
 @pytest.mark.asyncio
@@ -538,3 +541,118 @@ class TestDeadLetterQueue:
         assert result is not None
         assert result.task_id == "export_ok"
         mock_client.rpush.assert_not_called()
+
+
+class TestStagingDurability:
+    """Tests for queue durability via staging mechanism."""
+
+    def _make_consumer(self, mock_redis_client):
+        """Create consumer with pre-connected mock Redis."""
+        with patch('queue_consumer.settings') as mock_settings:
+            mock_settings.REDIS_HOST = "redis"
+            mock_settings.REDIS_PORT = 6379
+            mock_settings.REDIS_DB = 0
+            mock_settings.REDIS_PASSWORD = None
+            mock_settings.REDIS_QUEUE_NAME = "telegram_export"
+
+            consumer = QueueConsumer()
+            consumer.redis_client = mock_redis_client
+            return consumer
+
+    @pytest.mark.asyncio
+    async def test_get_job_pushes_to_staging(self):
+        """get_job should push job to staging via RPUSH after BLPOP."""
+        valid_job = json.dumps({
+            "task_id": "task_123",
+            "user_id": 456,
+            "chat_id": -1001234567890
+        })
+        mock_client = AsyncMock()
+        mock_client.blpop = AsyncMock(return_value=("telegram_export", valid_job))
+        mock_client.rpush = AsyncMock()
+        mock_client.sadd = AsyncMock()
+
+        consumer = self._make_consumer(mock_client)
+        result = await consumer.get_job()
+
+        assert result is not None
+        assert result.task_id == "task_123"
+        # Job pushed to staging (not LMOVE — BLPOP already removed it)
+        mock_client.rpush.assert_called_once_with(
+            "telegram_export_processing", valid_job
+        )
+        # Job tracked in staging set
+        mock_client.sadd.assert_called_once_with("staging:jobs", "task_123")
+
+    @pytest.mark.asyncio
+    async def test_express_job_pushes_to_express_staging(self):
+        """Express queue jobs should go to express staging."""
+        valid_job = json.dumps({
+            "task_id": "express_task",
+            "user_id": 456,
+            "chat_id": -1001234567890
+        })
+        mock_client = AsyncMock()
+        mock_client.blpop = AsyncMock(return_value=("telegram_export_express", valid_job))
+        mock_client.rpush = AsyncMock()
+        mock_client.sadd = AsyncMock()
+
+        consumer = self._make_consumer(mock_client)
+        result = await consumer.get_job()
+
+        assert result is not None
+        mock_client.rpush.assert_called_once_with(
+            "telegram_export_express_processing", valid_job
+        )
+
+    @pytest.mark.asyncio
+    async def test_invalid_json_goes_to_dlq_and_removed_from_staging(self):
+        """Invalid JSON should be removed from staging and moved to DLQ."""
+        invalid_json = "not valid json"
+        mock_client = AsyncMock()
+        mock_client.blpop = AsyncMock(return_value=("telegram_export", invalid_json))
+        mock_client.rpush = AsyncMock()
+        mock_client.lpop = AsyncMock()
+
+        consumer = self._make_consumer(mock_client)
+        result = await consumer.get_job()
+
+        assert result is None
+        # Invalid job removed from staging
+        mock_client.lpop.assert_called_once()
+        # Moved to DLQ
+        dlq_call = [c for c in mock_client.rpush.call_args_list if "dead" in str(c)]
+        assert len(dlq_call) > 0
+
+    @pytest.mark.asyncio
+    async def test_recover_staging_jobs(self):
+        """recover_staging_jobs should move staging items back to queues."""
+        mock_client = AsyncMock()
+        # First call moves item, second returns None (empty)
+        mock_client.lmove = AsyncMock(side_effect=[b'{"task_id":"t1"}', None, b'{"task_id":"t2"}', None])
+        mock_client.delete = AsyncMock()
+
+        consumer = self._make_consumer(mock_client)
+        count = await consumer.recover_staging_jobs()
+
+        assert count == 2
+        assert mock_client.lmove.call_count == 4
+        mock_client.delete.assert_called_once_with("staging:jobs")
+
+    @pytest.mark.asyncio
+    async def test_mark_job_completed_untracks_staging(self):
+        """mark_job_completed should remove job from staging tracking."""
+        mock_client = AsyncMock()
+        consumer = self._make_consumer(mock_client)
+        await consumer.mark_job_completed("task_123")
+
+        mock_client.srem.assert_called_with("staging:jobs", "task_123")
+
+    @pytest.mark.asyncio
+    async def test_mark_job_failed_untracks_staging(self):
+        """mark_job_failed should remove job from staging tracking."""
+        mock_client = AsyncMock()
+        consumer = self._make_consumer(mock_client)
+        await consumer.mark_job_failed("task_123", "some error")
+
+        mock_client.srem.assert_called_with("staging:jobs", "task_123")
