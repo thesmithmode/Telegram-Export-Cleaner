@@ -329,8 +329,14 @@ public class ExportJobProducer {
             return;
         }
 
-        // Пытаемся удалить задачу из очереди (если ещё не взята воркером).
-        // Проверяем обе очереди: основную и express.
+        // 1. Сначала устанавлием флаг отмены — воркер проверит его при следующей итерации.
+        //    Это гарантирует, что даже если задача уже в обработке, она будет остановлена.
+        redis.opsForValue().set(
+                CANCEL_EXPORT_PREFIX + taskId, "1",
+                ACTIVE_EXPORT_TTL_MINUTES, TimeUnit.MINUTES
+        );
+
+        // 2. Затем удаляем из очереди (если ещё не взята воркером).
         String json = redis.opsForValue().get(JOB_JSON_PREFIX + taskId);
         if (json != null) {
             String targetQueue = redis.opsForValue().get("job_queue:" + taskId);
@@ -348,11 +354,6 @@ public class ExportJobProducer {
             redis.delete("job_queue:" + taskId);
         }
 
-        // Устанавливаем флаг отмены (на случай если задача уже в обработке)
-        redis.opsForValue().set(
-                CANCEL_EXPORT_PREFIX + taskId, "1",
-                ACTIVE_EXPORT_TTL_MINUTES, TimeUnit.MINUTES
-        );
         redis.delete(ACTIVE_EXPORT_PREFIX + userId);
         log.info("Запрошена отмена экспорта {} для пользователя {}", taskId, userId);
     }
