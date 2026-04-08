@@ -106,7 +106,7 @@ class TelegramControllerTest {
                             .file(file)
                             .header("X-API-Key", "test-api-key"))
                     .andExpect(status().isOk())
-                    .andExpect(content().string("20250624 Hello\n"));
+                    .andExpect(streamingContent().string("20250624 Hello\n"));
         }
 
         @Test
@@ -130,7 +130,7 @@ class TelegramControllerTest {
                             .file(file)
                             .header("X-API-Key", "test-api-key"))
                     .andExpect(status().isOk())
-                    .andExpect(content().string("20250624 First\n20250624 Second\n"));
+                    .andExpect(streamingContent().string("20250624 First\n20250624 Second\n"));
         }
 
         @Test
@@ -151,7 +151,7 @@ class TelegramControllerTest {
                             .file(file)
                             .header("X-API-Key", "test-api-key"))
                     .andExpect(status().isOk())
-                    .andExpect(content().bytes(new byte[0]));
+                    .andExpect(streamingContent().bytes(new byte[0]));
         }
 
         @Test
