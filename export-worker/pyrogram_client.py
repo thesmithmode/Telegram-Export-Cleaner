@@ -167,7 +167,9 @@ class TelegramClient:
             message_count = 0
             last_offset_id = offset_id
             max_retries = settings.MAX_RETRIES
-            seen_message_ids: set[int] = set()  # Track seen messages to avoid FloodWait dups
+            # Dedup set is only needed after a FloodWait retry — Pyrogram's iterator
+            # does not yield duplicates during a normal sequential pass.
+            seen_message_ids: Optional[set[int]] = None
 
             retry_count = 0
             while True:
@@ -183,8 +185,8 @@ class TelegramClient:
                                 logger.debug(f"Reached already-exported message {message.id} (min_id={min_id}), stopping")
                                 return
 
-                            # Skip duplicates from FloodWait retry
-                            if message.id in seen_message_ids:
+                            # Skip duplicates from FloodWait retry (only relevant after retry)
+                            if seen_message_ids is not None and message.id in seen_message_ids:
                                 logger.debug(f"Skipping duplicate message {message.id}")
                                 continue
 
@@ -196,7 +198,8 @@ class TelegramClient:
                                 continue
 
                             # Track this message ID and update last offset for restart-on-FloodWait
-                            seen_message_ids.add(message.id)
+                            if seen_message_ids is not None:
+                                seen_message_ids.add(message.id)
                             last_offset_id = message.id
 
                             # Convert to export format
@@ -223,6 +226,10 @@ class TelegramClient:
                             f"Max retries ({max_retries}) exceeded due to rate limiting"
                         )
                         raise
+
+                    # Create dedup set on first FloodWait
+                    if seen_message_ids is None:
+                        seen_message_ids = set()
 
                     # Use Telegram's suggested wait as minimum
                     wait_time = min(
