@@ -50,7 +50,7 @@ public class ApiExceptionHandler {
     }
 
     @ExceptionHandler(IOException.class)
-    public ResponseEntity<Map<String, String>> handleIoException(IOException ex) {
+    public ResponseEntity<Map<String, String>> handleIOException(IOException ex) {
         log.error("Ошибка ввода/вывода при конвертации", ex);
         return ResponseEntity.internalServerError()
                 .body(Map.of("error", "Внутренняя ошибка сервера"));

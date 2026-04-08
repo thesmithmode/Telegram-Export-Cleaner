@@ -337,15 +337,10 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     }
 
     static LocalDate parseDate(String text) {
-        try { return LocalDate.parse(text.trim(), DATE_FORMAT); } catch (Exception e) { return null; }
-    }
-
-    private void sendText(long chatId, String text) {
-        SendMessage m = SendMessage.builder().chatId(String.valueOf(chatId)).text(text).build();
-        try { telegramClient.execute(m); } catch (Exception e) { log.error("Send fail: {}", e.getMessage()); }
-    }
-
-    private void answerCallback(String id) {
-        try { telegramClient.execute(AnswerCallbackQuery.builder().callbackQueryId(id).build()); } catch (Exception ignored) {}
+        try {
+            return LocalDate.parse(text.trim(), DATE_FORMAT);
+        } catch (Exception e) {
+            return null;
+        }
     }
 }
