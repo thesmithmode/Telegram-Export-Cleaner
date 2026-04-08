@@ -22,11 +22,24 @@ public class MessageProcessor {
 
     private static final Logger log = LoggerFactory.getLogger(MessageProcessor.class);
 
+    /** Значение по умолчанию для поля type если оно отсутствует в JSON. */
+    public static final String DEFAULT_MESSAGE_TYPE = "message";
+
     /**
      * Создаёт экземпляр процессора. Активируется Spring как {@code @Component},
      * а также напрямую в CLI-режиме из {@link TelegramExporter#TelegramExporter()}.
      */
     public MessageProcessor() {
+    }
+
+    /**
+     * Возвращает тип сообщения из JSON-узла.
+     *
+     * @param message JSON-узел сообщения
+     * @return значение поля "type" или DEFAULT_MESSAGE_TYPE если поле отсутствует
+     */
+    public static String getMessageType(JsonNode message) {
+        return message.has("type") ? message.get("type").asText() : DEFAULT_MESSAGE_TYPE;
     }
 
     /**
@@ -40,7 +53,7 @@ public class MessageProcessor {
             return null;
         }
 
-        String type = message.has("type") ? message.get("type").asText() : "message";
+        String type = getMessageType(message);
 
         if ("service".equals(type)) {
             return null;

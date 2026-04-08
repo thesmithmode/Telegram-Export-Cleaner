@@ -163,7 +163,7 @@ public class MessageFilter {
         }
 
         if (!includeTypes.isEmpty() || !excludeTypes.isEmpty()) {
-            String type = message.has("type") ? message.get("type").asText() : "message";
+            String type = MessageProcessor.getMessageType(message);
 
             if (!includeTypes.isEmpty() && !includeTypes.contains(type)) {
                 return false;
