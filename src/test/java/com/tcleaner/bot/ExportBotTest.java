@@ -442,7 +442,6 @@ class ExportBotTest {
         Chat forwardFromChat = Chat.builder()
                 .id(-100123456789L)
                 .type("channel")
-                .username(channelUsername)
                 .title(channelTitle)
                 .build();
         message.setForwardFromChat(forwardFromChat);
