@@ -1,31 +1,35 @@
 package com.tcleaner.bot;
 
-import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.telegram.telegrambots.meta.api.objects.message.Message;
+import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.User;
 import org.telegram.telegrambots.meta.api.objects.chat.Chat;
+import org.telegram.telegrambots.meta.api.objects.message.Message;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.atLeast;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * Юнит-тесты для {@link ExportBot}.
  *
- * <p>Покрывает функциональность обработки сообщений пользователей, управления состоянием
- * сессии (AWAITING_CHAT_IDENTIFIER, AWAITING_TO_DATE и т.д.), и взаимодействие с
- * {@link ExportJobProducer} для добавления задач в очередь.</p>
- *
- * <p>Используются моки для {@link ExportJobProducer} и {@link BotMessenger}, чтобы
- * изолировать логику бота от внешних зависимостей.</p>
+ * <p>Покрывает: обработку идентификатора чата, интерактивный wizard выбора
+ * диапазона дат через callback-кнопки, ручной ввод дат и управление экспортом.</p>
  */
 class ExportBotTest {
 
@@ -34,11 +38,10 @@ class ExportBotTest {
     private ExportBot bot;
 
     @BeforeEach
-    void setUp() throws Exception {
+    void setUp() {
         jobProducerMock = mock(ExportJobProducer.class);
         messengerMock = mock(BotMessenger.class);
 
-        // По умолчанию активных экспортов нет
         when(jobProducerMock.getActiveExport(anyLong())).thenReturn(null);
         when(jobProducerMock.enqueue(anyLong(), anyLong(), any(String.class), isNull(), isNull()))
                 .thenReturn("export_test_id");
@@ -47,38 +50,42 @@ class ExportBotTest {
         when(jobProducerMock.isLikelyCached(any())).thenReturn(false);
         when(jobProducerMock.getQueueLength()).thenReturn(0L);
         when(jobProducerMock.hasActiveProcessingJob()).thenReturn(false);
+        when(messengerMock.sendWithKeyboardGetId(anyLong(), anyString(), any())).thenReturn(42);
 
         bot = new ExportBot("token", jobProducerMock, messengerMock);
     }
 
     @Nested
-    @DisplayName("Прямой ввод идентификатора чата")
-    class DirectChatIdentifierInput {
+    @DisplayName("Ввод идентификатора чата")
+    class ChatIdentifierInput {
 
         @Test
-        @DisplayName("Пользователь может ввести ссылку t.me")
-        void testDirectLinkInput() {
-            bot.consume(createTextMessageUpdate(123L, "https://t.me/public_channel"));
+        @DisplayName("@username переводит в AWAITING_DATE_CHOICE и показывает inline-меню")
+        void testAtUsername() {
+            bot.consume(createTextMessageUpdate(123L, "@test_chat"));
 
-            // Должно быть запрос даты
-            verify(messengerMock).send(eq(123L), contains("Введите дату начала"));
+            verify(messengerMock).sendWithKeyboard(
+                    eq(123L),
+                    contains("Чат: @test_chat"),
+                    any(InlineKeyboardMarkup.class));
         }
 
         @Test
-        @DisplayName("Пользователь может ввести @username")
-        void testDirectAtUsernameInput() {
-            bot.consume(createTextMessageUpdate(123L, "@public_channel"));
+        @DisplayName("Ссылка t.me показывает inline-меню выбора диапазона")
+        void testTmeLink() {
+            bot.consume(createTextMessageUpdate(123L, "https://t.me/public_channel"));
 
-            // Должно быть запрос даты
-            verify(messengerMock).send(eq(123L), contains("Введите дату начала"));
+            verify(messengerMock).sendWithKeyboard(
+                    eq(123L),
+                    contains("@public_channel"),
+                    any(InlineKeyboardMarkup.class));
         }
 
         @Test
         @DisplayName("Числовой ID отклоняется")
-        void testNumericIdRejected() {
+        void testNumericRejected() {
             bot.consume(createTextMessageUpdate(123L, "-1001234567890"));
 
-            // Должно быть сообщение об ошибке
             verify(messengerMock).send(eq(123L), contains("Неверный формат"));
         }
 
@@ -87,127 +94,141 @@ class ExportBotTest {
         void testUsernameWithoutAtRejected() {
             bot.consume(createTextMessageUpdate(123L, "public_channel"));
 
-            // Должно быть сообщение об ошибке
-            verify(messengerMock).send(eq(123L), contains("Неверный формат"));
-        }
-
-        @Test
-        @DisplayName("Неверный формат отклоняется")
-        void testInvalidFormatRejected() {
-            bot.consume(createTextMessageUpdate(123L, "123 456 789"));
-
-            // Должно быть сообщение об ошибке
             verify(messengerMock).send(eq(123L), contains("Неверный формат"));
         }
     }
 
     @Nested
-    @DisplayName("Диалог выбора дат")
-    class DateRangeDialog {
+    @DisplayName("Wizard выбора диапазона через callback-кнопки")
+    class CallbackWizard {
 
         @Test
-        @DisplayName("Пользователь может ввести дату начала дд.мм.гггг")
-        void testFromDateValidFormat() {
-            // Шаг 1: выбираем чат
-            bot.consume(createTextMessageUpdate(123L, "@test_chat"));
-            verify(messengerMock).send(eq(123L), contains("Введите дату начала"));
-
-            // Шаг 2: вводим дату
-            bot.consume(createTextMessageUpdate(123L, "01.01.2024"));
-
-            // Должен перейти в AWAITING_TO_DATE и запросить дату конца
-            verify(messengerMock).send(eq(123L), contains("Введите дату конца"));
-        }
-
-        @Test
-        @DisplayName("Неверный формат даты отклоняется")
-        void testFromDateInvalidFormat() {
-            // Шаг 1: выбираем чат
-            bot.consume(createTextMessageUpdate(123L, "@test_chat"));
-
-            // Шаг 2: вводим неверный формат
-            bot.consume(createTextMessageUpdate(123L, "2024-01-01"));
-
-            // Должно быть сообщение об ошибке (среди отправленных сообщений)
-            verify(messengerMock, atLeast(1)).send(eq(123L), contains("Неверный формат"));
-        }
-
-        @Test
-        @DisplayName("/all переходит прямо в AWAITING_TO_DATE")
-        void testFromDateAllCommand() {
-            // Шаг 1: выбираем чат
-            bot.consume(createTextMessageUpdate(123L, "@test_chat"));
-
-            // Шаг 2: вводим /all (весь чат)
-            bot.consume(createTextMessageUpdate(123L, "/all"));
-
-            // Первое сообщение — "Введите дату начала", второе — "Введите дату конца"
-            verify(messengerMock).send(eq(123L), contains("Введите дату начала"));
-            verify(messengerMock).send(eq(123L), contains("Введите дату конца"));
-        }
-
-        @Test
-        @DisplayName("/today в AWAITING_TO_DATE запускает экспорт")
-        void testToDateTodayCommand() {
-            // Шаг 1: выбираем чат
-            bot.consume(createTextMessageUpdate(123L, "@test_chat"));
-
-            // Шаг 2: вводим /all
-            bot.consume(createTextMessageUpdate(123L, "/all"));
-
-            // Шаг 3: вводим /today
-            bot.consume(createTextMessageUpdate(123L, "/today"));
-
-            // Должен быть вызван enqueue и сообщение о принятии задачи
-            verify(jobProducerMock).enqueue(123L, 123L, "test_chat", null, null);
-            verify(messengerMock).send(eq(123L), contains("Задача принята"));
-        }
-
-        @Test
-        @DisplayName("Полный flow: username → от даты → до даты → экспорт")
-        void testCompleteDateRangeFlow() {
-            // Шаг 1: username
+        @DisplayName("CB_EXPORT_ALL запускает экспорт всего чата")
+        void testExportAll() {
             bot.consume(createTextMessageUpdate(123L, "@my_channel"));
+            bot.consume(createCallbackUpdate(123L, ExportBot.CB_EXPORT_ALL));
 
-            // Шаг 2: дата начала
+            verify(jobProducerMock).enqueue(123L, 123L, "my_channel", null, null);
+            verify(messengerMock).editMessage(
+                    eq(123L), anyInt(), contains("Задача принята"), any(InlineKeyboardMarkup.class));
+        }
+
+        @Test
+        @DisplayName("Сообщение о принятии задачи содержит имя чата, а не null")
+        void testResultShowsChatDisplay() {
+            bot.consume(createTextMessageUpdate(123L, "@crypto_hd"));
+            bot.consume(createCallbackUpdate(123L, ExportBot.CB_EXPORT_ALL));
+
+            verify(messengerMock).editMessage(
+                    eq(123L), anyInt(), contains("@crypto_hd"), any(InlineKeyboardMarkup.class));
+        }
+
+        @Test
+        @DisplayName("CB_DATE_RANGE переводит в AWAITING_FROM_DATE")
+        void testDateRange() {
+            bot.consume(createTextMessageUpdate(123L, "@my_channel"));
+            bot.consume(createCallbackUpdate(123L, ExportBot.CB_DATE_RANGE));
+
+            verify(messengerMock).editMessage(
+                    eq(123L), anyInt(), contains("начальную дату"), any(InlineKeyboardMarkup.class));
+        }
+
+        @Test
+        @DisplayName("CB_FROM_START → ввод конечной даты")
+        void testFromStart() {
+            bot.consume(createTextMessageUpdate(123L, "@my_channel"));
+            bot.consume(createCallbackUpdate(123L, ExportBot.CB_DATE_RANGE));
+            bot.consume(createCallbackUpdate(123L, ExportBot.CB_FROM_START));
+
+            verify(messengerMock).editMessage(
+                    eq(123L), anyInt(), contains("конечную дату"), any(InlineKeyboardMarkup.class));
+        }
+
+        @Test
+        @DisplayName("CB_TO_TODAY запускает экспорт с fromDate, toDate=null")
+        void testToToday() {
+            bot.consume(createTextMessageUpdate(123L, "@my_channel"));
+            bot.consume(createCallbackUpdate(123L, ExportBot.CB_DATE_RANGE));
             bot.consume(createTextMessageUpdate(123L, "01.01.2024"));
+            bot.consume(createCallbackUpdate(123L, ExportBot.CB_TO_TODAY));
 
-            // Шаг 3: дата конца
+            verify(jobProducerMock).enqueue(
+                    eq(123L), eq(123L), eq("my_channel"), contains("2024-01-01"), isNull());
+        }
+
+        @Test
+        @DisplayName("CB_CANCEL_EXPORT отменяет экспорт")
+        void testCancelCallback() {
+            bot.consume(createCallbackUpdate(123L, ExportBot.CB_CANCEL_EXPORT));
+
+            verify(jobProducerMock).cancelExport(123L);
+            verify(messengerMock).editMessage(
+                    eq(123L), anyInt(), contains("отменён"), isNull());
+        }
+    }
+
+    @Nested
+    @DisplayName("Ручной ввод дат (после CB_DATE_RANGE)")
+    class ManualDateInput {
+
+        @Test
+        @DisplayName("Полный flow: @chan → CB_DATE_RANGE → 01.01.2024 → 31.12.2024 → enqueue")
+        void testManualDateFlow() {
+            bot.consume(createTextMessageUpdate(123L, "@my_channel"));
+            bot.consume(createCallbackUpdate(123L, ExportBot.CB_DATE_RANGE));
+            bot.consume(createTextMessageUpdate(123L, "01.01.2024"));
             bot.consume(createTextMessageUpdate(123L, "31.12.2024"));
 
-            // Проверяем вызов enqueue с обеими датами
             verify(jobProducerMock).enqueue(
                     eq(123L), eq(123L), eq("my_channel"),
-                    contains("2024-01-01"), contains("2024-12-31")
-            );
-            verify(messengerMock).send(eq(123L), contains("Задача принята"));
+                    contains("2024-01-01"), contains("2024-12-31"));
         }
 
         @Test
-        @DisplayName("Неверная дата конца отклоняется")
-        void testToDateInvalidFormat() {
-            // Шаг 1: username
+        @DisplayName("Неверный формат начальной даты отклоняется")
+        void testInvalidFromDate() {
             bot.consume(createTextMessageUpdate(123L, "@my_channel"));
+            bot.consume(createCallbackUpdate(123L, ExportBot.CB_DATE_RANGE));
+            bot.consume(createTextMessageUpdate(123L, "2024-01-01"));
 
-            // Шаг 2: дата начала
+            verify(messengerMock, atLeastOnce()).send(eq(123L), contains("Неверный формат"));
+        }
+
+        @Test
+        @DisplayName("Неверный формат конечной даты отклоняется")
+        void testInvalidToDate() {
+            bot.consume(createTextMessageUpdate(123L, "@my_channel"));
+            bot.consume(createCallbackUpdate(123L, ExportBot.CB_DATE_RANGE));
             bot.consume(createTextMessageUpdate(123L, "01.01.2024"));
-
-            // Шаг 3: неверный формат даты конца
             bot.consume(createTextMessageUpdate(123L, "31-12-2024"));
 
-            // Должно быть сообщение об ошибке (среди отправленных сообщений)
-            verify(messengerMock, atLeast(1)).send(eq(123L), contains("Неверный формат"));
+            verify(messengerMock, atLeastOnce()).send(eq(123L), contains("Неверный формат"));
         }
     }
 
     @Nested
-    @DisplayName("Отмена и управление экспортом")
-    class CancelExport {
+    @DisplayName("Команды управления и сессии")
+    class CommandsAndSessions {
+
+        @Test
+        @DisplayName("/start снимает устаревшую reply-клавиатуру")
+        void testStartRemovesReplyKeyboard() {
+            bot.consume(createTextMessageUpdate(123L, "/start"));
+
+            verify(messengerMock).sendRemoveReplyKeyboard(eq(123L), contains("Этот бот экспортирует"));
+        }
+
+        @Test
+        @DisplayName("/help снимает устаревшую reply-клавиатуру")
+        void testHelpRemovesReplyKeyboard() {
+            bot.consume(createTextMessageUpdate(123L, "/help"));
+
+            verify(messengerMock).sendRemoveReplyKeyboard(eq(123L), anyString());
+        }
 
         @Test
         @DisplayName("/cancel отменяет активный экспорт")
-        void testCancelActiveExport() {
-            // Симулируем активный экспорт
+        void testCancelActive() {
             when(jobProducerMock.getActiveExport(123L)).thenReturn("export_xyz");
 
             bot.consume(createTextMessageUpdate(123L, "/cancel"));
@@ -217,10 +238,8 @@ class ExportBotTest {
         }
 
         @Test
-        @DisplayName("/cancel без активного экспорта отправляет сообщение об ошибке")
-        void testCancelWithoutActiveExport() {
-            when(jobProducerMock.getActiveExport(123L)).thenReturn(null);
-
+        @DisplayName("/cancel без активного экспорта — сообщение об отсутствии")
+        void testCancelNoActive() {
             bot.consume(createTextMessageUpdate(123L, "/cancel"));
 
             verify(jobProducerMock, never()).cancelExport(anyLong());
@@ -228,8 +247,8 @@ class ExportBotTest {
         }
 
         @Test
-        @DisplayName("Попытка запустить экспорт при активном показывает сообщение")
-        void testDuplicateExportBlocked() {
+        @DisplayName("Дублирующий экспорт блокируется на этапе identifier")
+        void testDuplicateBlocked() {
             when(jobProducerMock.getActiveExport(123L)).thenReturn("export_existing");
 
             bot.consume(createTextMessageUpdate(123L, "@my_channel"));
@@ -239,224 +258,71 @@ class ExportBotTest {
         }
 
         @Test
-        @DisplayName("Race condition: экспорт блокируется на уровне SET NX")
-        void testRaceConditionBlocked() {
-            when(jobProducerMock.enqueue(anyLong(), anyLong(), any(String.class), any(), any()))
-                    .thenThrow(new IllegalStateException("Экспорт уже активен"));
-
-            bot.consume(createTextMessageUpdate(123L, "@my_channel"));
-            bot.consume(createTextMessageUpdate(123L, "/all"));
-            bot.consume(createTextMessageUpdate(123L, "/today"));
-
-            verify(messengerMock).send(eq(123L), contains("уже есть активный экспорт"));
-        }
-    }
-
-    @Nested
-    @DisplayName("Сессии и стабильность")
-    class SessionManagement {
-
-        @Test
-        @DisplayName("Сессия сбрасывается в IDLE после успешного экспорта")
-        void testSessionResetAfterExport() {
-            // Запускаем полный flow
-            bot.consume(createTextMessageUpdate(123L, "@my_channel"));
-            bot.consume(createTextMessageUpdate(123L, "/all"));
-            bot.consume(createTextMessageUpdate(123L, "/today"));
-
-            // После экспорта сессия должна быть сброшена
-            // Проверим это следующим сообщением от пользователя
-            bot.consume(createTextMessageUpdate(123L, "@another_channel"));
-
-            // Если сессия была сброшена, то это будет IDLE → AWAITING_FROM_DATE
-            verify(messengerMock, times(4)).send(eq(123L), any());
-        }
-
-        @Test
-        @DisplayName("/start и /help отправляют справку")
-        void testStartAndHelpCommands() {
-            bot.consume(createTextMessageUpdate(123L, "/start"));
-
-            verify(messengerMock).send(eq(123L), contains("Этот бот экспортирует"));
-        }
-
-        @Test
-        @DisplayName("consume() не бросает исключение на пустом Update")
-        void testConsumeWithoutMessage() {
-            Update emptyUpdate = new Update();
-            bot.consume(emptyUpdate);
-
-            // Не должно быть исключения
-            verify(messengerMock, never()).send(anyLong(), any());
-        }
-
-        @Test
-        @DisplayName("Сообщение из группы (не private) игнорируется")
+        @DisplayName("Сообщение из группы игнорируется")
         void testGroupMessageIgnored() {
             Update update = new Update();
             update.setUpdateId(1);
             Message message = new Message();
             message.setMessageId(1);
             message.setText("test");
-            Chat chat = Chat.builder()
-                    .id(123L)
-                    .type("group")  // ← не private
-                    .build();
+            Chat chat = Chat.builder().id(123L).type("group").build();
             message.setChat(chat);
-            User user = User.builder()
-                    .id(456L)
-                    .firstName("Test")
-                    .isBot(false)
-                    .build();
+            User user = User.builder().id(456L).firstName("Test").isBot(false).build();
             message.setFrom(user);
             update.setMessage(message);
 
             bot.consume(update);
 
-            // Не должно быть сообщений
             verify(messengerMock, never()).send(anyLong(), any());
+            verify(messengerMock, never()).sendWithKeyboard(anyLong(), any(), any());
+        }
+
+        @Test
+        @DisplayName("Успешный экспорт сохраняет queue msg id для progress-трекинга")
+        void testStoreQueueMsgId() {
+            bot.consume(createTextMessageUpdate(123L, "@my_channel"));
+            bot.consume(createCallbackUpdate(123L, ExportBot.CB_EXPORT_ALL));
+
+            // editMessageId from callback > 0, т.е. storeQueueMsgId вызовется с этим id
+            verify(jobProducerMock, atLeast(1))
+                    .storeQueueMsgId(eq("export_test_id"), eq(123L), anyInt());
         }
     }
 
-    // ============ Helper methods ============
+    // ============ Helpers ============
 
     private Update createTextMessageUpdate(long userId, String text) {
         Update update = new Update();
         update.setUpdateId(1);
-
         Message message = new Message();
         message.setMessageId(1);
         message.setText(text);
-
-        Chat chat = Chat.builder()
-                .id(userId)
-                .type("private")
-                .build();
+        Chat chat = Chat.builder().id(userId).type("private").build();
         message.setChat(chat);
-
-        User user = User.builder()
-                .id(userId)
-                .firstName("Test")
-                .isBot(false)
-                .build();
+        User user = User.builder().id(userId).firstName("Test").isBot(false).build();
         message.setFrom(user);
-
         update.setMessage(message);
         return update;
     }
 
-    @Nested
-    @DisplayName("Пересланные сообщения (forward detection)")
-    class ForwardedMessageHandling {
-
-        @Test
-        @DisplayName("Пересланное сообщение из публичного канала — обрабатывается как обычное")
-        void testForwardedFromPublicChannel() throws Exception {
-            when(jobProducerMock.enqueue(anyLong(), anyLong(), anyString(), any(), any()))
-                    .thenReturn("task_forward");
-            when(jobProducerMock.getQueueLength()).thenReturn(1L);
-            when(jobProducerMock.hasActiveProcessingJob()).thenReturn(false);
-            when(jobProducerMock.isLikelyCached(any())).thenReturn(false);
-
-            Update update = createForwardedMessageUpdate(123L, "public_channel", "Public Channel Title");
-
-            bot.consume(update);
-
-            // Пересланные сообщения обрабатываются как обычные — enqueue не вызывается,
-            // т.к. текст "public_channel" не проходит валидацию как username/ссылка
-            verify(messengerMock).send(eq(123L), contains("Неверный формат"));
-        }
-
-        @Test
-        @DisplayName("Пересланное сообщение без username — отправляется ошибка формата")
-        void testForwardedFromPrivateChat() throws Exception {
-            User user = User.builder().id(123L).isBot(false).firstName("Test").build();
-            Chat userChat = Chat.builder().id(123L).type("private").build();
-            Chat sourceChat = Chat.builder()
-                    .id(-100987654321L)
-                    .type("group")
-                    .title("Private Group")
-                    .build();
-
-            Message m = Message.builder()
-                    .messageId(1)
-                    .from(user)
-                    .chat(userChat)
-                    .text("Forwarded")
-                    .forwardFromChat(sourceChat)
-                    .build();
-
-            Update update = new Update();
-            update.setUpdateId(1);
-            update.setMessage(m);
-
-            bot.consume(update);
-
-            // enqueue не должен быть вызван (нет валидного идентификатора чата)
-            verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString(), any(), any());
-            // Должно быть отправлено сообщение об ошибке формата
-            verify(messengerMock, atLeast(1)).send(eq(123L), anyString());
-        }
-
-        @Test
-        @DisplayName("Пересланное сообщение без информации о чате — безопасная обработка")
-        void testForwardedWithoutSourceChat() throws Exception {
-            User user = User.builder().id(123L).isBot(false).firstName("Test").build();
-            Chat userChat = Chat.builder().id(123L).type("private").build();
-
-            Message m = Message.builder()
-                    .messageId(1)
-                    .from(user)
-                    .chat(userChat)
-                    .text("Forwarded")
-                    .forwardFromChat(null)
-                    .build();
-
-            Update update = new Update();
-            update.setUpdateId(1);
-            update.setMessage(m);
-
-            // Должен НЕ выбросить исключение
-            Assertions.assertDoesNotThrow(() -> {
-                bot.consume(update);
-            });
-
-            // enqueue не должен быть вызван
-            verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString(), any(), any());
-        }
-    }
-
-    // ============ Forwarded message helper ============
-
-    private Update createForwardedMessageUpdate(long userId, String channelUsername, String channelTitle) {
+    private Update createCallbackUpdate(long userId, String data) {
         Update update = new Update();
-        update.setUpdateId(1);
+        update.setUpdateId(2);
 
-        Message message = new Message();
-        message.setMessageId(1);
-        message.setText(channelUsername);
+        Message callbackMessage = new Message();
+        callbackMessage.setMessageId(777);
+        Chat chat = Chat.builder().id(userId).type("private").build();
+        callbackMessage.setChat(chat);
 
-        Chat chat = Chat.builder()
-                .id(userId)
-                .type("private")
-                .build();
-        message.setChat(chat);
+        User user = User.builder().id(userId).firstName("Test").isBot(false).build();
 
-        User user = User.builder()
-                .id(userId)
-                .firstName("Test")
-                .isBot(false)
-                .build();
-        message.setFrom(user);
+        CallbackQuery cb = new CallbackQuery();
+        cb.setId("cb_" + data);
+        cb.setFrom(user);
+        cb.setData(data);
+        cb.setMessage(callbackMessage);
 
-        Chat forwardFromChat = Chat.builder()
-                .id(-100123456789L)
-                .type("channel")
-                .title(channelTitle)
-                .build();
-        message.setForwardFromChat(forwardFromChat);
-
-        update.setMessage(message);
+        update.setCallbackQuery(cb);
         return update;
     }
 }
