@@ -42,7 +42,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * </ul>
  */
 @WebMvcTest
-@Import({TelegramController.class, FileConversionService.class, ApiKeyFilter.class, ApiExceptionHandler.class})
+@Import({TelegramController.class, FileConversionService.class, ApiKeyFilter.class, ApiExceptionHandler.class,
+        SecurityConfig.class})
 @DisplayName("TelegramController")
 class TelegramControllerTest {
 
