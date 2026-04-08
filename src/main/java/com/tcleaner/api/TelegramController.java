@@ -59,16 +59,23 @@ public class TelegramController {
             @RequestParam(value = "excludeKeywords", required = false) String excludeKeywords) {
 
         if (file.isEmpty()) {
-            throw new IllegalArgumentException("Файл пустой");
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "Файл пустой"));
         }
 
         String originalFilename = file.getOriginalFilename();
         if (originalFilename == null || !originalFilename.endsWith(".json")) {
-            throw new IllegalArgumentException("Ожидается JSON файл");
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "Ожидается JSON файл"));
         }
 
-        MessageFilter filter = MessageFilterFactory.build(startDate, endDate, keywords, excludeKeywords);
-        return conversionService.convert(file, filter);
+        try {
+            MessageFilter filter = MessageFilterFactory.build(startDate, endDate, keywords, excludeKeywords);
+            return conversionService.convert(file, filter);
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", ex.getMessage()));
+        }
     }
 
     /**
