@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.util.Map;
 
 /**
@@ -75,6 +76,8 @@ public class TelegramController {
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.badRequest()
                     .body(Map.of("error", ex.getMessage()));
+        } catch (IOException ex) {
+            throw new RuntimeException("Ошибка при конвертации файла", ex);
         }
     }
 
