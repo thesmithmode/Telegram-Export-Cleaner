@@ -68,13 +68,11 @@ class TestExportWorkerE2E:
                 for i in range(1, 6)
             ]
 
-            async def message_generator():
+            async def message_generator(**kwargs):
                 for msg in test_messages:
                     yield msg
 
-            worker.telegram_client.get_chat_history = AsyncMock(
-                return_value=message_generator()
-            )
+            worker.telegram_client.get_chat_history = message_generator
             worker.java_client.send_response = AsyncMock(return_value=True)
             worker.queue_consumer.mark_job_processing = AsyncMock(return_value=True)
             worker.queue_consumer.mark_job_completed = AsyncMock(return_value=True)
@@ -147,7 +145,7 @@ class TestExportWorkerE2E:
             ))
             worker.telegram_client.get_messages_count = AsyncMock(return_value=10)
 
-            async def failing_generator():
+            async def failing_generator(**kwargs):
                 yield ExportedMessage(
                     id=1,
                     type="message",
@@ -156,9 +154,7 @@ class TestExportWorkerE2E:
                 )
                 raise RuntimeError("Export interrupted")
 
-            worker.telegram_client.get_chat_history = AsyncMock(
-                return_value=failing_generator()
-            )
+            worker.telegram_client.get_chat_history = failing_generator
             worker.java_client.send_response = AsyncMock(return_value=True)
             worker.queue_consumer.mark_job_failed = AsyncMock(return_value=True)
             worker.queue_consumer.mark_job_processing = AsyncMock(return_value=True)

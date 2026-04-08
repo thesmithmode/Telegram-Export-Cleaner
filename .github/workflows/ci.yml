@@ -4,16 +4,20 @@ on:
   push:
     branches-ignore: [ main ]
 
+# Отменяем предыдущие запуски для той же ветки — экономим минуты
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
 
   # ─── Сборка и тесты ──────────────────────────────────────────────────────────
   test:
     name: Build & Test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -25,17 +29,16 @@ jobs:
       - name: Build and test
         run: mvn clean package
 
-  # ─── Python Worker Tests ───────────────────────────────────────────────────────
-  python-tests:
-    name: Python Tests
+  # ─── Python Unit Tests ───────────────────────────────────────────────────────
+  python-unit-tests:
+    name: Python Unit Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -43,20 +46,16 @@ jobs:
       - name: Create environment file
         run: |
           cat > export-worker/.env << EOF
-          TELEGRAM_API_ID=${{ secrets.TELEGRAM_API_ID }}
-          TELEGRAM_API_HASH=${{ secrets.TELEGRAM_API_HASH }}
-          TELEGRAM_PHONE_NUMBER=${{ secrets.TELEGRAM_PHONE_NUMBER }}
-          TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_API_ID=1
+          TELEGRAM_API_HASH=test_hash_for_ci
+          TELEGRAM_PHONE_NUMBER=+1234567890
+          TELEGRAM_BOT_TOKEN=000000000:AAAAAA
           REDIS_HOST=localhost
           REDIS_PORT=6379
           JAVA_API_BASE_URL=http://localhost:8080
           LOG_LEVEL=DEBUG
+          CACHE_ENABLED=false
           EOF
-        env:
-          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
-          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
-          TELEGRAM_PHONE_NUMBER: ${{ secrets.TELEGRAM_PHONE_NUMBER }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
 
       - name: Install dependencies
         run: |
@@ -69,23 +68,145 @@ jobs:
           cd export-worker
           pytest tests/test_models.py tests/test_json_converter.py -v --cov=. --cov-report=xml
 
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./export-worker/coverage.xml
+          fail_ci_if_error: false
+
+  # ─── Python Integration Tests (с Redis и mock Java) ──────────────────────────
+  python-integration-tests:
+    name: Python Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Create environment file
+        run: |
+          cat > export-worker/.env << EOF
+          TELEGRAM_API_ID=1
+          TELEGRAM_API_HASH=test_hash_for_ci
+          TELEGRAM_PHONE_NUMBER=+1234567890
+          TELEGRAM_BOT_TOKEN=000000000:AAAAAA
+          REDIS_HOST=localhost
+          REDIS_PORT=6379
+          JAVA_API_BASE_URL=http://localhost:8080
+          LOG_LEVEL=DEBUG
+          CACHE_ENABLED=true
+          EOF
+
+      - name: Install dependencies
+        run: |
+          cd export-worker
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov
+
       - name: Run integration tests
         run: |
           cd export-worker
           pytest tests/test_integration.py -v --tb=short
+
+  # ─── Python E2E Tests ────────────────────────────────────────────────────────
+  python-e2e-tests:
+    name: Python E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Create environment file
+        run: |
+          cat > export-worker/.env << EOF
+          TELEGRAM_API_ID=1
+          TELEGRAM_API_HASH=test_hash_for_ci
+          TELEGRAM_PHONE_NUMBER=+1234567890
+          TELEGRAM_BOT_TOKEN=000000000:AAAAAA
+          REDIS_HOST=localhost
+          REDIS_PORT=6379
+          JAVA_API_BASE_URL=http://localhost:8080
+          LOG_LEVEL=DEBUG
+          CACHE_ENABLED=true
+          EOF
+
+      - name: Install dependencies
+        run: |
+          cd export-worker
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov
 
       - name: Run E2E tests
         run: |
           cd export-worker
           pytest tests/test_end_to_end.py -v --tb=short
 
+  # ─── Python Performance Tests ────────────────────────────────────────────────
+  python-performance-tests:
+    name: Python Performance Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Create environment file
+        run: |
+          cat > export-worker/.env << EOF
+          TELEGRAM_API_ID=1
+          TELEGRAM_API_HASH=test_hash_for_ci
+          TELEGRAM_PHONE_NUMBER=+1234567890
+          TELEGRAM_BOT_TOKEN=000000000:AAAAAA
+          REDIS_HOST=localhost
+          REDIS_PORT=6379
+          JAVA_API_BASE_URL=http://localhost:8080
+          LOG_LEVEL=DEBUG
+          CACHE_ENABLED=false
+          EOF
+
+      - name: Install dependencies
+        run: |
+          cd export-worker
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov
+
       - name: Run performance tests
         run: |
           cd export-worker
           pytest tests/test_performance.py -v --tb=short
-
-      - name: Upload coverage reports
-        uses: codecov/codecov-action@v3
-        with:
-          files: ./export-worker/coverage.xml
-          fail_ci_if_error: false
