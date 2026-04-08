@@ -1,7 +1,6 @@
 package com.tcleaner.core;
 
 import com.tcleaner.format.DateFormatter;
-import com.tcleaner.format.MarkdownParser;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import java.time.LocalDate;
@@ -121,6 +120,38 @@ public class MessageFilter {
     }
 
     /**
+     * Извлекает raw текст из JSON-узла сообщения для фильтрации.
+     * В отличие от MarkdownParser, не применяет markdown-разметку,
+     * что исключает ложные срабатывания при поиске ключевых слов.
+     *
+     * @param textNode поле "text" из сообщения (строка или массив entity)
+     * @return raw текст без markdown-форматирования
+     */
+    private static String extractRawText(JsonNode textNode) {
+        if (textNode == null || textNode.isNull()) {
+            return "";
+        }
+
+        if (textNode.isTextual()) {
+            return textNode.asText();
+        }
+
+        if (textNode.isArray()) {
+            StringBuilder sb = new StringBuilder();
+            for (JsonNode element : textNode) {
+                if (element.isTextual()) {
+                    sb.append(element.asText());
+                } else if (element.has("text")) {
+                    sb.append(element.get("text").asText());
+                }
+            }
+            return sb.toString();
+        }
+
+        return "";
+    }
+
+    /**
      * Проверяет соответствие сообщения всем условиям фильтра.
      *
      * @param message JSON-узел сообщения
@@ -132,7 +163,7 @@ public class MessageFilter {
         }
 
         if (!includeTypes.isEmpty() || !excludeTypes.isEmpty()) {
-            String type = message.has("type") ? message.get("type").asText() : "message";
+            String type = MessageProcessor.getMessageType(message);
 
             if (!includeTypes.isEmpty() && !includeTypes.contains(type)) {
                 return false;
@@ -161,7 +192,7 @@ public class MessageFilter {
         }
 
         if (!keywords.isEmpty() || !excludeKeywords.isEmpty()) {
-            String text = message.has("text") ? MarkdownParser.parseText(message.get("text")) : "";
+            String text = message.has("text") ? extractRawText(message.get("text")) : "";
             String textLower = text.toLowerCase();
 
             if (!keywords.isEmpty()) {

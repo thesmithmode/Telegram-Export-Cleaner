@@ -101,20 +101,8 @@ class MessageCache:
         for i in range(0, len(messages), self.STORE_BATCH_SIZE):
             batch = messages[i:i + self.STORE_BATCH_SIZE]
 
-            # Проверка дупликатов: получаем существующие записи по msg_id
-            pipe = self.redis.pipeline()
-            for msg in batch:
-                pipe.zrangebyscore(msgs_key, msg.id, msg.id)
-            existing = await pipe.execute()
-
-            # Удаляем старые записи
-            pipe = self.redis.pipeline()
-            for old_entries in existing:
-                for entry in (old_entries or []):
-                    pipe.zrem(msgs_key, entry)
-            await pipe.execute()
-
-            # Добавляем свежие записи
+            # Telegram message IDs are unique within a chat — no dedup check needed.
+            # Single pipeline: add new entries via ZADD.
             pipe = self.redis.pipeline()
             for msg in batch:
                 pipe.zadd(msgs_key, {self._serialize(msg): msg.id})
