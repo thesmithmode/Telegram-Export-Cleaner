@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.telegram.telegrambots.longpolling.interfaces.LongPollingUpdateConsumer;
@@ -21,7 +22,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Telegram-бот для запуска экспорта чатов.
+ * Telegram-бот для запуска экспорта чатов (Версия 9.5.0).
  *
  * <p>Принимает только два формата ввода: username (@channel) и ссылку (https://t.me/channel).
  * Поэтапный диалог для выбора диапазона дат.</p>
@@ -337,5 +338,30 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
 
     static LocalDate parseDate(String text) {
         try { return LocalDate.parse(text.trim(), DATE_FORMAT); } catch (Exception e) { return null; }
+    }
+
+    private void sendText(long chatId, String text) {
+        SendMessage m = SendMessage.builder().chatId(String.valueOf(chatId)).text(text).build();
+        try { telegramClient.execute(m); } catch (Exception e) { log.error("Send fail: {}", e.getMessage()); }
+    }
+
+    private void sendWithInlineKeyboard(long chatId, String text, InlineKeyboardMarkup kb) {
+        SendMessage m = SendMessage.builder().chatId(String.valueOf(chatId)).text(text).replyMarkup(kb).build();
+        try { telegramClient.execute(m); } catch (Exception e) { log.error("Send KB fail: {}", e.getMessage()); }
+    }
+
+    private void editMessage(long chatId, int messageId, String text, InlineKeyboardMarkup kb) {
+        EditMessageText.EditMessageTextBuilder<?, ?> builder = EditMessageText.builder()
+                .chatId(String.valueOf(chatId))
+                .messageId(messageId)
+                .text(text);
+        if (kb != null) {
+            builder.replyMarkup(kb);
+        }
+        try { telegramClient.execute(builder.build()); } catch (Exception ignored) {}
+    }
+
+    private void answerCallback(String id) {
+        try { telegramClient.execute(AnswerCallbackQuery.builder().callbackQueryId(id).build()); } catch (Exception ignored) {}
     }
 }

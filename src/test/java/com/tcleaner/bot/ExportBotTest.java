@@ -1,5 +1,6 @@
 package com.tcleaner.bot;
 
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -332,5 +333,83 @@ class ExportBotTest {
 
         update.setMessage(message);
         return update;
+    }
+
+    @Nested
+    @DisplayName("Пересланные сообщения (forward detection)")
+    class ForwardedMessageHandling {
+
+        @Test
+        @DisplayName("Пересланное сообщение из публичного канала — используется username")
+        void testForwardedFromPublicChannel() throws Exception {
+            when(jobProducerMock.enqueue(anyLong(), anyLong(), anyString(), any(), any()))
+                    .thenReturn("task_forward");
+            when(jobProducerMock.getQueueLength()).thenReturn(1L);
+            when(jobProducerMock.hasActiveProcessingJob()).thenReturn(false);
+            when(jobProducerMock.isLikelyCached(any())).thenReturn(false);
+
+            bot.consume(createForwardedMessageUpdate(123L, "public_channel", "Public Channel Title"));
+
+            // Должен вызвать enqueue с username из пересланного сообщения
+            verify(jobProducerMock).enqueue(eq(123L), eq(123L), eq("public_channel"), any(), any());
+        }
+
+        @Test
+        @DisplayName("Пересланное сообщение без username — отправляется ошибка")
+        void testForwardedFromPrivateChat() throws Exception {
+            User user = User.builder().id(123L).isBot(false).firstName("Test").build();
+            Chat userChat = Chat.builder().id(123L).type("private").build();
+            Chat sourceChat = Chat.builder()
+                    .id(-100987654321L)
+                    .type("group")
+                    .title("Private Group")
+                    .build();
+
+            Message m = Message.builder()
+                    .messageId(1)
+                    .from(user)
+                    .chat(userChat)
+                    .text("Forwarded")
+                    .forwardFromChat(sourceChat)
+                    .build();
+
+            Update update = new Update();
+            update.setUpdateId(1);
+            update.setMessage(m);
+
+            bot.consume(update);
+
+            // enqueue не должен быть вызван (приватный чат)
+            verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString(), any(), any());
+            // Должно быть отправлено сообщение об ошибке
+            verify(telegramClientMock, atLeast(1)).execute(any(SendMessage.class));
+        }
+
+        @Test
+        @DisplayName("Пересланное сообщение без информации о чате — безопасная обработка")
+        void testForwardedWithoutSourceChat() throws Exception {
+            User user = User.builder().id(123L).isBot(false).firstName("Test").build();
+            Chat userChat = Chat.builder().id(123L).type("private").build();
+
+            Message m = Message.builder()
+                    .messageId(1)
+                    .from(user)
+                    .chat(userChat)
+                    .text("Forwarded")
+                    .forwardFromChat(null)
+                    .build();
+
+            Update update = new Update();
+            update.setUpdateId(1);
+            update.setMessage(m);
+
+            // Должен НЕ выбросить исключение
+            Assertions.assertDoesNotThrow(() -> {
+                bot.consume(update);
+            });
+
+            // enqueue не должен быть вызван
+            verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString(), any(), any());
+        }
     }
 }
