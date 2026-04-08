@@ -27,6 +27,11 @@ public class FileConversionService {
 
     private final TelegramExporterInterface exporter;
 
+    /**
+     * Конструктор с внедрением интерфейса экспортера.
+     *
+     * @param exporter интерфейс для обработки и конвертации Telegram JSON-данных
+     */
     public FileConversionService(TelegramExporterInterface exporter) {
         this.exporter = exporter;
     }

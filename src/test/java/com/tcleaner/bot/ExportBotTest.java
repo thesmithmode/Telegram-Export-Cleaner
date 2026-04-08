@@ -17,6 +17,16 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.*;
 
+/**
+ * Юнит-тесты для {@link ExportBot}.
+ *
+ * <p>Покрывает функциональность обработки сообщений пользователей, управления состоянием
+ * сессии (AWAITING_CHAT_IDENTIFIER, AWAITING_TO_DATE и т.д.), и взаимодействие с
+ * {@link ExportJobProducer} для добавления задач в очередь.</p>
+ *
+ * <p>Используются моки для {@link ExportJobProducer} и {@link BotMessenger}, чтобы
+ * изолировать логику бота от внешних зависимостей.</p>
+ */
 class ExportBotTest {
 
     private ExportJobProducer jobProducerMock;
