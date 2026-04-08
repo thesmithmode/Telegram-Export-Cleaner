@@ -113,7 +113,9 @@ public class ExportJobProducer {
      * @param excludeKeywords ключевые слова для исключения (nullable)
      * @return task_id созданной задачи
      */
-    public String enqueue(long userId, long userChatId, long chatId, String fromDate, String toDate, String keywords, String excludeKeywords) {
+    public String enqueue(long userId, long userChatId, long chatId,
+                          String fromDate, String toDate,
+                          String keywords, String excludeKeywords) {
         return enqueue(userId, userChatId, (Object) chatId, fromDate, toDate, keywords, excludeKeywords);
     }
 
