@@ -43,13 +43,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * </ul>
  */
 @WebMvcTest(TelegramController.class)
-@Import({FileConversionService.class, ApiExceptionHandler.class})
+@Import(ApiExceptionHandler.class)
 @AutoConfigureMockMvc(addFilters = false)
 @DisplayName("TelegramController")
 class TelegramControllerTest {
 
     @MockitoBean
-    private com.tcleaner.core.TelegramExporterInterface mockExporter;
+    private FileConversionService mockConversionService;
 
     @Autowired
     private MockMvc mockMvc;
