@@ -119,7 +119,7 @@ class ExportWorker:
         """Log current memory usage for monitoring weak server resources."""
         try:
             mem = psutil.virtual_memory()
-            cpu_percent = psutil.cpu_percent(interval=0.1)
+            cpu_percent = psutil.cpu_percent(interval=None)
             logger.info(
                 f"📊 Resource usage [{stage}]: "
                 f"Memory {mem.percent}% ({mem.available/1024/1024:.0f}MB free), "
