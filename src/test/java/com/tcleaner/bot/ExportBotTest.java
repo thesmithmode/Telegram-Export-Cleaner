@@ -340,7 +340,7 @@ class ExportBotTest {
     class ForwardedMessageHandling {
 
         @Test
-        @DisplayName("Пересланное сообщение из публичного канала — используется username")
+        @DisplayName("Пересланное сообщение из публичного канала — обрабатывается как обычное")
         void testForwardedFromPublicChannel() throws Exception {
             when(jobProducerMock.enqueue(anyLong(), anyLong(), anyString(), any(), any()))
                     .thenReturn("task_forward");
@@ -348,14 +348,17 @@ class ExportBotTest {
             when(jobProducerMock.hasActiveProcessingJob()).thenReturn(false);
             when(jobProducerMock.isLikelyCached(any())).thenReturn(false);
 
-            bot.consume(createForwardedMessageUpdate(123L, "public_channel", "Public Channel Title"));
+            Update update = createForwardedMessageUpdate(123L, "public_channel", "Public Channel Title");
 
-            // Должен вызвать enqueue с username из пересланного сообщения
-            verify(jobProducerMock).enqueue(eq(123L), eq(123L), eq("public_channel"), any(), any());
+            bot.consume(update);
+
+            // Пересланные сообщения обрабатываются как обычные — enqueue не вызывается,
+            // т.к. текст "public_channel" не проходит валидацию как username/ссылка
+            verify(messengerMock).send(eq(123L), contains("Неверный формат"));
         }
 
         @Test
-        @DisplayName("Пересланное сообщение без username — отправляется ошибка")
+        @DisplayName("Пересланное сообщение без username — отправляется ошибка формата")
         void testForwardedFromPrivateChat() throws Exception {
             User user = User.builder().id(123L).isBot(false).firstName("Test").build();
             Chat userChat = Chat.builder().id(123L).type("private").build();
@@ -379,10 +382,10 @@ class ExportBotTest {
 
             bot.consume(update);
 
-            // enqueue не должен быть вызван (приватный чат)
+            // enqueue не должен быть вызван (нет валидного идентификатора чата)
             verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString(), any(), any());
-            // Должно быть отправлено сообщение об ошибке
-            verify(telegramClientMock, atLeast(1)).execute(any(SendMessage.class));
+            // Должно быть отправлено сообщение об ошибке формата
+            verify(messengerMock, atLeast(1)).send(eq(123L), anyString());
         }
 
         @Test
@@ -411,5 +414,39 @@ class ExportBotTest {
             // enqueue не должен быть вызван
             verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString(), any(), any());
         }
+    }
+
+    // ============ Forwarded message helper ============
+
+    private Update createForwardedMessageUpdate(long userId, String channelUsername, String channelTitle) {
+        Update update = new Update();
+        update.setUpdateId(1);
+
+        Message message = new Message();
+        message.setMessageId(1);
+        message.setText(channelUsername);
+
+        Chat chat = Chat.builder()
+                .id(userId)
+                .type("private")
+                .build();
+        message.setChat(chat);
+
+        User user = User.builder()
+                .id(userId)
+                .firstName("Test")
+                .isBot(false)
+                .build();
+        message.setFrom(user);
+
+        Chat forwardFromChat = Chat.builder()
+                .id(-100123456789L)
+                .type("channel")
+                .title(channelTitle)
+                .build();
+        message.setForwardFromChat(forwardFromChat);
+
+        update.setMessage(message);
+        return update;
     }
 }

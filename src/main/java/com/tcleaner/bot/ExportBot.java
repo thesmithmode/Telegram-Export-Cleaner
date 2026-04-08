@@ -167,8 +167,8 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         // Проверяем активный экспорт
         String activeTaskId = jobProducer.getActiveExport(userId);
         if (activeTaskId != null) {
-            messenger.send(chatId, "⏳ У вас уже есть активный экспорт (" + activeTaskId +
-                    ").\nДождитесь его завершения или отправьте /cancel");
+            messenger.send(chatId, "⏳ У вас уже есть активный экспорт ("
+                    + activeTaskId + ").\nДождитесь его завершения или отправьте /cancel");
             return;
         }
 
@@ -183,8 +183,8 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
 
         // Переходим в режим выбора дат
         session.setState(UserSession.State.AWAITING_FROM_DATE);
-        messenger.send(chatId, "📋 Чат: " + session.getChatDisplay() +
-                "\n\nВведите дату начала (дд.мм.гггг) или /all для всего чата");
+        messenger.send(chatId, "📋 Чат: "
+                + session.getChatDisplay() + "\n\nВведите дату начала (дд.мм.гггг) или /all для всего чата");
     }
 
     private void handleFromDateInput(long chatId, long userId, String text) {
@@ -208,8 +208,8 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         } else {
             fromText = LocalDate.parse(session.getFromDate().substring(0, 10)).format(DATE_FORMAT);
         }
-        messenger.send(chatId, "📅 От: " + fromText +
-                "\n\nВведите дату конца (дд.мм.гггг) или /today для сегодня");
+        messenger.send(chatId, "📅 От: "
+                + fromText + "\n\nВведите дату конца (дд.мм.гггг) или /today для сегодня");
     }
 
     private void handleToDateInput(long chatId, long userId, String text) {
@@ -235,8 +235,8 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         // Финальная проверка активного экспорта (на случай race condition)
         String activeTaskId = jobProducer.getActiveExport(userId);
         if (activeTaskId != null) {
-            messenger.send(chatId, "⏳ У вас уже есть активный экспорт (" + activeTaskId +
-                    ").\nДождитесь его завершения или отправьте /cancel");
+            messenger.send(chatId, "⏳ У вас уже есть активный экспорт ("
+                    + activeTaskId + ").\nДождитесь его завершения или отправьте /cancel");
             return;
         }
 
@@ -329,23 +329,22 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     static String extractUsername(String input) {
         // Пробуем как ссылку https://t.me/username
         Matcher matcher = TME_LINK_PATTERN.matcher(input);
-        if (matcher.find()) return matcher.group(1);
+        if (matcher.find()) {
+            return matcher.group(1);
+        }
         // Пробуем как @username или username (без @)
         Matcher usernameMatcher = USERNAME_PATTERN.matcher(input);
-        if (usernameMatcher.matches()) return usernameMatcher.group(1);
+        if (usernameMatcher.matches()) {
+            return usernameMatcher.group(1);
+        }
         return null;
     }
 
     static LocalDate parseDate(String text) {
-        try { return LocalDate.parse(text.trim(), DATE_FORMAT); } catch (Exception e) { return null; }
-    }
-
-    private void sendText(long chatId, String text) {
-        SendMessage m = SendMessage.builder().chatId(String.valueOf(chatId)).text(text).build();
-        try { telegramClient.execute(m); } catch (Exception e) { log.error("Send fail: {}", e.getMessage()); }
-    }
-
-    private void answerCallback(String id) {
-        try { telegramClient.execute(AnswerCallbackQuery.builder().callbackQueryId(id).build()); } catch (Exception ignored) {}
+        try {
+            return LocalDate.parse(text.trim(), DATE_FORMAT);
+        } catch (Exception e) {
+            return null;
+        }
     }
 }
