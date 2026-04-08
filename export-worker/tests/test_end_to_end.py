@@ -472,7 +472,7 @@ class TestCancelSupport:
             result = await worker.is_cancelled("test_task_123")
 
             # Verify it returns True
-            assert result is True
+            assert result == True
             worker.control_redis.get.assert_called_once_with("cancel_export:test_task_123")
 
     async def test_cancel_saves_partial_messages(self):
@@ -514,7 +514,7 @@ class TestCancelSupport:
             is_cancelled = await worker._check_cancel_and_save(job, test_messages, 100)
 
             # Verify cancel was detected and messages were saved
-            assert is_cancelled is True
+            assert is_cancelled == True
             worker.message_cache.store_messages.assert_called_once_with(job.chat_id, test_messages)
 
     async def test_cancel_clears_active_export_marker(self):
