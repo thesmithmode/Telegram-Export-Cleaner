@@ -71,22 +71,14 @@ public class ExportJobProducer {
     }
 
     /**
-     * Добавляет задачу на экспорт в Redis-очередь.
+     * Добавляет задачу на экспорт в Redis-очередь (без фильтрации по датам).
      *
-     * <p>Это основной метод, используемый всеми перегруженными версиями {@code enqueue()}.
-     * Атомарно резервирует слот через Redis SET NX перед добавлением в очередь.
+     * <p>Атомарно резервирует слот через Redis SET NX перед добавлением в очередь.
      * Если у пользователя уже есть активный экспорт — бросает {@link IllegalStateException}.</p>
      *
-     * <p>Если данные чата уже в кэше, задача помещается в приоритетную очередь
-     * ({@code <queueName>_express}) для ускоренной обработки.</p>
-     *
-     * @param userId          Telegram user ID пользователя, сделавшего запрос
-     * @param userChatId      Telegram chat ID — куда вернуть результат (обычно равен userId)
-     * @param chatId          ID чата, историю которого нужно экспортировать (числовой или username)
-     * @param fromDate        начальная дата в ISO формате (nullable)
-     * @param toDate          конечная дата в ISO формате (nullable)
-     * @param keywords        ключевые слова для включения, через запятую (nullable)
-     * @param excludeKeywords ключевые слова для исключения, через запятую (nullable)
+     * @param userId     Telegram user ID пользователя, сделавшего запрос
+     * @param userChatId Telegram chat ID — куда вернуть результат (обычно равен userId)
+     * @param chatId     ID чата, историю которого нужно экспортировать (числовой)
      * @return task_id созданной задачи
      * @throws IllegalStateException если у пользователя уже есть активный экспорт
      * @throws RuntimeException      если не удалось сериализовать задачу или записать в Redis
@@ -148,7 +140,8 @@ public class ExportJobProducer {
      * @param toDate         конечная дата (ISO, nullable)
      * @return task_id созданной задачи
      */
-    public String enqueue(long userId, long userChatId, String chatIdentifier, String fromDate, String toDate) {
+    public String enqueue(long userId, long userChatId, String chatIdentifier,
+                          String fromDate, String toDate) {
         return enqueue(userId, userChatId, (Object) chatIdentifier, fromDate, toDate, null, null);
     }
 
@@ -159,7 +152,8 @@ public class ExportJobProducer {
     private static final long ACTIVE_EXPORT_TTL_MINUTES = 60;
     private static final String EXPRESS_QUEUE_SUFFIX = "_express";
 
-    private String enqueue(long userId, long userChatId, Object chatId, String fromDate, String toDate, String keywords, String excludeKeywords) {
+    private String enqueue(long userId, long userChatId, Object chatId, String fromDate,
+                           String toDate, String keywords, String excludeKeywords) {
         String taskId = "export_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
 
         Map<String, Object> job = new HashMap<>();
