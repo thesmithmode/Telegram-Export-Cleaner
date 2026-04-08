@@ -4,6 +4,8 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -17,10 +19,16 @@ import java.io.IOException;
 @Component
 public class ApiKeyFilter extends OncePerRequestFilter {
 
+    private static final Logger log = LoggerFactory.getLogger(ApiKeyFilter.class);
+
     private final String expectedKey;
 
     public ApiKeyFilter(@Value("${api.key:}") String expectedKey) {
         this.expectedKey = expectedKey;
+        if (expectedKey == null || expectedKey.isEmpty()) {
+            log.warn("API KEY НЕ УСТАНОВЛЕН! Все запросы к /api/** проходят без аутентификации. "
+                    + "Установите JAVA_API_KEY в production.");
+        }
     }
 
     @Override

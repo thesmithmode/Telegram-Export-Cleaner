@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 JOB_MARKER_TTL = 3600  # 1 hour — TTL for completed/failed job markers in Redis
+MAX_PENDING_RETURN = 100  # Max number of pending jobs to deserialize (prevents OOM)
 
 
 class QueueConsumer:
@@ -42,6 +43,11 @@ class QueueConsumer:
         )
         self.queue_name = settings.REDIS_QUEUE_NAME
         self.redis_client: Optional[redis.Redis] = None
+
+        # Staging queues: jobs are atomically moved here via LMOVE before processing.
+        # If the worker crashes, jobs remaining in staging are recovered on restart.
+        self.staging_name = self.queue_name + "_processing"
+        self.staging_express_name = self.express_queue_name + "_processing"
 
         logger.info(
             f"Queue Consumer initialized "
@@ -126,20 +132,24 @@ class QueueConsumer:
 
     async def get_job(self) -> Optional[ExportRequest]:
         """
-        Get next job from queue (blocking).
+        Get next job from queue (blocking) with durability guarantee.
+
+        BLPOP removes the job from the working queue. The same job is then
+        pushed to a staging queue via RPUSH so that if the worker crashes
+        mid-processing, the job can be recovered on restart via
+        :meth:`recover_staging_jobs`.
 
         Checks express queue first (cache-hit jobs), then main queue.
         Uses BLPOP to block until job available.
-        Handles reconnection on connection errors.
 
         Returns:
-            ExportRequest object or None if error
+            ExportRequest object or None if timeout
         """
         if not self.redis_client:
             raise RuntimeError("Not connected to Redis")
 
         try:
-            # BLPOP: express queue has priority over main queue
+            # BLPOP to find which queue has a job
             result = await self.redis_client.blpop(
                 [self.express_queue_name, self.queue_name], timeout=5
             )
@@ -147,21 +157,34 @@ class QueueConsumer:
             if not result:
                 return None
 
-            queue_name, job_json = result
+            source_queue, job_json = result
+
+            # BLPOP already removed the job — push the SAME job to staging
+            # for crash recovery. Using RPUSH preserves the job payload.
+            dest_queue = (
+                self.staging_express_name if source_queue == self.express_queue_name
+                else self.staging_name
+            )
+            await self.redis_client.rpush(dest_queue, job_json)
 
             try:
                 job_data = json.loads(job_json)
                 job = ExportRequest(**job_data)
+                # Track job in staging for crash recovery
+                await self._track_staging_job(job.task_id)
                 logger.debug(f"Got job from queue: {job.task_id}")
                 return job
 
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse job JSON: {e}. Moving to DLQ.")
+                # Remove from staging and move to DLQ
+                await self.redis_client.lpop(dest_queue)
                 await self._move_to_dlq(job_json, f"JSON parse error: {e}")
                 return None
 
             except Exception as e:
                 logger.error(f"Failed to create ExportRequest: {e}. Moving to DLQ.")
+                await self.redis_client.lpop(dest_queue)
                 await self._move_to_dlq(job_json, f"Validation error: {e}")
                 return None
 
@@ -200,6 +223,33 @@ class QueueConsumer:
             logger.warning(f"Moved invalid job to DLQ '{dlq_name}': {reason}")
         except Exception as e:
             logger.error(f"Failed to move job to DLQ: {e}")
+
+    async def ack_job_completed(self, task_id: str) -> bool:
+        """Mark job as removed from staging after successful completion."""
+        if not self.redis_client:
+            return False
+        try:
+            await self.redis_client.srem("staging:acked", task_id)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to ack completed job {task_id}: {e}")
+            return False
+
+    async def _track_staging_job(self, task_id: str) -> None:
+        """Track that a job is in staging (called after LMOVE)."""
+        if self.redis_client:
+            try:
+                await self.redis_client.sadd("staging:jobs", task_id)
+            except Exception:
+                pass
+
+    async def _untrack_staging_job(self, task_id: str) -> None:
+        """Remove job from staging tracking (called on completion/failure)."""
+        if self.redis_client:
+            try:
+                await self.redis_client.srem("staging:jobs", task_id)
+            except Exception:
+                pass
 
     async def push_job(self, job: ExportRequest) -> bool:
         """
@@ -278,6 +328,7 @@ class QueueConsumer:
             )
 
             logger.debug(f"Marked job completed: {task_id}")
+            await self._untrack_staging_job(task_id)
             return True
 
         except Exception as e:
@@ -316,36 +367,100 @@ class QueueConsumer:
             )
 
             logger.debug(f"Marked job failed: {task_id}")
+            await self._untrack_staging_job(task_id)
             return True
 
         except Exception as e:
             logger.error(f"Failed to mark job failed: {e}")
             return False
 
-    async def get_pending_jobs(self) -> list[ExportRequest]:
+    async def get_pending_jobs(self) -> dict:
         """
-        Return all pending jobs from queue without removing them (LRANGE 0 -1).
+        Return pending jobs from queue without removing them, limited to first MAX_PENDING_RETURN.
 
-        Used to notify users of their updated queue position before processing starts.
+        Uses LLEN to get the true total count (O(1)) and LRANGE 0..MAX_PENDING_RETURN-1
+        to deserialize only a bounded number of jobs (prevents OOM on large queues).
+
+        Returns:
+            Dict with keys:
+                - jobs: list of ExportRequest (up to MAX_PENDING_RETURN items)
+                - total_count: int, the actual total number of pending jobs across both queues
         """
         if not self.redis_client:
-            return []
+            return {"jobs": [], "total_count": 0}
 
         try:
-            # Include both queues; express jobs are ahead in priority
-            express_items = await self.redis_client.lrange(self.express_queue_name, 0, -1)
-            main_items = await self.redis_client.lrange(self.queue_name, 0, -1)
+            # Get true totals via LLEN (O(1), no memory cost)
+            express_total = await self.redis_client.llen(self.express_queue_name)
+            main_total = await self.redis_client.llen(self.queue_name)
+            total_count = express_total + main_total
+
+            # Deserialize only the first MAX_PENDING_RETURN items
+            express_limit = min(express_total, MAX_PENDING_RETURN)
+            remaining = MAX_PENDING_RETURN - express_limit
+            main_limit = min(main_total, remaining)
+
             jobs = []
-            for item in express_items + main_items:
-                try:
-                    job_data = json.loads(item)
-                    jobs.append(ExportRequest(**job_data))
-                except Exception:
-                    pass
-            return jobs
+            if express_limit > 0:
+                express_items = await self.redis_client.lrange(self.express_queue_name, 0, express_limit - 1)
+                for item in express_items:
+                    try:
+                        job_data = json.loads(item)
+                        jobs.append(ExportRequest(**job_data))
+                    except Exception:
+                        pass
+            if main_limit > 0:
+                main_items = await self.redis_client.lrange(self.queue_name, 0, main_limit - 1)
+                for item in main_items:
+                    try:
+                        job_data = json.loads(item)
+                        jobs.append(ExportRequest(**job_data))
+                    except Exception:
+                        pass
+
+            return {"jobs": jobs, "total_count": total_count}
+
         except Exception as e:
             logger.error(f"Failed to get pending jobs: {e}")
-            return []
+            return {"jobs": [], "total_count": 0}
+
+    async def recover_staging_jobs(self) -> int:
+        """Recover jobs left in staging from a previous crash.
+
+        Moves all staging jobs back to their original queues and returns count.
+        """
+        if not self.redis_client:
+            return 0
+
+        recovered = 0
+        try:
+            # staging_express → express
+            while True:
+                item = await self.redis_client.lmove(
+                    self.staging_express_name, self.express_queue_name, "LEFT", "RIGHT"
+                )
+                if item is None:
+                    break
+                recovered += 1
+
+            # staging → main
+            while True:
+                item = await self.redis_client.lmove(
+                    self.staging_name, self.queue_name, "LEFT", "RIGHT"
+                )
+                if item is None:
+                    break
+                recovered += 1
+
+            if recovered:
+                logger.info(f"🔄 Recovered {recovered} staging jobs from previous crash")
+
+            # Cleanup stale tracking set
+            await self.redis_client.delete("staging:jobs")
+        except Exception as e:
+            logger.error(f"Failed to recover staging jobs: {e}")
+
+        return recovered
 
     async def get_queue_stats(self) -> Optional[dict]:
         """

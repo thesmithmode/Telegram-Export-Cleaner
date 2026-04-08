@@ -14,6 +14,7 @@ Java API endpoints used:
 import json
 import logging
 import asyncio
+import io
 import re
 from datetime import datetime
 from typing import Optional
@@ -36,6 +37,17 @@ class JavaBotClient:
         self.bot_token = settings.TELEGRAM_BOT_TOKEN
         self._http_client = httpx.AsyncClient(timeout=self.timeout)
         logger.info(f"Java API Client initialized (URL: {self.base_url})")
+
+    def _build_bot_url(self, method: str) -> str:
+        """Build Telegram Bot API URL for the given method.
+
+        Args:
+            method: Bot API method name (e.g. 'sendMessage', 'sendDocument')
+
+        Returns:
+            Full URL with bot token
+        """
+        return f"https://api.telegram.org/bot{self.bot_token}/{method}"
 
     async def send_response(
         self,
@@ -269,8 +281,6 @@ class JavaBotClient:
         if settings.JAVA_API_KEY:
             headers["X-API-Key"] = settings.JAVA_API_KEY
 
-        # Build multipart form data
-        files = {"file": ("result.json", result_json_bytes, "application/json")}
         data = {}
         if from_date:
             data["startDate"] = from_date[:10]  # Java expects YYYY-MM-DD
@@ -282,6 +292,10 @@ class JavaBotClient:
             data["excludeKeywords"] = exclude_keywords
 
         while retry_count <= self.max_retries:
+            # Rebuild multipart form data on each retry — httpx consumes the
+            # payload on the first POST, so reusing the same dict would send
+            # an empty body on subsequent attempts.
+            files = {"file": ("result.json", io.BytesIO(result_json_bytes), "application/json")}
             try:
                 response = await self._http_client.post(
                     url,
@@ -395,7 +409,7 @@ class JavaBotClient:
         file_bytes: bytes, filename: str, caption: str
     ) -> bool:
         """Send a single file via Telegram Bot API sendDocument."""
-        url = f"https://api.telegram.org/bot{self.bot_token}/sendDocument"
+        url = self._build_bot_url("sendDocument")
 
         try:
             response = await self._http_client.post(
@@ -425,6 +439,7 @@ class JavaBotClient:
         """Split text into parts, each under max_bytes when UTF-8 encoded.
 
         Splits on line boundaries to avoid breaking messages.
+        If a single line exceeds max_bytes, it is split into character chunks.
         """
         parts = []
         lines = text.split("\n")
@@ -433,6 +448,29 @@ class JavaBotClient:
 
         for line in lines:
             line_bytes = len(line.encode("utf-8")) + 1  # +1 for \n
+
+            # If a single line exceeds max_bytes, split it into character chunks
+            if line_bytes > max_bytes:
+                if current_part:
+                    parts.append("\n".join(current_part))
+                    current_part = []
+                    current_size = 0
+                chunk_chars: list[str] = []
+                chunk_bytes = 0
+                for char in line:
+                    char_bytes = len(char.encode("utf-8"))
+                    if chunk_bytes + char_bytes > max_bytes and chunk_chars:
+                        parts.append("".join(chunk_chars))
+                        chunk_chars = [char]
+                        chunk_bytes = char_bytes
+                    else:
+                        chunk_chars.append(char)
+                        chunk_bytes += char_bytes
+                if chunk_chars:
+                    current_part = chunk_chars
+                    current_size = chunk_bytes
+                continue
+
             if current_size + line_bytes > max_bytes and current_part:
                 parts.append("\n".join(current_part))
                 current_part = []
@@ -484,7 +522,7 @@ class JavaBotClient:
 
         try:
             if progress_message_id:
-                url = f"https://api.telegram.org/bot{self.bot_token}/editMessageText"
+                url = self._build_bot_url("editMessageText")
                 response = await self._http_client.post(
                     url,
                     data={
@@ -497,7 +535,7 @@ class JavaBotClient:
                     return progress_message_id
                 return None
             else:
-                url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+                url = self._build_bot_url("sendMessage")
                 response = await self._http_client.post(
                     url, data={"chat_id": user_chat_id, "text": text}
                 )
@@ -546,7 +584,7 @@ class JavaBotClient:
         else:
             text = f"📋 Очередь: позиция {position} из {total}\nВпереди {position - 1} задач(и)"
         try:
-            url = f"https://api.telegram.org/bot{self.bot_token}/editMessageText"
+            url = self._build_bot_url("editMessageText")
             await self._http_client.post(
                 url,
                 data={"chat_id": user_chat_id, "message_id": msg_id, "text": text},
@@ -558,7 +596,7 @@ class JavaBotClient:
         self, user_chat_id: int, task_id: str, error: str
     ) -> None:
         """Send failure notification to user via Telegram Bot API."""
-        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        url = self._build_bot_url("sendMessage")
         text = f"❌ Export failed (task {task_id})\n\nReason: {error}"
 
         try:
@@ -568,7 +606,7 @@ class JavaBotClient:
 
     async def _notify_user_empty(self, user_chat_id: int, task_id: str) -> None:
         """Notify user that no messages were found for the export."""
-        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        url = self._build_bot_url("sendMessage")
         text = (
             f"ℹ️ Экспорт завершён (task {task_id})\n\n"
             "Сообщений не найдено. Возможно, чат пуст или в указанном диапазоне дат нет сообщений."
@@ -611,6 +649,7 @@ class ProgressTracker:
         self._message_id: Optional[int] = None
         self._total: Optional[int] = None
         self._last_reported_pct = 0
+        self._last_reported_count = 0
         self._start_time: Optional[datetime] = None
 
     async def start(self, total: Optional[int] = None) -> None:
@@ -629,17 +668,23 @@ class ProgressTracker:
     async def track(self, count: int) -> None:
         """Report progress at every 5% milestone.
 
-        ETA formula: remaining_seconds = elapsed_seconds * (100 - pct) / pct
-        where pct = count * 100 // total.
+        When total is unknown, report every 500 messages instead.
         """
-        if not self._total or self._total <= 0:
-            return
-        pct = count * 100 // self._total
-        if pct < self._last_reported_pct + 5 or pct >= 100:
-            return
-        self._last_reported_pct = pct
         elapsed = (datetime.now() - self._start_time).total_seconds() if self._start_time else 0
-        logger.info(f"  Progress: {count}/{self._total} ({pct}%)")
+
+        if self._total and self._total > 0:
+            pct = count * 100 // self._total
+            if pct < self._last_reported_pct + 5 or pct >= 100:
+                return
+            self._last_reported_pct = pct
+            logger.info(f"  Progress: {count}/{self._total} ({pct}%)")
+        else:
+            # Unknown total — report every 500 messages
+            if count < self._last_reported_count + 500:
+                return
+            self._last_reported_count = count
+            logger.info(f"  Progress: {count} messages...")
+
         result = await self._client.send_progress_update(
             user_chat_id=self._user_chat_id,
             task_id=self._task_id,
@@ -656,9 +701,8 @@ class ProgressTracker:
         if not self._total or self._total <= 0:
             total = count  # если total неизвестен, берём фактическое кол-во
         else:
-            total = max(self._total, count)  # фактическое кол-во может быть > estimated total
-        if total <= 0:
-            return
+            total = max(self._total, count)
+        # Always send completion, even if total was 0
         elapsed = (datetime.now() - self._start_time).total_seconds() if self._start_time else 0
         logger.info(f"  Progress: {count}/{total} (100%)")
         result = await self._client.send_progress_update(

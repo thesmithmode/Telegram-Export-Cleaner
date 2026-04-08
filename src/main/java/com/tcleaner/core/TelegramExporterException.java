@@ -5,33 +5,11 @@ package com.tcleaner.core;
  *
  * <p>Содержит {@link #errorCode} — машиночитаемый идентификатор ошибки,
  * который возвращается клиенту в HTTP-ответе. Предпочтительные значения:
- * {@code FILE_NOT_FOUND} и {@code INVALID_JSON}.
- * По умолчанию (конструкторы без errorCode) используется {@code GENERAL_ERROR}.</p>
+ * {@code FILE_NOT_FOUND} и {@code INVALID_JSON}.</p>
  */
 public class TelegramExporterException extends RuntimeException {
 
     private final String errorCode;
-
-    /**
-     * Создаёт исключение с кодом {@code GENERAL_ERROR}.
-     *
-     * @param message описание ошибки
-     */
-    public TelegramExporterException(String message) {
-        super(message);
-        this.errorCode = "GENERAL_ERROR";
-    }
-
-    /**
-     * Создаёт исключение с кодом {@code GENERAL_ERROR} и причиной.
-     *
-     * @param message описание ошибки
-     * @param cause   исходное исключение
-     */
-    public TelegramExporterException(String message, Throwable cause) {
-        super(message, cause);
-        this.errorCode = "GENERAL_ERROR";
-    }
 
     /**
      * Создаёт исключение с явным кодом ошибки.
