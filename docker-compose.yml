@@ -24,7 +24,7 @@ services:
     container_name: telegram-export-redis
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes --appendfsync everysec --maxmemory 256mb --maxmemory-policy allkeys-lru
+    command: redis-server --appendonly yes --appendfsync everysec --maxmemory 256mb --maxmemory-policy volatile-lru
     mem_limit: 512m
     cpus: '0.25'
     healthcheck:
@@ -50,7 +50,7 @@ services:
       dockerfile: Dockerfile
     container_name: telegram-export-java-bot
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     depends_on:
       redis:
         condition: service_healthy
