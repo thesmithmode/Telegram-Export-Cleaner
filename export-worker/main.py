@@ -21,7 +21,7 @@ import signal
 import sys
 import shutil
 import psutil
-from datetime import datetime, timezone
+from datetime import date as date_cls, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -398,7 +398,6 @@ class ExportWorker:
         from_date: str, to_date: str, missing: list[tuple[str, str]]
     ) -> list[tuple[str, str]]:
         """Compute cached date ranges = [from_date, to_date] minus missing gaps."""
-        from datetime import date as date_cls, timedelta
         if not missing:
             return [(from_date, to_date)]
 

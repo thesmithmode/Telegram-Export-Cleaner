@@ -67,6 +67,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Extract python-worker metadata
         id: python_meta
@@ -85,6 +87,8 @@ jobs:
           push: true
           tags: ${{ steps.python_meta.outputs.tags }}
           labels: ${{ steps.python_meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   # ─── 3. Деплой на сервер ─────────────────────────────────────────────────────
   deploy:
