@@ -643,20 +643,18 @@ class ExportWorker:
                     await self.message_cache.store_messages(job.chat_id, older_msgs)
                     fresh_messages.extend(older_msgs)
 
-        # Вместо чтения всего диапазона из Redis (медленно для 250k+ сообщений),
-        # читаем только из cached_ranges и мержим с fresh_messages в памяти
-        logger.info(f"  Final step: Merging fresh messages with cached...")
+        # Читаем ТОЛЬКО из original cached_ranges (не весь [full_min, full_max]!)
+        # fresh_messages содержит всё новое, мержим в памяти (быстро)
+        logger.info(f"  Reading original cached ranges...")
         cached_messages: list[ExportedMessage] = []
-
-        # Read from cached ranges (original data before fresh)
         for r_low, r_high in cached_ranges:
             chunk = await self.message_cache.get_messages(job.chat_id, r_low, r_high)
             cached_messages.extend(chunk)
-            logger.debug(f"    Read {len(chunk)} messages from cached range [{r_low}, {r_high}]")
+            logger.debug(f"    Range [{r_low}, {r_high}]: {len(chunk)} messages")
 
-        # Merge cached + fresh (fresh overwrites cached if there are dupes)
+        # Merge cached + fresh (fresh overwrites if there are dupes)
         messages = self.message_cache.merge_and_sort(cached_messages, fresh_messages)
-        logger.info(f"  ✅ Total after merge: {len(messages)} messages (cached: {len(cached_messages)}, fresh: {len(fresh_messages)})")
+        logger.info(f"  Total after cache merge: {len(messages)} messages (cached: {len(cached_messages)}, fresh: {len(fresh_messages)})")
 
         if tracker:
             await tracker.finalize(len(messages))
