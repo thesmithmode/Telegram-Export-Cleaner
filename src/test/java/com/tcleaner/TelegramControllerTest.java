@@ -17,6 +17,7 @@ import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import java.nio.charset.StandardCharsets;
@@ -25,6 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -102,11 +104,15 @@ class TelegramControllerTest {
                     "file", "result.json", "application/json",
                     "{\"messages\":[]}".getBytes());
 
-            mockMvc.perform(multipart("/api/convert")
+            MvcResult mvcResult = mockMvc.perform(multipart("/api/convert")
                             .file(file)
                             .header("X-API-Key", "test-api-key"))
+                    .andExpect(request().asyncStarted())
+                    .andReturn();
+
+            mockMvc.perform(asyncDispatch(mvcResult))
                     .andExpect(status().isOk())
-                    .andExpect(streamingContent().string("20250624 Hello\n"));
+                    .andExpect(content().string("20250624 Hello\n"));
         }
 
         @Test
@@ -126,11 +132,15 @@ class TelegramControllerTest {
                     "file", "result.json", "application/json",
                     "{\"messages\":[]}".getBytes());
 
-            mockMvc.perform(multipart("/api/convert")
+            MvcResult mvcResult = mockMvc.perform(multipart("/api/convert")
                             .file(file)
                             .header("X-API-Key", "test-api-key"))
+                    .andExpect(request().asyncStarted())
+                    .andReturn();
+
+            mockMvc.perform(asyncDispatch(mvcResult))
                     .andExpect(status().isOk())
-                    .andExpect(streamingContent().string("20250624 First\n20250624 Second\n"));
+                    .andExpect(content().string("20250624 First\n20250624 Second\n"));
         }
 
         @Test
@@ -147,11 +157,15 @@ class TelegramControllerTest {
                     "file", "result.json", "application/json",
                     "{\"messages\":[]}".getBytes());
 
-            mockMvc.perform(multipart("/api/convert")
+            MvcResult mvcResult = mockMvc.perform(multipart("/api/convert")
                             .file(file)
                             .header("X-API-Key", "test-api-key"))
+                    .andExpect(request().asyncStarted())
+                    .andReturn();
+
+            mockMvc.perform(asyncDispatch(mvcResult))
                     .andExpect(status().isOk())
-                    .andExpect(streamingContent().bytes(new byte[0]));
+                    .andExpect(content().bytes(new byte[0]));
         }
 
         @Test
