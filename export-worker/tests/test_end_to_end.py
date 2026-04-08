@@ -448,3 +448,89 @@ class TestWorkerCleanup:
                 success = False
 
             assert success
+
+
+@pytest.mark.asyncio
+class TestCancelSupport:
+    """Test export cancellation functionality."""
+
+    async def test_cancel_stops_export(self):
+        """Test that is_cancelled() returns True when cancel flag is set."""
+        from main import ExportWorker
+
+        with patch('main.TelegramClient'), \
+             patch('main.QueueConsumer'), \
+             patch('main.JavaBotClient'):
+
+            worker = ExportWorker()
+            worker.control_redis = AsyncMock()
+
+            # Setup: cancel flag is set in Redis
+            worker.control_redis.get = AsyncMock(return_value=b"1")
+
+            # Call is_cancelled
+            result = await worker.is_cancelled("test_task_123")
+
+            # Verify it returns True
+            assert result is True
+            worker.control_redis.get.assert_called_once_with("cancel_export:test_task_123")
+
+    async def test_cancel_saves_partial_messages(self):
+        """Test that cancelled jobs save accumulated messages to cache."""
+        from main import ExportWorker
+
+        with patch('main.TelegramClient'), \
+             patch('main.QueueConsumer'), \
+             patch('main.JavaBotClient'):
+
+            worker = ExportWorker()
+            worker.control_redis = AsyncMock()
+            worker.message_cache = Mock()
+            worker.message_cache.enabled = True
+            worker.message_cache.store_messages = AsyncMock(return_value=None)
+
+            # Setup: cancel flag is set
+            worker.control_redis.get = AsyncMock(return_value=b"1")
+            worker.control_redis.delete = AsyncMock(return_value=None)
+
+            # Create test messages (100+ to trigger check)
+            test_messages = [
+                ExportedMessage(
+                    id=i,
+                    type="message",
+                    date="2025-06-24T15:29:46",
+                    text=f"Message {i}"
+                )
+                for i in range(1, 101)
+            ]
+
+            # Call _check_cancel_and_save at 100 message mark
+            job = ExportRequest(
+                task_id="test_123",
+                user_id=456,
+                chat_id=-1001234567890
+            )
+
+            is_cancelled = await worker._check_cancel_and_save(job, test_messages, 100)
+
+            # Verify cancel was detected and messages were saved
+            assert is_cancelled is True
+            worker.message_cache.store_messages.assert_called_once_with(job.chat_id, test_messages)
+
+    async def test_cancel_clears_active_export_marker(self):
+        """Test that cancelled export clears the active_export marker."""
+        from main import ExportWorker
+
+        with patch('main.TelegramClient'), \
+             patch('main.QueueConsumer'), \
+             patch('main.JavaBotClient'):
+
+            worker = ExportWorker()
+            worker.control_redis = AsyncMock()
+            worker.control_redis.delete = AsyncMock(return_value=None)
+
+            # Call clear_active_export
+            await worker.clear_active_export(456)
+
+            # Verify Redis delete was called for active_export marker
+            worker.control_redis.delete.assert_called_once_with("active_export:456")
