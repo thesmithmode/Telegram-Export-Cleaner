@@ -4,6 +4,10 @@ import com.tcleaner.core.MessageFilter;
 import com.tcleaner.core.TelegramExporter;
 import com.tcleaner.core.TelegramExporterException;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.tcleaner.core.MessageProcessor;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -41,7 +45,14 @@ class TelegramExporterStreamingTest {
     @TempDir
     Path tempDir;
 
-    private final TelegramExporter exporter = new TelegramExporter();
+    private TelegramExporter exporter;
+
+    @BeforeEach
+    void setUp() {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.registerModule(new JavaTimeModule());
+        exporter = new TelegramExporter(mapper, new MessageProcessor());
+    }
 
     // ─── Корректность результата ──────────────────────────────────────────────
 
