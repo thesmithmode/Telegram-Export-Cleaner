@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 class JavaBotClient:
     """Uploads exported messages to Java API and delivers result to user."""
 
-    def __init__(self, timeout: int = 1800, max_retries: int = 3):
+    def __init__(self, timeout: int = 3600, max_retries: int = 3):
         self.base_url = settings.JAVA_API_BASE_URL.rstrip("/")
         self.timeout = timeout
         self.max_retries = max_retries

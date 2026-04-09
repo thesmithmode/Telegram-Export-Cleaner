@@ -587,7 +587,7 @@ class ExportWorker:
             if messages:
                 await self.message_cache.store_messages(job.chat_id, messages)
                 await self.message_cache.evict_if_needed()
-            return messages
+            return (len(messages) if messages else 0, messages) if messages is not None else None
 
         cache_max_id = max(r[1] for r in cached_ranges)
         logger.info(f"  Cache HIT для чата {job.chat_id}: ranges={cached_ranges}, cache_max_id={cache_max_id}")
