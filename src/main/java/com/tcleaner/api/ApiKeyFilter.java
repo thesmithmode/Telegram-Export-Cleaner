@@ -37,15 +37,15 @@ public class ApiKeyFilter extends OncePerRequestFilter {
 
         String path = request.getRequestURI();
 
-        // Проверяем ключ только для API endpoints, кроме /api/health (если нужно)
+        // Проверяем ключ только для API endpoints, кроме /api/health
         if (path.startsWith("/api/") && !path.equals("/api/health")) {
-            if (expectedKey != null && !expectedKey.isEmpty()) {
-                String providedKey = request.getHeader("X-API-Key");
-                if (!expectedKey.equals(providedKey)) {
-                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                    response.getWriter().write("Invalid API Key");
-                    return;
-                }
+            String providedKey = request.getHeader("X-API-Key");
+            
+            if (expectedKey == null || expectedKey.isEmpty() || !expectedKey.equals(providedKey)) {
+                log.warn("Попытка доступа к API без корректного ключа: path={}, provided={}", path, providedKey);
+                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                response.getWriter().write("Invalid or missing API Key");
+                return;
             }
         }
 
