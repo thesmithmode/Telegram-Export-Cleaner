@@ -172,6 +172,8 @@ class QueueConsumer:
                 job = ExportRequest(**job_data)
                 # Track job in staging for crash recovery
                 await self._track_staging_job(job.task_id)
+                # Store payload + queue name so we can LREM on completion
+                await self._store_staging_payload(job.task_id, job_json, dest_queue)
                 logger.debug(f"Got job from queue: {job.task_id}")
                 return job
 
@@ -236,7 +238,7 @@ class QueueConsumer:
             return False
 
     async def _track_staging_job(self, task_id: str) -> None:
-        """Track that a job is in staging (called after LMOVE)."""
+        """Track that a job is in staging (called after RPUSH to staging)."""
         if self.redis_client:
             try:
                 await self.redis_client.sadd("staging:jobs", task_id)
@@ -244,12 +246,45 @@ class QueueConsumer:
                 pass
 
     async def _untrack_staging_job(self, task_id: str) -> None:
-        """Remove job from staging tracking (called on completion/failure)."""
+        """Remove job from staging tracking set (called on completion/failure)."""
         if self.redis_client:
             try:
                 await self.redis_client.srem("staging:jobs", task_id)
             except Exception:
                 pass
+
+    async def _store_staging_payload(
+        self, task_id: str, job_json: str, staging_queue: str
+    ) -> None:
+        """Persist job payload + queue name so _remove_from_staging can LREM it later."""
+        if not self.redis_client:
+            return
+        try:
+            import json as _json
+            meta = _json.dumps({"payload": job_json, "queue": staging_queue})
+            await self.redis_client.setex(
+                f"staging:meta:{task_id}", JOB_MARKER_TTL, meta
+            )
+        except Exception:
+            pass
+
+    async def _remove_from_staging(self, task_id: str) -> None:
+        """Remove job from staging list (LREM) after completion/failure.
+
+        Prevents recover_staging_jobs() from re-queuing already-finished jobs
+        on the next worker restart.
+        """
+        if not self.redis_client:
+            return
+        try:
+            import json as _json
+            raw = await self.redis_client.get(f"staging:meta:{task_id}")
+            if raw:
+                meta = _json.loads(raw)
+                await self.redis_client.lrem(meta["queue"], 1, meta["payload"])
+            await self.redis_client.delete(f"staging:meta:{task_id}")
+        except Exception as e:
+            logger.debug(f"Could not remove staging entry for {task_id}: {e}")
 
     async def push_job(self, job: ExportRequest) -> bool:
         """
@@ -329,6 +364,7 @@ class QueueConsumer:
 
             logger.debug(f"Marked job completed: {task_id}")
             await self._untrack_staging_job(task_id)
+            await self._remove_from_staging(task_id)
             return True
 
         except Exception as e:
@@ -368,6 +404,7 @@ class QueueConsumer:
 
             logger.debug(f"Marked job failed: {task_id}")
             await self._untrack_staging_job(task_id)
+            await self._remove_from_staging(task_id)
             return True
 
         except Exception as e:
