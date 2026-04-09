@@ -85,6 +85,7 @@ class MessageCache:
     # --- Core API ---
 
     STORE_BATCH_SIZE = 5000
+    GET_CHUNK_SIZE = 10_000  # Messages per Redis read — limits peak raw-bytes buffer
 
     async def store_messages(
         self, chat_id: Union[int, str], messages: List[ExportedMessage]
@@ -137,23 +138,38 @@ class MessageCache:
     async def get_messages(
         self, chat_id: Union[int, str], low_id: int, high_id: int
     ) -> List[ExportedMessage]:
-        """Retrieve cached messages in [low_id, high_id] range, sorted by ID ascending."""
+        """Retrieve cached messages in [low_id, high_id] range, sorted by ID ascending.
+
+        Reads from Redis in chunks of GET_CHUNK_SIZE to avoid loading a large raw-bytes
+        buffer into memory all at once (prevents OOM for chats with 100k+ cached messages).
+        """
         if not self.enabled:
             return []
 
         msgs_key = self._msgs_key(chat_id)
-        raw_items = await self.redis.zrangebyscore(msgs_key, low_id, high_id)
-
-        if not raw_items:
-            return []
-
         messages = []
-        for data in raw_items:
-            try:
-                messages.append(self._deserialize(data))
-            except Exception as e:
-                logger.warning(f"Failed to deserialize cached message: {e}")
-                continue
+        offset = 0
+
+        while True:
+            raw_items = await self.redis.zrangebyscore(
+                msgs_key, low_id, high_id,
+                start=offset, num=self.GET_CHUNK_SIZE,
+            )
+            if not raw_items:
+                break
+
+            for data in raw_items:
+                try:
+                    messages.append(self._deserialize(data))
+                except Exception as e:
+                    logger.warning(f"Failed to deserialize cached message: {e}")
+
+            offset += len(raw_items)
+            if len(raw_items) < self.GET_CHUNK_SIZE:
+                break
+
+        if not messages:
+            return []
 
         # Touch last_access
         await self._touch(chat_id)
