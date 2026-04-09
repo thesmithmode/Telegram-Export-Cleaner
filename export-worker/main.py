@@ -53,6 +53,7 @@ class ExportWorker:
         self.java_client: Optional[JavaBotClient] = None
         self.message_cache: Optional[MessageCache] = None
         self.control_redis: Optional[aioredis.Redis] = None
+        self._redis_pool: Optional[aioredis.ConnectionPool] = None
         self.running = False
         self.jobs_processed = 0
         self.jobs_failed = 0
@@ -171,15 +172,18 @@ class ExportWorker:
             logger.info("3️⃣  Connecting to Java Bot API...")
             self.java_client = await create_java_client()
 
-            # 4. Initialize control Redis (for cancel/active export)
-            self.control_redis = aioredis.Redis(
+            # 4. Initialize Redis (один пул, два клиентских вида: str и bytes)
+            self._redis_pool = aioredis.ConnectionPool(
                 host=settings.REDIS_HOST,
                 port=settings.REDIS_PORT,
                 db=settings.REDIS_DB,
                 password=settings.REDIS_PASSWORD,
-                decode_responses=True,
                 socket_timeout=10,
                 socket_connect_timeout=5,
+            )
+            self.control_redis = aioredis.Redis(
+                connection_pool=self._redis_pool,
+                decode_responses=True,
             )
 
             # Передаём Redis-клиент в Telegram-клиент для canonical-маппинга
@@ -188,10 +192,7 @@ class ExportWorker:
             # 5. Initialize message cache
             logger.info("4️⃣  Initializing message cache...")
             cache_redis = aioredis.Redis(
-                host=settings.REDIS_HOST,
-                port=settings.REDIS_PORT,
-                db=settings.REDIS_DB,
-                password=settings.REDIS_PASSWORD,
+                connection_pool=self._redis_pool,
                 decode_responses=False,
             )
             self.message_cache = MessageCache(
@@ -826,11 +827,8 @@ class ExportWorker:
         if self.java_client:
             await self.java_client.aclose()
 
-        if self.control_redis:
-            await self.control_redis.aclose()
-
-        if self.message_cache and self.message_cache.redis:
-            await self.message_cache.redis.aclose()
+        if self._redis_pool:
+            await self._redis_pool.aclose()
 
         logger.info(
             f"📊 Final stats: {self.jobs_processed} processed, "
