@@ -1,12 +1,14 @@
 package com.tcleaner.core;
 
 import com.tcleaner.format.DateFormatter;
+import com.tcleaner.format.MarkdownParser;
 import com.tcleaner.format.StringUtils;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Predicate;
 
 /**
  * Фильтр сообщений Telegram export.
@@ -19,6 +21,7 @@ public class MessageFilter {
     private final List<String> excludeKeywords;
     private final List<String> includeTypes;
     private final List<String> excludeTypes;
+    private final List<Predicate<JsonNode>> customPredicates;
 
     /**
      * Создаёт пустой фильтр без условий (все сообщения проходят).
@@ -28,6 +31,7 @@ public class MessageFilter {
         this.excludeKeywords = new ArrayList<>();
         this.includeTypes = new ArrayList<>();
         this.excludeTypes = new ArrayList<>();
+        this.customPredicates = new ArrayList<>();
     }
 
     /**
@@ -117,28 +121,9 @@ public class MessageFilter {
         return this;
     }
 
-    private static String extractRawText(JsonNode textNode) {
-        if (textNode == null || textNode.isNull()) {
-            return "";
-        }
-
-        if (textNode.isTextual()) {
-            return textNode.asText();
-        }
-
-        if (textNode.isArray()) {
-            StringBuilder sb = new StringBuilder();
-            for (JsonNode element : textNode) {
-                if (element.isTextual()) {
-                    sb.append(element.asText());
-                } else if (element.has("text")) {
-                    sb.append(element.get("text").asText());
-                }
-            }
-            return sb.toString();
-        }
-
-        return "";
+    public MessageFilter withPredicate(Predicate<JsonNode> predicate) {
+        this.customPredicates.add(predicate);
+        return this;
     }
 
     public boolean matches(JsonNode message) {
@@ -176,7 +161,7 @@ public class MessageFilter {
         }
 
         if (!keywords.isEmpty() || !excludeKeywords.isEmpty()) {
-            String text = message.has("text") ? extractRawText(message.get("text")) : "";
+            String text = message.has("text") ? MarkdownParser.parseText(message.get("text")) : "";
             String textLower = text.toLowerCase();
 
             if (!keywords.isEmpty()) {
@@ -191,6 +176,12 @@ public class MessageFilter {
                 if (hasExcludeKeyword) {
                     return false;
                 }
+            }
+        }
+
+        for (Predicate<JsonNode> predicate : customPredicates) {
+            if (!predicate.test(message)) {
+                return false;
             }
         }
 
