@@ -46,7 +46,7 @@ import java.util.List;
  * конфигурации, {@link MessageProcessor} не хранит состояния.</p>
  */
 @Service
-public class TelegramExporter implements TelegramExporterInterface {
+public class TelegramExporter {
 
     private static final Logger log = LoggerFactory.getLogger(TelegramExporter.class);
 
@@ -59,34 +59,9 @@ public class TelegramExporter implements TelegramExporterInterface {
      * @param objectMapper     Jackson ObjectMapper для парсинга JSON (thread-safe)
      * @param messageProcessor процессор сообщений
      */
-    @Autowired
     public TelegramExporter(ObjectMapper objectMapper, MessageProcessor messageProcessor) {
         this.objectMapper = objectMapper;
         this.messageProcessor = messageProcessor;
-    }
-
-    /**
-     * Конструктор для CLI-режима.
-     *
-     * <p>Создаёт {@link ObjectMapper} с теми же настройками, что и Spring-бин,
-     * чтобы поведение в CLI и Web API было идентичным.</p>
-     */
-    public TelegramExporter() {
-        this.objectMapper = createDefaultObjectMapper();
-        this.messageProcessor = new MessageProcessor();
-    }
-
-    /**
-     * Создаёт {@link ObjectMapper} с базовой конфигурацией (поддержка Java 8 Time API).
-     *
-     * <p>Вынесен в {@code static}-метод для переиспользования в тестах.</p>
-     *
-     * @return сконфигурированный ObjectMapper
-     */
-    public static ObjectMapper createDefaultObjectMapper() {
-        ObjectMapper mapper = new ObjectMapper();
-        mapper.registerModule(new JavaTimeModule());
-        return mapper;
     }
 
     /**
