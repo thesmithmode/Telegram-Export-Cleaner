@@ -178,6 +178,7 @@ public class ExportJobProducer {
             job.put("exclude_keywords", excludeKeywords);
         }
 
+        boolean reservedLocally = false;
         try {
             String json = objectMapper.writeValueAsString(job);
             // Атомарно помечаем экспорт активным (SET NX EX).
@@ -190,6 +191,8 @@ public class ExportJobProducer {
                 String existing = redis.opsForValue().get(ACTIVE_EXPORT_PREFIX + userId);
                 throw new IllegalStateException("Экспорт уже активен: " + existing);
             }
+            reservedLocally = true;
+
             // Если данные чата уже в кэше — задача идёт в приоритетную очередь
             boolean cached = isLikelyCached(chatId);
             String targetQueue = cached ? queueName + EXPRESS_QUEUE_SUFFIX : queueName;
@@ -204,6 +207,14 @@ public class ExportJobProducer {
             throw e;
         } catch (Exception e) {
             log.error("Не удалось добавить задачу в очередь: {}", e.getMessage(), e);
+            if (reservedLocally) {
+                try {
+                    redis.delete(ACTIVE_EXPORT_PREFIX + userId);
+                    log.info("Бронь экспорта для пользователя {} отозвана из-за ошибки", userId);
+                } catch (Exception ex) {
+                    log.error("Критическая ошибка: не удалось отозвать бронь для {}: {}", userId, ex.getMessage());
+                }
+            }
             throw new RuntimeException("Ошибка добавления задачи в очередь", e);
         }
     }
