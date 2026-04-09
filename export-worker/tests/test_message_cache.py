@@ -359,6 +359,59 @@ class TestDateIndex:
         retrieved = await cache.get_messages_by_date("chat_123", "2025-02-01", "2025-02-28")
         assert retrieved == []
 
+    @pytest.mark.asyncio
+    async def test_count_messages_by_date(self, cache):
+        """count_messages_by_date returns correct count without loading messages."""
+        msgs = [
+            _make_msg(1, date="2025-01-01T10:00:00"),
+            _make_msg(2, date="2025-01-03T10:00:00"),
+            _make_msg(3, date="2025-01-05T10:00:00"),
+            _make_msg(4, date="2025-01-07T10:00:00"),
+        ]
+        await cache.store_messages("chat_123", msgs)
+
+        count = await cache.count_messages_by_date("chat_123", "2025-01-03", "2025-01-07")
+        assert count == 3
+
+    @pytest.mark.asyncio
+    async def test_count_messages_by_date_empty(self, cache):
+        """count_messages_by_date returns 0 for empty range."""
+        msgs = [_make_msg(1, date="2025-01-01T10:00:00")]
+        await cache.store_messages("chat_123", msgs)
+
+        count = await cache.count_messages_by_date("chat_123", "2025-02-01", "2025-02-28")
+        assert count == 0
+
+    @pytest.mark.asyncio
+    async def test_iter_messages_by_date(self, cache):
+        """iter_messages_by_date streams only messages in the date range."""
+        msgs = [
+            _make_msg(1, date="2025-01-01T10:00:00"),
+            _make_msg(2, date="2025-01-03T10:00:00"),
+            _make_msg(3, date="2025-01-05T10:00:00"),
+            _make_msg(4, date="2025-01-07T10:00:00"),
+            _make_msg(5, date="2025-01-09T10:00:00"),
+        ]
+        await cache.store_messages("chat_123", msgs)
+
+        result = []
+        async for msg in cache.iter_messages_by_date("chat_123", "2025-01-03", "2025-01-07"):
+            result.append(msg.id)
+
+        assert result == [2, 3, 4]
+
+    @pytest.mark.asyncio
+    async def test_iter_messages_by_date_empty(self, cache):
+        """iter_messages_by_date yields nothing for out-of-range dates."""
+        msgs = [_make_msg(1, date="2025-01-01T10:00:00")]
+        await cache.store_messages("chat_123", msgs)
+
+        result = []
+        async for msg in cache.iter_messages_by_date("chat_123", "2025-02-01", "2025-02-28"):
+            result.append(msg)
+
+        assert result == []
+
 
 class TestDateRanges:
     """Date range tracking for gap detection."""
