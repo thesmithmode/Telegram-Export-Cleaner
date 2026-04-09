@@ -323,35 +323,47 @@ class ExportWorker:
                         pass
 
             # --- Cache-aware export ---
-            # Both full and date-range exports use cache:
-            # 1. Check cache for already-fetched messages (by ID or by date)
-            # 2. Fetch only missing ranges from Telegram API
-            # 3. Store fresh messages in cache
-            # 4. Merge cached + fresh for the final result
+            # _export_with_id_cache  → returns (count, AsyncGenerator) or None
+            # _export_with_date_cache / _fetch_all_messages → returns list or None
+            # send_response() handles both via streaming temp-file approach.
 
             has_date_filter = job.from_date is not None or job.to_date is not None
-            messages: Optional[list[ExportedMessage]] = None
+            messages_for_send = None   # list[ExportedMessage] | AsyncGenerator
+            msg_count = 0
 
             if self.message_cache and self.message_cache.enabled:
                 if has_date_filter:
-                    messages = await self._export_with_date_cache(job)
+                    result = await self._export_with_date_cache(job)
+                    if result is not None:
+                        messages_for_send = result
+                        msg_count = len(result)
                 else:
-                    messages = await self._export_with_id_cache(job)
+                    result = await self._export_with_id_cache(job)
+                    if result is not None:
+                        msg_count, messages_for_send = result  # (int, AsyncGenerator)
 
             # Fallback: no cache, cache disabled, or cache export failed
-            if messages is None:
-                messages = await self._fetch_all_messages(job)
-                # Сохраняем в кэш — чтобы следующий запрос того же чата шёл из кэша
-                if messages and self.message_cache and self.message_cache.enabled:
+            if messages_for_send is None:
+                fallback = await self._fetch_all_messages(job)
+                if fallback is None:
+                    return True
+                # Сохраняем в кэш — следующий запрос пойдёт через cache path
+                if fallback and self.message_cache and self.message_cache.enabled:
                     try:
-                        await self.message_cache.store_messages(job.chat_id, messages)
+                        await self.message_cache.store_messages(job.chat_id, fallback)
                         await self.message_cache.evict_if_needed()
-                        logger.info(f"  Cached {len(messages)} messages for chat {job.chat_id} (fallback path)")
+                        logger.info(f"  Cached {len(fallback)} messages for chat {job.chat_id} (fallback path)")
                     except Exception as e:
                         logger.warning(f"Failed to cache messages after fallback fetch: {e}")
+                messages_for_send = fallback
+                msg_count = len(fallback)
 
-            if messages is None:
-                # _fetch_all_messages / cache export returned None → error already reported
+            # Проверяем отмену перед долгой отправкой в Java — на cache-hit пути
+            # cancel_check в цикле фетча срабатывает 0 раз (новых сообщений мало).
+            if await self.is_cancelled(job.task_id):
+                logger.info(f"🛑 Job {job.task_id} отменена перед отправкой результата")
+                await self.queue_consumer.mark_job_completed(job.task_id)
+                await self._cleanup_job(job)
                 return True
 
             # Send results to Java API, deliver cleaned text to user
@@ -359,7 +371,8 @@ class ExportWorker:
             success = await self.java_client.send_response(
                 task_id=job.task_id,
                 status="completed",
-                messages=messages,
+                messages=messages_for_send,
+                count=msg_count,
                 user_chat_id=job.user_chat_id,
                 chat_title=chat_title,
                 from_date=job.from_date,
@@ -369,7 +382,7 @@ class ExportWorker:
             )
 
             if success:
-                logger.info(f"✅ Job {job.task_id} completed ({len(messages)} messages)")
+                logger.info(f"✅ Job {job.task_id} completed ({msg_count} messages)")
                 await self.queue_consumer.mark_job_completed(job.task_id)
                 self.jobs_processed += 1
                 self.log_memory_usage("JOB_DONE")
@@ -655,22 +668,28 @@ class ExportWorker:
                     await self.message_cache.store_messages(job.chat_id, older_msgs)
                     fresh_messages.extend(older_msgs)
 
-        # Освобождаем fresh_messages перед чтением кэша — они уже сохранены в cache выше.
-        # Это критично для памяти: не держим fresh + cached одновременно.
+        # Освобождаем fresh_messages — они уже сохранены в кэш выше.
         del fresh_messages
 
-        # Читаем все сообщения из кэша одним диапазоном — fresh уже включены туда.
-        # get_messages() использует чанковое чтение (ZRANGEBYSCORE LIMIT) — не OOM.
+        # Считаем итоговое кол-во через ZCOUNT (O(1), без загрузки в память).
         actual_min = 0 if (not job.limit or job.limit <= 0) else full_min
-        logger.info(f"  Reading from cache [{actual_min}, {full_max}]...")
-        messages = await self.message_cache.get_messages(job.chat_id, actual_min, full_max)
-        logger.info(f"  Total after cache merge: {len(messages)} messages")
+        count = await self.message_cache.count_messages(job.chat_id, actual_min, full_max)
+        logger.info(f"  Total after cache merge: {count} messages")
+
+        # Проверяем отмену ДО finalize — иначе спамит 100% при каждом рестарте
+        if await self.is_cancelled(job.task_id):
+            logger.info(f"🛑 Export {job.task_id} отменён (перед finalize)")
+            await self.clear_active_export(job.user_id)
+            return None
 
         if tracker:
-            await tracker.finalize(len(messages))
+            await tracker.finalize(count)
 
         await self.message_cache.evict_if_needed()
-        return messages
+
+        # Возвращаем (count, generator) — вызывающий код стримит через iter_messages,
+        # не держа все 252K объектов в памяти одновременно.
+        return count, self.message_cache.iter_messages(job.chat_id, actual_min, full_max)
 
     async def _fetch_all_messages(self, job: ExportRequest) -> Optional[list[ExportedMessage]]:
         """

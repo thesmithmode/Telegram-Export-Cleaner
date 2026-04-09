@@ -16,7 +16,7 @@ import json
 import logging
 import time
 from datetime import datetime, date, timedelta
-from typing import List, Tuple, Optional, Union
+from typing import AsyncGenerator, List, Tuple, Optional, Union
 
 import msgpack
 
@@ -176,6 +176,44 @@ class MessageCache:
         await self._refresh_ttl(chat_id)
 
         return messages
+
+    async def count_messages(
+        self, chat_id: Union[int, str], low_id: int, high_id: int
+    ) -> int:
+        """Count cached messages in [low_id, high_id] without loading them. O(1) via ZCOUNT."""
+        if not self.enabled:
+            return 0
+        return await self.redis.zcount(self._msgs_key(chat_id), low_id, high_id)
+
+    async def iter_messages(
+        self, chat_id: Union[int, str], low_id: int, high_id: int
+    ) -> AsyncGenerator[ExportedMessage, None]:
+        """Async generator: yield messages one at a time from cache.
+
+        Memory: O(GET_CHUNK_SIZE) — reads Redis in chunks, never holds full list.
+        Use instead of get_messages() for large chats to avoid OOM.
+        """
+        if not self.enabled:
+            return
+        msgs_key = self._msgs_key(chat_id)
+        offset = 0
+        while True:
+            raw_items = await self.redis.zrangebyscore(
+                msgs_key, low_id, high_id,
+                start=offset, num=self.GET_CHUNK_SIZE,
+            )
+            if not raw_items:
+                break
+            for data in raw_items:
+                try:
+                    yield self._deserialize(data)
+                except Exception as e:
+                    logger.warning(f"Failed to deserialize cached message: {e}")
+            offset += len(raw_items)
+            if len(raw_items) < self.GET_CHUNK_SIZE:
+                break
+        await self._touch(chat_id)
+        await self._refresh_ttl(chat_id)
 
     async def get_cached_ranges(self, chat_id: Union[int, str]) -> List[List[int]]:
         """Return list of [low, high] ranges cached for this chat."""
