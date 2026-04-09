@@ -381,7 +381,7 @@ class ExportWorker:
                 task_id=job.task_id,
                 status="completed",
                 messages=messages_for_send,
-                count=msg_count,
+                actual_count=msg_count,
                 user_chat_id=job.user_chat_id,
                 chat_title=chat_title,
                 from_date=job.from_date,

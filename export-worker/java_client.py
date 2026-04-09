@@ -316,6 +316,29 @@ class ProgressTracker:
     async def finalize(self, count):
         await self._client.send_progress_update(self._user_chat_id, self._task_id, count, self._total or count, False, 0, self._message_id)
 
+    async def update_queue_position(self, user_chat_id: int, msg_id: int, position: int, total: int):
+        """Редактирует сообщение в очереди: позиция 0 = задание начато, иначе — место в очереди."""
+        if not self.bot_token:
+            return
+        if position == 0:
+            text = "⏳ Ваш экспорт начался..."
+        else:
+            text = f"🕐 Вы в очереди: позиция {position}/{total}. Ожидайте..."
+        try:
+            url = f"https://api.telegram.org/bot{self.bot_token}/editMessageText"
+            await self._http_client.post(url, data={
+                "chat_id": user_chat_id,
+                "message_id": msg_id,
+                "text": text,
+            })
+        except Exception:
+            pass
+
+    async def aclose(self):
+        """Закрывает httpx клиент."""
+        await self._http_client.aclose()
+
+
 async def create_java_client() -> JavaBotClient:
     client = JavaBotClient()
     if not await client.verify_connectivity():
