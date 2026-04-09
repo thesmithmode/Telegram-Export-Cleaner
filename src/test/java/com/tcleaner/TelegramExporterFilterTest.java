@@ -4,6 +4,8 @@ import com.tcleaner.core.MessageProcessor;
 import com.tcleaner.core.MessageFilter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -25,6 +27,15 @@ class TelegramExporterFilterTest {
     @TempDir
     Path tempDir;
 
+    private TelegramExporter exporter;
+
+    @BeforeEach
+    void setUp() {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.registerModule(new JavaTimeModule());
+        exporter = new TelegramExporter(mapper, new MessageProcessor());
+    }
+
     @Test
     @DisplayName("processFile с MessageFilter фильтрует по ключевым словам")
     void processFileWithKeywordFilter() throws IOException {
@@ -42,7 +53,6 @@ class TelegramExporterFilterTest {
         Path inputFile = tempDir.resolve("result.json");
         Files.writeString(inputFile, json);
         
-        TelegramExporter exporter = new TelegramExporter();
         MessageFilter filter = new MessageFilter().withKeyword("hello");
         
         List<String> result = exporter.processFile(inputFile, filter);
@@ -68,7 +78,6 @@ class TelegramExporterFilterTest {
         Path inputFile = tempDir.resolve("result.json");
         Files.writeString(inputFile, json);
         
-        TelegramExporter exporter = new TelegramExporter();
         MessageFilter filter = new MessageFilter()
                 .withStartDate(LocalDate.of(2025, 6, 22))
                 .withEndDate(LocalDate.of(2025, 6, 26));
@@ -95,8 +104,6 @@ class TelegramExporterFilterTest {
         Path inputFile = tempDir.resolve("result.json");
         Files.writeString(inputFile, json);
         
-        TelegramExporter exporter = new TelegramExporter();
-        
         List<String> result = exporter.processFile(inputFile, null);
         
         assertThat(result).hasSize(2);
@@ -116,8 +123,6 @@ class TelegramExporterFilterTest {
         
         Path inputFile = tempDir.resolve("result.json");
         Files.writeString(inputFile, json);
-        
-        TelegramExporter exporter = new TelegramExporter();
         
         List<String> resultNoFilter = exporter.processFile(inputFile);
         List<String> resultNullFilter = exporter.processFile(inputFile, null);
@@ -142,7 +147,6 @@ class TelegramExporterFilterTest {
         Path inputFile = tempDir.resolve("result.json");
         Files.writeString(inputFile, json);
         
-        TelegramExporter exporter = new TelegramExporter();
         MessageFilter filter = new MessageFilter().withIncludeType("message");
         
         List<String> result = exporter.processFile(inputFile, filter);
@@ -168,7 +172,6 @@ class TelegramExporterFilterTest {
         Path inputFile = tempDir.resolve("result.json");
         Files.writeString(inputFile, json);
         
-        TelegramExporter exporter = new TelegramExporter();
         MessageFilter filter = new MessageFilter().withExcludeType("service");
         
         List<String> result = exporter.processFile(inputFile, filter);

@@ -3,6 +3,7 @@ import com.tcleaner.core.TelegramExporter;
 import com.tcleaner.core.MessageProcessor;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -22,17 +23,15 @@ class TelegramExporterDiTest {
     @TempDir
     Path tempDir;
 
-    @Test
-    @DisplayName("Дефолтный ObjectMapper содержит JavaTimeModule")
-    void defaultObjectMapperHasJavaTimeModule() {
-        ObjectMapper mapper = TelegramExporter.createDefaultObjectMapper();
-        assertThat(mapper.getRegisteredModuleIds())
-                .contains("jackson-datatype-jsr310");
+    private ObjectMapper createMapper() {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.registerModule(new JavaTimeModule());
+        return mapper;
     }
 
     @Test
-    @DisplayName("DI-конструктор и конструктор по умолчанию дают одинаковый результат на одном JSON")
-    void diAndDefaultConstructorProduceSameOutput() throws Exception {
+    @DisplayName("DI-конструктор корректно инициализирует экспортер")
+    void diConstructorWorks() throws Exception {
         String json = """
                 {"messages": [
                     {"id": 1, "type": "message", "date": "2025-06-24T10:00:00", "text": "Hello"},
@@ -42,14 +41,10 @@ class TelegramExporterDiTest {
         Path file = tempDir.resolve("chat.json");
         Files.writeString(file, json);
 
-        TelegramExporter defaultExporter = new TelegramExporter();
-        TelegramExporter diExporter = new TelegramExporter(
-                TelegramExporter.createDefaultObjectMapper(), new MessageProcessor());
+        TelegramExporter diExporter = new TelegramExporter(createMapper(), new MessageProcessor());
 
-        List<String> defaultResult = defaultExporter.processFile(file);
         List<String> diResult = diExporter.processFile(file);
 
-        assertThat(diResult).isEqualTo(defaultResult);
         assertThat(diResult).hasSize(2);
         assertThat(diResult.get(0)).contains("Hello");
         assertThat(diResult.get(1)).contains("World");
