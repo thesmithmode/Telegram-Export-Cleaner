@@ -14,10 +14,11 @@ Java API endpoints used:
 import json
 import logging
 import asyncio
-import io
+import os
 import re
+import tempfile
 from datetime import datetime
-from typing import Optional
+from typing import AsyncIterator, Optional, Union
 
 import httpx
 
@@ -53,7 +54,8 @@ class JavaBotClient:
         self,
         task_id: str,
         status: str,
-        messages: list[ExportedMessage],
+        messages: Union[list[ExportedMessage], AsyncIterator[ExportedMessage]],
+        count: int = 0,
         error: Optional[str] = None,
         error_code: Optional[str] = None,
         user_chat_id: Optional[int] = None,
@@ -65,38 +67,46 @@ class JavaBotClient:
     ) -> bool:
         """
         Process export result:
-        - On failure: log the error (nothing to send to user)
-        - On success with messages: upload to Java, deliver cleaned text to user
+        - On failure: log the error and notify user
+        - On success: stream messages to temp JSON file → upload to Java → deliver to user
 
-        Returns True if the job finished cleanly (even partial/failed),
-        False only on unexpected processing errors.
+        Memory: O(1) per message — never holds full JSON/bytes in memory.
+
+        Args:
+            messages: list[ExportedMessage] (fallback path) OR AsyncIterator (cache path)
+            count: total message count (required when messages is AsyncIterator)
         """
-        if status == "failed" or not messages:
+        is_list = isinstance(messages, list)
+        actual_count = len(messages) if is_list else count
+
+        if status == "failed" or actual_count == 0:
             if error:
                 logger.warning(
                     f"Task {task_id} ended with status={status}: {error} [{error_code}]"
                 )
-                # Notify user about failure if we know their chat
                 if user_chat_id and self.bot_token:
                     await self._notify_user_failure(user_chat_id, task_id, error)
-            elif not messages and user_chat_id and self.bot_token:
-                # Успешный экспорт, но сообщений нет — уведомляем явно
+            elif actual_count == 0 and user_chat_id and self.bot_token:
                 logger.info(f"Task {task_id}: no messages found, notifying user")
                 await self._notify_user_empty(user_chat_id, task_id)
             return True
 
-        # Build result.json payload (Telegram Desktop export format)
-        result_json = self._build_result_json(messages)
-        result_bytes = json.dumps(result_json, ensure_ascii=False).encode("utf-8")
-
-        # Upload to Java /api/convert and get cleaned text
-        cleaned_text = await self._upload_to_java(
-            result_bytes, 
-            from_date=from_date, 
-            to_date=to_date,
-            keywords=keywords,
-            exclude_keywords=exclude_keywords
-        )
+        # Stream messages → temp file (O(1) memory per message)
+        tmp_path = await self._write_json_to_tempfile(messages, actual_count)
+        try:
+            # Upload temp file to Java /api/convert
+            cleaned_text = await self._upload_file_to_java(
+                tmp_path,
+                from_date=from_date,
+                to_date=to_date,
+                keywords=keywords,
+                exclude_keywords=exclude_keywords,
+            )
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
 
         if cleaned_text is None:
             logger.error(f"❌ Java API processing failed for task {task_id}")
@@ -108,7 +118,7 @@ class JavaBotClient:
 
         logger.info(
             f"✅ Java processed task {task_id}: "
-            f"{len(messages)} messages → {len(cleaned_text)} chars"
+            f"{actual_count} messages → {len(cleaned_text)} chars"
         )
 
         # Deliver cleaned text to user via Telegram Bot API
@@ -131,41 +141,55 @@ class JavaBotClient:
 
         return True
 
-    def _build_result_json(self, messages: list[ExportedMessage]) -> dict:
+    async def _write_json_to_tempfile(
+        self,
+        messages: Union[list[ExportedMessage], AsyncIterator[ExportedMessage]],
+        count: int,
+    ) -> str:
         """
-        Wrap ExportedMessage list into Telegram Desktop result.json format.
+        Stream messages to a temp file in result.json format (Telegram Desktop).
 
-        Java TelegramExporter expects:
-        {
-          "type": "personal_chat",
-          "name": "Export",
-          "message_count": 123,
-          "messages": [ { "id": ..., "type": "message", "date": ..., "text": ... }, ... ]
-        }
-
-        Transforms text_entities from Telegram Bot API format (offset/length)
-        to Telegram Desktop export format (type/text) so Java MarkdownParser can render them.
+        Memory: O(1) per message — one model_dump() at a time, no full JSON in memory.
+        Returns temp file path (caller must delete after use).
         """
-        transformed_messages = []
+        fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="tg_export_")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                header = (
+                    f'{{"type":"personal_chat","name":"Telegram Export",'
+                    f'"message_count":{count},"messages":['
+                ).encode("utf-8")
+                f.write(header)
 
-        for msg in messages:
-            msg_dict = msg.model_dump(exclude_none=True)
+                first = True
+                if isinstance(messages, list):
+                    async def _iter_list():
+                        for m in messages:
+                            yield m
+                    msgs_iter = _iter_list()
+                else:
+                    msgs_iter = messages
 
-            # Transform text_entities from Bot API format to Desktop export format
-            if msg_dict.get("text_entities"):
-                msg_dict["text_entities"] = self._transform_entities(
-                    msg_dict["text"],
-                    msg_dict["text_entities"]
-                )
+                async for msg in msgs_iter:
+                    msg_dict = msg.model_dump(exclude_none=True)
+                    if msg_dict.get("text_entities"):
+                        msg_dict["text_entities"] = self._transform_entities(
+                            msg_dict.get("text") or "",
+                            msg_dict["text_entities"],
+                        )
+                    if not first:
+                        f.write(b",")
+                    f.write(json.dumps(msg_dict, ensure_ascii=False).encode("utf-8"))
+                    first = False
 
-            transformed_messages.append(msg_dict)
-
-        return {
-            "type": "personal_chat",
-            "name": "Telegram Export",
-            "message_count": len(messages),
-            "messages": transformed_messages,
-        }
+                f.write(b"]}")
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+            raise
+        return tmp_path
 
     @staticmethod
     def _sanitize_filename(name: str) -> str:
@@ -260,17 +284,18 @@ class JavaBotClient:
 
         return transformed if transformed else entities
 
-    async def _upload_to_java(
-        self, 
-        result_json_bytes: bytes,
+    async def _upload_file_to_java(
+        self,
+        file_path: str,
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
         keywords: Optional[str] = None,
         exclude_keywords: Optional[str] = None,
     ) -> Optional[str]:
         """
-        POST result.json to /api/convert as multipart, return cleaned text.
+        POST result.json file to /api/convert as multipart, return cleaned text.
 
+        Streams file from disk — no bytes buffer in Python memory.
         Returns cleaned text string on success, None on failure.
         """
         url = f"{self.base_url}/api/convert"
@@ -283,26 +308,25 @@ class JavaBotClient:
 
         data = {}
         if from_date:
-            data["startDate"] = from_date[:10]  # Java expects YYYY-MM-DD
+            data["startDate"] = from_date[:10]
         if to_date:
-            data["endDate"] = to_date[:10]      # Java expects YYYY-MM-DD
+            data["endDate"] = to_date[:10]
         if keywords:
             data["keywords"] = keywords
         if exclude_keywords:
             data["excludeKeywords"] = exclude_keywords
 
         while retry_count <= self.max_retries:
-            # Rebuild multipart form data on each retry — httpx consumes the
-            # payload on the first POST, so reusing the same dict would send
-            # an empty body on subsequent attempts.
-            files = {"file": ("result.json", io.BytesIO(result_json_bytes), "application/json")}
+            # Open file fresh on each retry so seek position resets
             try:
-                response = await self._http_client.post(
-                    url,
-                    files=files,
-                    data=data,
-                    headers=headers,
-                )
+                with open(file_path, "rb") as f:
+                    files = {"file": ("result.json", f, "application/json")}
+                    response = await self._http_client.post(
+                        url,
+                        files=files,
+                        data=data,
+                        headers=headers,
+                    )
 
                 if response.status_code == 200:
                     return response.text
@@ -311,7 +335,7 @@ class JavaBotClient:
                     logger.error(
                         f"❌ Java API rejected payload (400): {response.text[:200]}"
                     )
-                    return None  # Bad data — no point retrying
+                    return None
 
                 elif response.status_code == 401:
                     logger.error("❌ Java API authentication failed (401)")
@@ -345,7 +369,6 @@ class JavaBotClient:
                 logger.error(f"Unexpected error calling Java API: {e}", exc_info=True)
                 return None
 
-            # Exponential backoff before retry
             if retry_count < self.max_retries:
                 wait = min(
                     base_delay * (2 ** retry_count),
