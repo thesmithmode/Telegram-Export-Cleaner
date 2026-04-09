@@ -868,9 +868,6 @@ class ExportWorker:
         if self.java_client:
             await self.java_client.aclose()
 
-        if self._redis_pool:
-            await self._redis_pool.aclose()
-
         logger.info(
             f"📊 Final stats: {self.jobs_processed} processed, "
             f"{self.jobs_failed} failed"
