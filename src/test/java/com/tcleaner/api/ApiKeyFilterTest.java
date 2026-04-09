@@ -86,13 +86,14 @@ class ApiKeyFilterTest {
     }
 
     @Test
-    void testNoKeyConfiguredAllowsAll() throws ServletException, IOException {
+    void testNoKeyConfiguredBlocksAll() throws ServletException, IOException {
         filter = new ApiKeyFilter("");
         when(request.getRequestURI()).thenReturn("/api/convert");
+        when(response.getWriter()).thenReturn(new PrintWriter(new StringWriter()));
 
         filter.doFilterInternal(request, response, filterChain);
 
-        verify(filterChain).doFilter(request, response);
-        verify(response, never()).setStatus(anyInt());
+        verify(filterChain, never()).doFilter(request, response);
+        verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
     }
 }
