@@ -1,7 +1,7 @@
 package com.tcleaner.api;
 
 import com.tcleaner.core.MessageFilter;
-import com.tcleaner.core.TelegramExporterInterface;
+import com.tcleaner.core.TelegramExporter;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -25,14 +25,14 @@ import java.nio.file.Path;
 @Service
 public class FileConversionService {
 
-    private final TelegramExporterInterface exporter;
+    private final TelegramExporter exporter;
 
     /**
-     * Конструктор с внедрением интерфейса экспортера.
+     * Конструктор с внедрением экспортера.
      *
-     * @param exporter интерфейс для обработки и конвертации Telegram JSON-данных
+     * @param exporter сервис для обработки и конвертации Telegram JSON-данных
      */
-    public FileConversionService(TelegramExporterInterface exporter) {
+    public FileConversionService(TelegramExporter exporter) {
         this.exporter = exporter;
     }
 

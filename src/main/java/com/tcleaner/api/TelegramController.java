@@ -1,7 +1,6 @@
 package com.tcleaner.api;
 
 import com.tcleaner.core.MessageFilter;
-import com.tcleaner.core.MessageFilterFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -70,7 +69,7 @@ public class TelegramController {
             throw new IllegalArgumentException("Ожидается JSON файл");
         }
 
-        MessageFilter filter = MessageFilterFactory.build(startDate, endDate, keywords, excludeKeywords);
+        MessageFilter filter = MessageFilter.fromParameters(startDate, endDate, keywords, excludeKeywords);
         return conversionService.convert(file, filter);
     }
 
