@@ -190,7 +190,7 @@ class ExportWorker:
             cache_redis = aioredis.Redis(
                 host=settings.REDIS_HOST,
                 port=settings.REDIS_PORT,
-                db=(settings.REDIS_DB + 1) % 16,  # Separate DB for cache (next DB number)
+                db=settings.REDIS_DB,
                 password=settings.REDIS_PASSWORD,
                 decode_responses=False,
             )
@@ -228,6 +228,17 @@ class ExportWorker:
             # Mark job as processing
             await self.queue_consumer.mark_job_processing(job.task_id)
             await self.set_active_processing_job(job.task_id)
+            # Обновляем active_export чтобы /cancel работал даже после OOM-рестарта.
+            # Java-бот ставит этот ключ при постановке в очередь (TTL 60 мин), но после
+            # OOM-рестарта воркер восстанавливает задачу из staging — без обновления ключ
+            # может истечь и /cancel вернёт "Нет активного экспорта".
+            if self.control_redis and job.user_id:
+                try:
+                    await self.control_redis.set(
+                        f"active_export:{job.user_id}", job.task_id, ex=3600
+                    )
+                except Exception:
+                    pass
 
             # Проверяем отмену сразу при старте — задача могла быть отменена пока ждала в очереди
             if await self.is_cancelled(job.task_id):
@@ -643,18 +654,16 @@ class ExportWorker:
                     await self.message_cache.store_messages(job.chat_id, older_msgs)
                     fresh_messages.extend(older_msgs)
 
-        # Читаем ТОЛЬКО из original cached_ranges (не весь [full_min, full_max]!)
-        # fresh_messages содержит всё новое, мержим в памяти (быстро)
-        logger.info(f"  Reading original cached ranges...")
-        cached_messages: list[ExportedMessage] = []
-        for r_low, r_high in cached_ranges:
-            chunk = await self.message_cache.get_messages(job.chat_id, r_low, r_high)
-            cached_messages.extend(chunk)
-            logger.debug(f"    Range [{r_low}, {r_high}]: {len(chunk)} messages")
+        # Освобождаем fresh_messages перед чтением кэша — они уже сохранены в cache выше.
+        # Это критично для памяти: не держим fresh + cached одновременно.
+        del fresh_messages
 
-        # Merge cached + fresh (fresh overwrites if there are dupes)
-        messages = self.message_cache.merge_and_sort(cached_messages, fresh_messages)
-        logger.info(f"  Total after cache merge: {len(messages)} messages (cached: {len(cached_messages)}, fresh: {len(fresh_messages)})")
+        # Читаем все сообщения из кэша одним диапазоном — fresh уже включены туда.
+        # get_messages() использует чанковое чтение (ZRANGEBYSCORE LIMIT) — не OOM.
+        actual_min = 0 if (not job.limit or job.limit <= 0) else full_min
+        logger.info(f"  Reading from cache [{actual_min}, {full_max}]...")
+        messages = await self.message_cache.get_messages(job.chat_id, actual_min, full_max)
+        logger.info(f"  Total after cache merge: {len(messages)} messages")
 
         if tracker:
             await tracker.finalize(len(messages))
