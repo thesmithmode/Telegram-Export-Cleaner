@@ -305,6 +305,48 @@ class MessageCache:
         id_set = set(msg_ids)
         return [m for m in all_msgs if m.id in id_set]
 
+    async def count_messages_by_date(
+        self, chat_id: Union[int, str], from_date: str, to_date: str
+    ) -> int:
+        """Return count of cached messages in [from_date, to_date] — O(1), no data loaded."""
+        if not self.enabled:
+            return 0
+        dates_key = self._dates_key(chat_id)
+        ts_from = self._date_str_to_timestamp(from_date)
+        ts_to = self._date_str_to_timestamp(to_date) + 86400 - 1
+        return await self.redis.zcount(dates_key, ts_from, ts_to)
+
+    async def iter_messages_by_date(
+        self, chat_id: Union[int, str], from_date: str, to_date: str
+    ) -> AsyncGenerator:
+        """Stream cached messages in [from_date, to_date], sorted by msg_id, O(chunk) memory.
+
+        Loads msg_id list from the date index (integers only, lightweight),
+        then streams full message objects via iter_messages filtered to that id set.
+        """
+        if not self.enabled:
+            return
+
+        dates_key = self._dates_key(chat_id)
+        ts_from = self._date_str_to_timestamp(from_date)
+        ts_to = self._date_str_to_timestamp(to_date) + 86400 - 1
+
+        raw_ids = await self.redis.zrangebyscore(dates_key, ts_from, ts_to)
+        if not raw_ids:
+            return
+
+        msg_ids = [int(mid) for mid in raw_ids]
+        if not msg_ids:
+            return
+
+        id_set = set(msg_ids)
+        min_id = min(msg_ids)
+        max_id = max(msg_ids)
+
+        async for msg in self.iter_messages(chat_id, min_id, max_id):
+            if msg.id in id_set:
+                yield msg
+
     async def get_cached_date_ranges(self, chat_id: Union[int, str]) -> List[List[str]]:
         """Return list of [from_date, to_date] date ranges cached for this chat."""
         if not self.enabled:

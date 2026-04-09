@@ -23,7 +23,7 @@ import shutil
 import psutil
 from datetime import date as date_cls, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import AsyncGenerator, Optional
 
 import redis.asyncio as aioredis
 
@@ -172,8 +172,8 @@ class ExportWorker:
             logger.info("3️⃣  Connecting to Java Bot API...")
             self.java_client = await create_java_client()
 
-            # 4. Initialize Redis (один пул, два клиентских вида: str и bytes)
-            self._redis_pool = aioredis.ConnectionPool(
+            # 4. Initialize Redis connections (два отдельных клиента — разные decode_responses)
+            _redis_kwargs = dict(
                 host=settings.REDIS_HOST,
                 port=settings.REDIS_PORT,
                 db=settings.REDIS_DB,
@@ -181,9 +181,10 @@ class ExportWorker:
                 socket_timeout=10,
                 socket_connect_timeout=5,
             )
+            # control_redis — строки (cancel, active_export, canonical mappings)
             self.control_redis = aioredis.Redis(
-                connection_pool=self._redis_pool,
                 decode_responses=True,
+                **_redis_kwargs,
             )
 
             # Передаём Redis-клиент в Telegram-клиент для canonical-маппинга
@@ -191,9 +192,10 @@ class ExportWorker:
 
             # 5. Initialize message cache
             logger.info("4️⃣  Initializing message cache...")
+            # cache_redis — байты (сериализованные Pydantic-объекты в Redis sorted sets)
             cache_redis = aioredis.Redis(
-                connection_pool=self._redis_pool,
                 decode_responses=False,
+                **_redis_kwargs,
             )
             self.message_cache = MessageCache(
                 redis_client=cache_redis,
@@ -323,26 +325,34 @@ class ExportWorker:
                         pass
 
             # --- Cache-aware export ---
-            # _export_with_id_cache  → returns (count, AsyncGenerator) or None
-            # _export_with_date_cache / _fetch_all_messages → returns list or None
-            # send_response() handles both via streaming temp-file approach.
+            # Оба пути возвращают (count: int, messages: AsyncGenerator) или None.
+            # None означает: отменено ИЛИ ошибка кэша → нужно проверить cancel перед fallback.
+            # send_response() принимает оба формата (list и AsyncGenerator).
 
             has_date_filter = job.from_date is not None or job.to_date is not None
-            messages_for_send = None   # list[ExportedMessage] | AsyncGenerator
+            messages_for_send = None   # AsyncGenerator | list[ExportedMessage]
             msg_count = 0
+            cache_was_tried = False
 
             if self.message_cache and self.message_cache.enabled:
+                cache_was_tried = True
                 if has_date_filter:
                     result = await self._export_with_date_cache(job)
-                    if result is not None:
-                        messages_for_send = result
-                        msg_count = len(result)
                 else:
                     result = await self._export_with_id_cache(job)
-                    if result is not None:
-                        msg_count, messages_for_send = result  # (int, AsyncGenerator)
 
-            # Fallback: no cache, cache disabled, or cache export failed
+                if result is not None:
+                    msg_count, messages_for_send = result  # (int, AsyncGenerator)
+
+            # Если кэш вернул None — сначала проверяем отмену (не гоним в fallback зря)
+            if messages_for_send is None and cache_was_tried:
+                if await self.is_cancelled(job.task_id):
+                    logger.info(f"🛑 Job {job.task_id} отменена после cache path")
+                    await self.queue_consumer.mark_job_completed(job.task_id)
+                    await self._cleanup_job(job)
+                    return True
+
+            # Fallback: кэш отключён или cache path завершился с ошибкой (не отменой)
             if messages_for_send is None:
                 fallback = await self._fetch_all_messages(job)
                 if fallback is None:
@@ -358,8 +368,7 @@ class ExportWorker:
                 messages_for_send = fallback
                 msg_count = len(fallback)
 
-            # Проверяем отмену перед долгой отправкой в Java — на cache-hit пути
-            # cancel_check в цикле фетча срабатывает 0 раз (новых сообщений мало).
+            # Финальная проверка отмены перед отправкой в Java
             if await self.is_cancelled(job.task_id):
                 logger.info(f"🛑 Job {job.task_id} отменена перед отправкой результата")
                 await self.queue_consumer.mark_job_completed(job.task_id)
@@ -398,12 +407,7 @@ class ExportWorker:
 
         except Exception as e:
             logger.error(f"❌ Unexpected error in job {job.task_id}: {e}", exc_info=True)
-            # ВСЕГДА уведомляем юзера об ошибке
-            if job.user_chat_id and self.java_client:
-                await self.java_client._notify_user_failure(
-                    job.user_chat_id, job.task_id, str(e)
-                )
-            # Всегда отправляем ответ об ошибке через Java API
+            # send_response с status="failed" уведомляет юзера через _notify_user_failure
             if self.java_client:
                 await self.java_client.send_response(
                     task_id=job.task_id,
@@ -442,14 +446,16 @@ class ExportWorker:
 
         return cached
 
-    async def _export_with_date_cache(self, job: ExportRequest) -> Optional[list[ExportedMessage]]:
+    async def _export_with_date_cache(
+        self, job: ExportRequest
+    ) -> Optional[tuple[int, AsyncGenerator]]:
         """
-        Date-range export with cache support.
+        Date-range export with cache support. Returns (count, AsyncGenerator) or None.
 
         1. Check which date sub-ranges are already cached
-        2. Fetch only missing date ranges from Telegram
+        2. Fetch only missing date ranges from Telegram (accumulate in memory — small gaps only)
         3. Store fresh messages in cache
-        4. Merge cached + fresh → return complete result
+        4. Count via ZCOUNT (O(1)), stream via iter_messages_by_date (O(chunk) memory)
         """
         from_date_str = job.from_date[:10] if job.from_date else None
         to_date_str = job.to_date[:10] if job.to_date else None
@@ -466,49 +472,57 @@ class ExportWorker:
         )
 
         if not missing:
-            # Everything cached — read directly
-            logger.info(f"  Cache HIT (полный) для чата {job.chat_id} [{from_date_str} - {to_date_str}]")
-            cached = await self.message_cache.get_messages_by_date(
+            # Full cache HIT — count without loading, stream without loading
+            count = await self.message_cache.count_messages_by_date(
                 job.chat_id, from_date_str, to_date_str
             )
-            return self.message_cache.merge_and_sort(cached, [])
-
-        # Вычисляем закэшированные диапазоны (всё что НЕ в missing)
-        cached_date_ranges = self._compute_cached_ranges(
-            from_date_str, to_date_str, missing
-        )
-        logger.info(f"  Cache MISS (частичный) для чата {job.chat_id}: "
-                     f"missing={missing}, cached={cached_date_ranges}")
-
-        # Читаем закэшированные сообщения (только нужные диапазоны, не всё)
-        cached_messages: list[ExportedMessage] = []
-        for c_from, c_to in cached_date_ranges:
-            chunk = await self.message_cache.get_messages_by_date(
-                job.chat_id, c_from, c_to
+            logger.info(
+                f"  Cache HIT (полный) для чата {job.chat_id} "
+                f"[{from_date_str} - {to_date_str}]: {count} сообщений"
             )
-            cached_messages.extend(chunk)
-        logger.info(f"  Loaded {len(cached_messages)} messages from cache")
+            tracker = self._create_tracker(job)
+            if tracker:
+                await tracker.start(count)
 
-        # Получаем total для прогресса (только для запрошенного диапазона)
+            if await self.is_cancelled(job.task_id):
+                logger.info(f"🛑 Export {job.task_id} отменён (перед finalize, date cache HIT)")
+                await self.clear_active_export(job.user_id)
+                return None
+
+            if tracker:
+                await tracker.finalize(count)
+
+            await self.message_cache.evict_if_needed()
+            return count, self.message_cache.iter_messages_by_date(
+                job.chat_id, from_date_str, to_date_str
+            )
+
+        # Partial or full miss — fetch missing date ranges from Telegram
+        logger.info(
+            f"  Cache MISS (частичный) для чата {job.chat_id}: missing={missing}"
+        )
+
+        # Получаем total для прогресса (запрашиваем у Telegram для всего диапазона)
         from_dt = datetime.fromisoformat(from_date_str + "T00:00:00+00:00")
         to_dt = datetime.fromisoformat(to_date_str + "T23:59:59+00:00")
         total = await self.telegram_client.get_messages_count(
             job.chat_id, from_dt, to_dt
         )
 
-        # Прогресс-трекер
+        # Cached count at start (for progress offset)
+        cached_count = await self.message_cache.count_messages_by_date(
+            job.chat_id, from_date_str, to_date_str
+        )
+
         tracker = self._create_tracker(job)
         if tracker:
             await tracker.start(total)
-            # Отправить статус кэшированного прогресса одним обновлением (избежать скачка от 0 к N%)
-            if cached_messages:
-                await tracker.track(len(cached_messages))
+            if cached_count:
+                await tracker.track(cached_count)
 
-        # Fetch each missing date range from Telegram
-        fresh_messages: list[ExportedMessage] = []
-        fetched_count = len(cached_messages)
-        # all_fetched accumulates ALL messages for cancel-save
-        all_fetched: list[ExportedMessage] = list(cached_messages)
+        # Fetch only missing gaps from Telegram, store in cache immediately
+        fetched_count = cached_count
+        all_fetched: list[ExportedMessage] = []
         for gap_from, gap_to in missing:
             gap_from_dt = datetime.fromisoformat(gap_from + "T00:00:00+00:00")
             gap_to_dt = datetime.fromisoformat(gap_to + "T23:59:59+00:00")
@@ -536,17 +550,25 @@ class ExportWorker:
             if gap_msgs:
                 logger.info(f"  Fetched {len(gap_msgs)} messages for [{gap_from} - {gap_to}]")
                 await self.message_cache.store_messages(job.chat_id, gap_msgs)
-                fresh_messages.extend(gap_msgs)
 
-        # Merge cached + fresh (не перечитываем из Redis — всё уже в памяти)
-        messages = self.message_cache.merge_and_sort(cached_messages, fresh_messages)
-        logger.info(f"  Date-range export complete: {len(messages)} messages")
+        # After storing all gaps, count final total from cache (authoritative)
+        count = await self.message_cache.count_messages_by_date(
+            job.chat_id, from_date_str, to_date_str
+        )
+        logger.info(f"  Date-range export complete: {count} messages")
+
+        if await self.is_cancelled(job.task_id):
+            logger.info(f"🛑 Export {job.task_id} отменён (перед finalize, date cache MISS)")
+            await self.clear_active_export(job.user_id)
+            return None
 
         if tracker:
-            await tracker.finalize(len(messages))
+            await tracker.finalize(count)
 
         await self.message_cache.evict_if_needed()
-        return messages
+        return count, self.message_cache.iter_messages_by_date(
+            job.chat_id, from_date_str, to_date_str
+        )
 
     async def _export_with_id_cache(self, job: ExportRequest) -> Optional[list[ExportedMessage]]:
         """

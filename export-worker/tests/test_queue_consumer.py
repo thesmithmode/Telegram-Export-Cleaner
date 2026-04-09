@@ -561,7 +561,7 @@ class TestStagingDurability:
 
     @pytest.mark.asyncio
     async def test_get_job_pushes_to_staging(self):
-        """get_job should push job to staging via RPUSH after BLPOP."""
+        """get_job should push job to staging via RPUSH after BLPOP and persist payload."""
         valid_job = json.dumps({
             "task_id": "task_123",
             "user_id": 456,
@@ -571,6 +571,7 @@ class TestStagingDurability:
         mock_client.blpop = AsyncMock(return_value=("telegram_export", valid_job))
         mock_client.rpush = AsyncMock()
         mock_client.sadd = AsyncMock()
+        mock_client.setex = AsyncMock()
 
         consumer = self._make_consumer(mock_client)
         result = await consumer.get_job()
@@ -583,6 +584,10 @@ class TestStagingDurability:
         )
         # Job tracked in staging set
         mock_client.sadd.assert_called_once_with("staging:jobs", "task_123")
+        # Staging payload persisted for cleanup on completion
+        setex_calls = mock_client.setex.call_args_list
+        staging_meta_call = [c for c in setex_calls if "staging:meta:task_123" in str(c)]
+        assert len(staging_meta_call) == 1
 
     @pytest.mark.asyncio
     async def test_express_job_pushes_to_express_staging(self):
@@ -596,6 +601,7 @@ class TestStagingDurability:
         mock_client.blpop = AsyncMock(return_value=("telegram_export_express", valid_job))
         mock_client.rpush = AsyncMock()
         mock_client.sadd = AsyncMock()
+        mock_client.setex = AsyncMock()
 
         consumer = self._make_consumer(mock_client)
         result = await consumer.get_job()
@@ -640,19 +646,46 @@ class TestStagingDurability:
         mock_client.delete.assert_called_once_with("staging:jobs")
 
     @pytest.mark.asyncio
-    async def test_mark_job_completed_untracks_staging(self):
-        """mark_job_completed should remove job from staging tracking."""
+    async def test_mark_job_completed_untracks_and_removes_staging(self):
+        """mark_job_completed should untrack from set and LREM from staging list."""
+        import json as _json
+        staging_meta = _json.dumps({
+            "payload": '{"task_id":"task_123"}',
+            "queue": "telegram_export_processing"
+        })
         mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=staging_meta)
+        mock_client.lrem = AsyncMock()
+        mock_client.delete = AsyncMock()
         consumer = self._make_consumer(mock_client)
         await consumer.mark_job_completed("task_123")
 
         mock_client.srem.assert_called_with("staging:jobs", "task_123")
+        # staging payload fetched
+        mock_client.get.assert_called_with("staging:meta:task_123")
+        # LREM removes job from staging list
+        mock_client.lrem.assert_called_once_with(
+            "telegram_export_processing", 1, '{"task_id":"task_123"}'
+        )
+        # staging:meta key cleaned up
+        mock_client.delete.assert_called_with("staging:meta:task_123")
 
     @pytest.mark.asyncio
-    async def test_mark_job_failed_untracks_staging(self):
-        """mark_job_failed should remove job from staging tracking."""
+    async def test_mark_job_failed_untracks_and_removes_staging(self):
+        """mark_job_failed should untrack from set and LREM from staging list."""
+        import json as _json
+        staging_meta = _json.dumps({
+            "payload": '{"task_id":"task_123"}',
+            "queue": "telegram_export_processing"
+        })
         mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=staging_meta)
+        mock_client.lrem = AsyncMock()
+        mock_client.delete = AsyncMock()
         consumer = self._make_consumer(mock_client)
         await consumer.mark_job_failed("task_123", "some error")
 
         mock_client.srem.assert_called_with("staging:jobs", "task_123")
+        mock_client.lrem.assert_called_once_with(
+            "telegram_export_processing", 1, '{"task_id":"task_123"}'
+        )
