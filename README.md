@@ -88,10 +88,12 @@ https://t.me/c/123456789/1
 **Структура Java-модуля:**
 - `ExportBot` — приём команд от пользователя (только private chat)
 - `ExportJobProducer` — управление Redis-очередью и блокировками
-- `TelegramController` + `FileConversionService` — REST API конвертации (потоковая передача результатов через `StreamingResponseBody`)
+- `TelegramController` — REST API для конвертации файлов
+- `FileConversionService` — логика работы с файлами и стримингом
 - `ApiExceptionHandler` — глобальная обработка исключений (@ControllerAdvice)
 - `TelegramExporter` — парсинг JSON (Tree Model и Streaming API)
-- `ApiKeyFilter` — аутентификация по X-API-Key
+- `ApiKeyFilter` — аутентификация по X-API-Key (безопасный режим)
+- `UserSession` — потокобезопасное управление состоянием диалога
 
 ---
 
