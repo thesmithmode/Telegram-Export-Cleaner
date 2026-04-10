@@ -7,14 +7,24 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
-import java.io.*;
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.*;
-import java.util.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.Collections;
+import java.util.Map;
 
 /**
  * REST API контроллер для конвертации Telegram JSON export файлов в форматированный текст.
@@ -89,13 +99,18 @@ public class TelegramController {
         }
 
         StreamingResponseBody responseBody = outputStream -> {
-            try (BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(outputStream, StandardCharsets.UTF_8))) {
+            try (BufferedWriter writer = new BufferedWriter(
+                    new OutputStreamWriter(outputStream, StandardCharsets.UTF_8))) {
                 exporter.processFileStreaming(tempFile, filter, writer);
                 writer.flush();
             } catch (Exception e) {
                 log.error("ASYNCHRONOUS ERROR: {}", e.getMessage());
             } finally {
-                try { Files.deleteIfExists(tempFile); } catch (IOException ignored) {}
+                try {
+                    Files.deleteIfExists(tempFile);
+                } catch (IOException ex) {
+                    log.warn("Failed to delete temp file {}: {}", tempFile, ex.getMessage());
+                }
             }
         };
 

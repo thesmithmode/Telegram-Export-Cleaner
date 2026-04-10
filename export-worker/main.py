@@ -562,7 +562,7 @@ class ExportWorker:
         Date-range export with cache support. Returns (count, AsyncGenerator) or None.
 
         1. Check which date sub-ranges are already cached
-        2. Fetch only missing date ranges from Telegram (accumulate in memory — small gaps only)
+        2. Fetch only missing date ranges from Telegram (accumulate in memory - small gaps only)
         3. Store fresh messages in cache
         4. Count via ZCOUNT (O(1)), stream via iter_messages_by_date (O(chunk) memory)
         """

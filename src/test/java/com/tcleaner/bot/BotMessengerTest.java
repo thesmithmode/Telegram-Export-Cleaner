@@ -11,7 +11,9 @@ import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
+import org.telegram.telegrambots.meta.api.objects.message.Message;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
+import org.telegram.telegrambots.meta.generics.TelegramClient;
 
 import java.util.List;
 
@@ -50,7 +52,7 @@ class BotMessengerTest {
 
             botMessenger.send(chatId, text);
 
-            verify(mockTelegramClient, times(1)).executeAsync(any(SendMessage.class));
+            verify(mockTelegramClient, times(1)).execute(any(SendMessage.class));
         }
 
         @Test
@@ -62,7 +64,7 @@ class BotMessengerTest {
 
             botMessenger.send(chatId, text);
 
-            verify(mockTelegramClient).executeAsync(argThat(sendMessage ->
+            verify(mockTelegramClient).execute(argThat(sendMessage ->
                     sendMessage instanceof SendMessage &&
                             ((SendMessage) sendMessage).getChatId().equals(String.valueOf(chatId))
             ));
@@ -76,7 +78,7 @@ class BotMessengerTest {
 
             botMessenger.send(12345L, text);
 
-            verify(mockTelegramClient).executeAsync(argThat(sendMessage ->
+            verify(mockTelegramClient).execute(argThat(sendMessage ->
                     sendMessage instanceof SendMessage &&
                             ((SendMessage) sendMessage).getText().equals(text)
             ));
@@ -89,7 +91,7 @@ class BotMessengerTest {
 
             botMessenger.send(12345L, "Text");
 
-            verify(mockTelegramClient).executeAsync(argThat(sendMessage ->
+            verify(mockTelegramClient).execute(argThat(sendMessage ->
                     sendMessage instanceof SendMessage &&
                             ((SendMessage) sendMessage).getParseMode() != null
             ));
@@ -110,7 +112,7 @@ class BotMessengerTest {
 
             botMessenger.sendWithKeyboard(chatId, text, keyboard);
 
-            verify(mockTelegramClient).executeAsync(any(SendMessage.class));
+            verify(mockTelegramClient).execute(any(SendMessage.class));
         }
 
         @Test
@@ -121,7 +123,7 @@ class BotMessengerTest {
 
             botMessenger.sendWithKeyboard(12345L, "Text", keyboard);
 
-            verify(mockTelegramClient).executeAsync(argThat(sendMessage ->
+            verify(mockTelegramClient).execute(argThat(sendMessage ->
                     sendMessage instanceof SendMessage &&
                             ((SendMessage) sendMessage).getReplyMarkup() != null
             ));
@@ -133,7 +135,7 @@ class BotMessengerTest {
             setupMessenger();
 
             assertDoesNotThrow(() -> botMessenger.sendWithKeyboard(12345L, "Text", null));
-            verify(mockTelegramClient).executeAsync(any(SendMessage.class));
+            verify(mockTelegramClient).execute(any(SendMessage.class));
         }
     }
 
@@ -146,14 +148,15 @@ class BotMessengerTest {
         void shouldReturnMessageId() throws TelegramApiException {
             setupMessenger();
 
-            // Mock the response
-            when(mockTelegramClient.executeAsync(any(SendMessage.class)))
-                    .thenReturn(java.util.concurrent.CompletableFuture.completedFuture(12345));
+            Message mockMessage = mock(Message.class);
+            when(mockMessage.getMessageId()).thenReturn(12345);
+            when(mockTelegramClient.execute(any(SendMessage.class)))
+                    .thenReturn(mockMessage);
 
             int messageId = botMessenger.sendWithKeyboardGetId(12345L, "Text", null);
 
             assertEquals(12345, messageId);
-            verify(mockTelegramClient).executeAsync(any(SendMessage.class));
+            verify(mockTelegramClient).execute(any(SendMessage.class));
         }
 
         @Test
@@ -161,8 +164,10 @@ class BotMessengerTest {
         void shouldReturnPositiveId() throws TelegramApiException {
             setupMessenger();
 
-            when(mockTelegramClient.executeAsync(any(SendMessage.class)))
-                    .thenReturn(java.util.concurrent.CompletableFuture.completedFuture(999));
+            Message mockMessage = mock(Message.class);
+            when(mockMessage.getMessageId()).thenReturn(999);
+            when(mockTelegramClient.execute(any(SendMessage.class)))
+                    .thenReturn(mockMessage);
 
             int messageId = botMessenger.sendWithKeyboardGetId(12345L, "Test", null);
 
@@ -184,7 +189,7 @@ class BotMessengerTest {
 
             botMessenger.editMessage(chatId, messageId, newText, null);
 
-            verify(mockTelegramClient).executeAsync(any(EditMessageText.class));
+            verify(mockTelegramClient).execute(any(EditMessageText.class));
         }
 
         @Test
@@ -196,7 +201,7 @@ class BotMessengerTest {
 
             botMessenger.editMessage(chatId, messageId, "New text", null);
 
-            verify(mockTelegramClient).executeAsync(argThat(editMessage ->
+            verify(mockTelegramClient).execute(argThat(editMessage ->
                     editMessage instanceof EditMessageText &&
                             ((EditMessageText) editMessage).getChatId().equals(String.valueOf(chatId)) &&
                             ((EditMessageText) editMessage).getMessageId() == messageId
@@ -211,7 +216,7 @@ class BotMessengerTest {
 
             botMessenger.editMessage(12345L, 999, newText, null);
 
-            verify(mockTelegramClient).executeAsync(argThat(editMessage ->
+            verify(mockTelegramClient).execute(argThat(editMessage ->
                     editMessage instanceof EditMessageText &&
                             ((EditMessageText) editMessage).getText().equals(newText)
             ));
@@ -225,7 +230,7 @@ class BotMessengerTest {
 
             botMessenger.editMessage(12345L, 999, "Text", newKeyboard);
 
-            verify(mockTelegramClient).executeAsync(argThat(editMessage ->
+            verify(mockTelegramClient).execute(argThat(editMessage ->
                     editMessage instanceof EditMessageText &&
                             ((EditMessageText) editMessage).getReplyMarkup() != null
             ));
@@ -244,7 +249,7 @@ class BotMessengerTest {
 
             botMessenger.answerCallback(callbackId);
 
-            verify(mockTelegramClient).executeAsync(any(AnswerCallbackQuery.class));
+            verify(mockTelegramClient).execute(any(AnswerCallbackQuery.class));
         }
 
         @Test
@@ -255,7 +260,7 @@ class BotMessengerTest {
 
             botMessenger.answerCallback(callbackId);
 
-            verify(mockTelegramClient).executeAsync(argThat(answerCallback ->
+            verify(mockTelegramClient).execute(argThat(answerCallback ->
                     answerCallback instanceof AnswerCallbackQuery &&
                             ((AnswerCallbackQuery) answerCallback).getCallbackQueryId().equals(callbackId)
             ));
@@ -268,7 +273,7 @@ class BotMessengerTest {
 
             // Should not throw exception
             assertDoesNotThrow(() -> botMessenger.answerCallback(""));
-            verify(mockTelegramClient).executeAsync(any(AnswerCallbackQuery.class));
+            verify(mockTelegramClient).execute(any(AnswerCallbackQuery.class));
         }
     }
 
@@ -284,7 +289,7 @@ class BotMessengerTest {
 
             botMessenger.sendRemoveReplyKeyboard(12345L, text);
 
-            verify(mockTelegramClient).executeAsync(any(SendMessage.class));
+            verify(mockTelegramClient).execute(any(SendMessage.class));
         }
 
         @Test
@@ -294,7 +299,7 @@ class BotMessengerTest {
 
             botMessenger.sendRemoveReplyKeyboard(12345L, "Clear keyboard");
 
-            verify(mockTelegramClient).executeAsync(argThat(sendMessage ->
+            verify(mockTelegramClient).execute(argThat(sendMessage ->
                     sendMessage instanceof SendMessage
             ));
         }
