@@ -1,13 +1,31 @@
 package com.tcleaner.bot;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.core.ListOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 
-import static org.junit.jupiter.api.Assertions.*;
+import java.util.concurrent.TimeUnit;
+
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * Тесты для ExportJobProducer.
@@ -15,15 +33,27 @@ import static org.junit.jupiter.api.Assertions.*;
  * Проверяет корректность управления Redis очередью, защиты от дубликатов (SET NX),
  * и функции отмены экспорта.
  */
-@SpringBootTest
+@ExtendWith(MockitoExtension.class)
 @DisplayName("ExportJobProducer")
 class ExportJobProducerTest {
 
-    @Autowired
+    @Mock
+    private StringRedisTemplate redis;
+
+    @Mock
+    private ValueOperations<String, String> valueOps;
+
+    @Mock
+    private ListOperations<String, String> listOps;
+
     private ExportJobProducer jobProducer;
 
-    @Autowired
-    private StringRedisTemplate redis;
+    @BeforeEach
+    void setUp() {
+        lenient().when(redis.opsForValue()).thenReturn(valueOps);
+        lenient().when(redis.opsForList()).thenReturn(listOps);
+        jobProducer = new ExportJobProducer(redis, new ObjectMapper(), "telegram_export");
+    }
 
     @Nested
     @DisplayName("Защита от дубликатов (SET NX)")
@@ -33,19 +63,15 @@ class ExportJobProducerTest {
         @DisplayName("должен добавить первый экспорт успешно")
         void shouldEnqueueFirstExport() {
             long userId = 12345L;
+
+            when(valueOps.setIfAbsent(eq("active_export:" + userId), anyString(),
+                    eq(60L), eq(TimeUnit.MINUTES))).thenReturn(true);
+
             String taskId = jobProducer.enqueue(userId, userId, 123456789L);
 
             assertNotNull(taskId);
             assertTrue(taskId.startsWith("export_"));
-
-            // Проверить что SET NX ключ установлен
-            String activeExport = redis.opsForValue().get("active_export:" + userId);
-            assertNotNull(activeExport);
-            assertEquals(taskId, activeExport);
-
-            // Cleanup
-            redis.delete("active_export:" + userId);
-            redis.delete("job_queue:" + taskId);
+            verify(listOps).rightPush(anyString(), anyString());
         }
 
         @Test
@@ -53,20 +79,16 @@ class ExportJobProducerTest {
         void shouldRejectDuplicateExport() {
             long userId = 54321L;
 
-            // Первый экспорт
-            String taskId1 = jobProducer.enqueue(userId, userId, 123456789L);
-            assertNotNull(taskId1);
+            when(valueOps.setIfAbsent(eq("active_export:" + userId), anyString(),
+                    eq(60L), eq(TimeUnit.MINUTES))).thenReturn(false);
+            when(valueOps.get("active_export:" + userId)).thenReturn("export_existing");
 
-            // Второй экспорт — должен быть отклонён
             assertThrows(
                     IllegalStateException.class,
-                    () -> jobProducer.enqueue(userId, userId, 987654321L),
-                    "Должен выбросить исключение при дублирующемся экспорте"
+                    () -> jobProducer.enqueue(userId, userId, 987654321L)
             );
 
-            // Cleanup
-            redis.delete("active_export:" + userId);
-            redis.delete("job_queue:" + taskId1);
+            verify(listOps, never()).rightPush(anyString(), anyString());
         }
     }
 
@@ -78,20 +100,17 @@ class ExportJobProducerTest {
         @DisplayName("должен установить флаг отмены в Redis")
         void shouldSetCancelFlag() {
             long userId = 11111L;
-            String taskId = jobProducer.enqueue(userId, userId, 123456789L);
+            String taskId = "export_abc123";
 
-            // Отмена
+            when(valueOps.get("active_export:" + userId)).thenReturn(taskId);
+            when(valueOps.get("job_json:" + taskId)).thenReturn("{\"task_id\":\"" + taskId + "\"}");
+            when(valueOps.get("job_queue:" + taskId)).thenReturn("telegram_export");
+
             jobProducer.cancelExport(userId);
 
-            // Проверить что флаг установлен
-            String cancelFlag = redis.opsForValue().get("cancel_export:" + taskId);
-            assertNotNull(cancelFlag);
-            assertEquals("1", cancelFlag);
-
-            // Cleanup
-            redis.delete("active_export:" + userId);
-            redis.delete("cancel_export:" + taskId);
-            redis.delete("job_queue:" + taskId);
+            verify(valueOps).set(eq("cancel_export:" + taskId), eq("1"),
+                    eq(60L), eq(TimeUnit.MINUTES));
+            verify(redis).delete("active_export:" + userId);
         }
 
         @Test
@@ -99,8 +118,10 @@ class ExportJobProducerTest {
         void shouldHandleCancelOfNonexistentExport() {
             long userId = 22222L;
 
-            // Отмена несуществующего экспорта — должен завершиться без ошибки
+            when(valueOps.get("active_export:" + userId)).thenReturn(null);
+
             assertDoesNotThrow(() -> jobProducer.cancelExport(userId));
+            verify(valueOps, never()).set(anyString(), eq("1"), anyLong(), any(TimeUnit.class));
         }
     }
 }

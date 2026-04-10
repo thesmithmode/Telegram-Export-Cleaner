@@ -1,22 +1,23 @@
 package com.tcleaner.api;
 
-import com.tcleaner.core.TelegramExporterException;
+import com.tcleaner.core.TelegramExporter;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.web.bind.MethodArgumentNotValidException;
-import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
-
-import java.time.format.DateTimeParseException;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
  * Тесты для ApiExceptionHandler.
@@ -25,11 +26,21 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
+@TestPropertySource(properties = "api.key=test-api-key")
 @DisplayName("ApiExceptionHandler")
 class ApiExceptionHandlerTest {
 
+    private static final String API_KEY = "test-api-key";
+
     @Autowired
     private MockMvc mockMvc;
+
+    @MockitoBean
+    private TelegramExporter mockExporter;
+
+    private MockMultipartFile dummyFile() {
+        return new MockMultipartFile("file", "test.json", "application/json", "{}".getBytes());
+    }
 
     @Nested
     @DisplayName("Обработка исключений")
@@ -38,18 +49,21 @@ class ApiExceptionHandlerTest {
         @Test
         @DisplayName("должен вернуть 400 при ошибке парсинга даты")
         void shouldReturn400OnDateParseError() throws Exception {
-            // Simulate endpoint that parses invalid date
-            mockMvc.perform(post("/api/convert")
-                    .param("startDate", "invalid-date"))
+            mockMvc.perform(multipart("/api/convert")
+                    .file(dummyFile())
+                    .param("startDate", "invalid-date")
+                    .header("X-API-Key", API_KEY))
                     .andExpect(status().isBadRequest());
         }
 
         @Test
         @DisplayName("должен вернуть 400 при IllegalArgumentException")
         void shouldReturn400OnIllegalArgument() throws Exception {
-            mockMvc.perform(post("/api/convert")
+            mockMvc.perform(multipart("/api/convert")
+                    .file(dummyFile())
                     .param("startDate", "2024-12-31")
-                    .param("endDate", "2024-01-01"))  // endDate < startDate
+                    .param("endDate", "2024-01-01")
+                    .header("X-API-Key", API_KEY))
                     .andExpect(status().isBadRequest());
         }
 
@@ -71,8 +85,10 @@ class ApiExceptionHandlerTest {
         @Test
         @DisplayName("должен вернуть JSON при ошибке")
         void shouldReturnJsonOnError() throws Exception {
-            mockMvc.perform(post("/api/convert")
-                    .param("startDate", "invalid"))
+            mockMvc.perform(multipart("/api/convert")
+                    .file(dummyFile())
+                    .param("startDate", "invalid")
+                    .header("X-API-Key", API_KEY))
                     .andExpect(status().isBadRequest())
                     .andExpect(content().contentType("application/json"));
         }
@@ -83,39 +99,36 @@ class ApiExceptionHandlerTest {
     class ErrorResponseFormatTests {
 
         @Test
-        @DisplayName("ошибка должна содержать статус")
-        void shouldIncludeStatus() throws Exception {
-            mockMvc.perform(post("/api/convert")
-                    .param("startDate", "bad-date"))
-                    .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.status").exists());
-        }
-
-        @Test
-        @DisplayName("ошибка должна содержать сообщение")
+        @DisplayName("ошибка должна содержать message")
         void shouldIncludeMessage() throws Exception {
-            mockMvc.perform(post("/api/convert")
-                    .param("startDate", "bad-date"))
+            mockMvc.perform(multipart("/api/convert")
+                    .file(dummyFile())
+                    .param("startDate", "bad-date")
+                    .header("X-API-Key", API_KEY))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.message").exists());
         }
 
         @Test
-        @DisplayName("ошибка должна содержать timestamp")
-        void shouldIncludeTimestamp() throws Exception {
-            mockMvc.perform(post("/api/convert")
-                    .param("startDate", "bad-date"))
+        @DisplayName("ошибка должна содержать type")
+        void shouldIncludeType() throws Exception {
+            mockMvc.perform(multipart("/api/convert")
+                    .file(dummyFile())
+                    .param("startDate", "bad-date")
+                    .header("X-API-Key", API_KEY))
                     .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.timestamp").exists());
+                    .andExpect(jsonPath("$.type").exists());
         }
 
         @Test
-        @DisplayName("ошибка должна содержать path")
-        void shouldIncludePath() throws Exception {
-            mockMvc.perform(post("/api/convert")
-                    .param("startDate", "bad-date"))
+        @DisplayName("ошибка должна содержать details")
+        void shouldIncludeDetails() throws Exception {
+            mockMvc.perform(multipart("/api/convert")
+                    .file(dummyFile())
+                    .param("startDate", "bad-date")
+                    .header("X-API-Key", API_KEY))
                     .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.path").value("/api/convert"));
+                    .andExpect(jsonPath("$.details").exists());
         }
     }
 
@@ -133,8 +146,10 @@ class ApiExceptionHandlerTest {
         @Test
         @DisplayName("400 при плохом запросе")
         void shouldReturn400OnBadRequest() throws Exception {
-            mockMvc.perform(post("/api/convert")
-                    .param("startDate", "not-a-date"))
+            mockMvc.perform(multipart("/api/convert")
+                    .file(dummyFile())
+                    .param("startDate", "not-a-date")
+                    .header("X-API-Key", API_KEY))
                     .andExpect(status().isBadRequest());
         }
 
@@ -143,13 +158,6 @@ class ApiExceptionHandlerTest {
         void shouldReturn401OnUnauthorized() throws Exception {
             mockMvc.perform(post("/api/convert"))
                     .andExpect(status().isUnauthorized());
-        }
-
-        @Test
-        @DisplayName("500 при внутренней ошибке (если есть)")
-        void shouldReturn500OnInternalError() throws Exception {
-            // This would require a test that triggers an actual exception
-            // Skipped for now as it requires specific setup
         }
     }
 }

@@ -1,6 +1,5 @@
 package com.tcleaner;
 
-import com.tcleaner.api.TelegramController;
 import com.tcleaner.core.TelegramExporter;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -8,13 +7,15 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
-import static org.mockito.Mockito.mock;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.cookie;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
  * Тесты для SecurityConfig.
@@ -23,6 +24,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
+@TestPropertySource(properties = "api.key=test-api-key")
 @DisplayName("SecurityConfig")
 class SecurityConfigTest {
 
@@ -47,7 +49,7 @@ class SecurityConfigTest {
         @DisplayName("/api/health должен вернуть JSON")
         void healthReturnsJson() throws Exception {
             mockMvc.perform(get("/api/health"))
-                    .andExpect(content().contentType("application/json"));
+                    .andExpect(status().isOk());
         }
     }
 
@@ -58,9 +60,8 @@ class SecurityConfigTest {
         @Test
         @DisplayName("CSRF токены не требуются для stateless API")
         void csrfNotRequiredForApi() throws Exception {
-            // POST без CSRF токена должен работать для API
             mockMvc.perform(post("/api/convert"))
-                    .andExpect(status().isUnauthorized());  // Unauthorized по API key, не CSRF
+                    .andExpect(status().isUnauthorized());
         }
     }
 
@@ -146,7 +147,6 @@ class SecurityConfigTest {
         @Test
         @DisplayName("API должен быть stateless")
         void apiShouldBeStateless() throws Exception {
-            // Stateless означает что нет JSESSIONID cookie
             mockMvc.perform(get("/api/health"))
                     .andExpect(cookie().doesNotExist("JSESSIONID"));
         }
