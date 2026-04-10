@@ -36,8 +36,17 @@ logger = logging.getLogger(__name__)
 
 
 def ensure_utc(dt: Optional[datetime]) -> Optional[datetime]:
-    """Нормализовать datetime к UTC-aware. Pyrogram 2.x возвращает aware UTC,
-    поэтому все сравнения дат должны быть aware."""
+    """Normalize datetime to UTC-aware timezone.
+
+    Pyrogram 2.x returns timezone-aware UTC datetimes. This function ensures
+    that all datetime values are aware UTC for consistent comparisons.
+
+    Args:
+        dt: Datetime object (may be timezone-naive)
+
+    Returns:
+        UTC-aware datetime object, or None if input is None
+    """
     if dt is None:
         return None
     if dt.tzinfo is None:
@@ -46,10 +55,34 @@ def ensure_utc(dt: Optional[datetime]) -> Optional[datetime]:
 
 
 class TelegramClient:
-    """Async Telegram client for message export."""
+    """Async Telegram client for message export using Pyrogram 2.x.
+
+    Handles:
+    - Authentication via session string or file-based session
+    - Async chat message history retrieval
+    - Exponential backoff retry logic for Telegram API rate limits (FloodWait)
+    - Canonical ID resolution (convert username/link to numeric ID)
+    - Message deduplication after retries
+    - Graceful connection management
+
+    Supports both:
+    - Production: Stateless session string from environment
+    - Development: File-based session with phone number
+
+    Example:
+        client = TelegramClient()
+        await client.connect()
+        async for message in client.get_chat_history(123456):
+            print(message)
+        await client.disconnect()
+    """
 
     def __init__(self):
-        """Initialize Telegram client with Pyrogram."""
+        """Initialize Telegram client with Pyrogram configuration.
+
+        Creates Pyrogram Client instance with settings from config.py.
+        Supports both session string and file-based authentication modes.
+        """
         self.session_path = Path("session")
         self.session_path.mkdir(exist_ok=True)
 
@@ -81,11 +114,16 @@ class TelegramClient:
         logger.info(f"Pyrogram client initialized (session: {settings.SESSION_NAME})")
 
     async def connect(self) -> bool:
-        """
-        Connect to Telegram API.
+        """Connect to Telegram API and verify authentication.
+
+        Establishes connection to Telegram using session credentials.
+        Retrieves user info to verify successful authentication.
 
         Returns:
-            True if connected successfully, False otherwise.
+            True if connected successfully, False on auth/connection error
+
+        Raises:
+            Unauthorized: If session is invalid or expired
         """
         try:
             if self.is_connected:
@@ -111,8 +149,17 @@ class TelegramClient:
             logger.error(f"❌ Connection failed: {e}", exc_info=True)
             return False
 
-    async def disconnect(self):
-        """Disconnect from Telegram API."""
+    async def disconnect(self) -> None:
+        """Disconnect from Telegram API gracefully.
+
+        Stops Pyrogram client and cleans up resources.
+
+        Returns:
+            None
+
+        Raises:
+            None (exceptions caught and logged)
+        """
         try:
             if self.is_connected and self.client.is_connected:
                 logger.info("Disconnecting from Telegram...")
