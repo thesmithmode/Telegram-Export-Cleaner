@@ -893,30 +893,40 @@ class ExportWorker:
         Called right before processing a job: the job being processed gets
         position=0 ("started"), the rest get their 1-based queue position.
         """
-        if not self.control_redis or not self.java_client:
+        if not self.control_redis or not self.java_client or not self.queue_consumer:
             return
         try:
             pending_result = await self.queue_consumer.get_pending_jobs()
             pending = pending_result["jobs"]
             total = pending_result["total_count"]
             # Notify the job that is about to start
-            val = await self.control_redis.get(f"queue_msg:{current_task_id}")
-            if val:
-                user_chat_id_str, msg_id_str = val.split(":", 1)
-                await self.java_client.update_queue_position(
-                    int(user_chat_id_str), int(msg_id_str), 0, total
-                )
+            await self._notify_queue_position(current_task_id, 0, total)
             # Notify remaining queued jobs of their new position
             for i, job in enumerate(pending):
-                val = await self.control_redis.get(f"queue_msg:{job.task_id}")
-                if not val:
-                    continue
-                user_chat_id_str, msg_id_str = val.split(":", 1)
-                await self.java_client.update_queue_position(
-                    int(user_chat_id_str), int(msg_id_str), i + 1, total
-                )
+                await self._notify_queue_position(job.task_id, i + 1, total)
         except Exception as e:
             logger.warning(f"Could not update queue positions: {e}")
+
+    async def _notify_queue_position(
+        self, task_id: str, position: int, total: int
+    ) -> None:
+        """Notify one queued user of queue position if queue message metadata exists."""
+        if not self.control_redis or not self.java_client:
+            return
+
+        raw_value = await self.control_redis.get(f"queue_msg:{task_id}")
+        if not raw_value:
+            return
+
+        try:
+            user_chat_id_str, msg_id_str = raw_value.split(":", 1)
+            user_chat_id = int(user_chat_id_str)
+            msg_id = int(msg_id_str)
+        except (ValueError, AttributeError):
+            logger.warning(f"Skipping malformed queue message metadata for task {task_id}")
+            return
+
+        await self.java_client.update_queue_position(user_chat_id, msg_id, position, total)
 
     async def run(self):
         """
