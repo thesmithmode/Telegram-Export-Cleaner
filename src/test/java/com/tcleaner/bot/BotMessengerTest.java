@@ -4,22 +4,28 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.api.objects.message.Message;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.telegram.telegrambots.meta.generics.TelegramClient;
 
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * Тесты для BotMessenger.
@@ -64,10 +70,9 @@ class BotMessengerTest {
 
             botMessenger.send(chatId, text);
 
-            verify(mockTelegramClient).execute(argThat(sendMessage ->
-                    sendMessage instanceof SendMessage &&
-                            ((SendMessage) sendMessage).getChatId().equals(String.valueOf(chatId))
-            ));
+            ArgumentCaptor<SendMessage> captor = ArgumentCaptor.forClass(SendMessage.class);
+            verify(mockTelegramClient).execute(captor.capture());
+            assertEquals(String.valueOf(chatId), captor.getValue().getChatId());
         }
 
         @Test
@@ -78,10 +83,9 @@ class BotMessengerTest {
 
             botMessenger.send(12345L, text);
 
-            verify(mockTelegramClient).execute(argThat(sendMessage ->
-                    sendMessage instanceof SendMessage &&
-                            ((SendMessage) sendMessage).getText().equals(text)
-            ));
+            ArgumentCaptor<SendMessage> captor = ArgumentCaptor.forClass(SendMessage.class);
+            verify(mockTelegramClient).execute(captor.capture());
+            assertEquals(text, captor.getValue().getText());
         }
 
         @Test
@@ -91,10 +95,9 @@ class BotMessengerTest {
 
             botMessenger.send(12345L, "Text");
 
-            verify(mockTelegramClient).execute(argThat(sendMessage ->
-                    sendMessage instanceof SendMessage &&
-                            ((SendMessage) sendMessage).getParseMode() != null
-            ));
+            ArgumentCaptor<SendMessage> captor = ArgumentCaptor.forClass(SendMessage.class);
+            verify(mockTelegramClient).execute(captor.capture());
+            assertNotNull(captor.getValue().getParseMode());
         }
     }
 
@@ -108,7 +111,7 @@ class BotMessengerTest {
             setupMessenger();
             long chatId = 12345L;
             String text = "Выбери опцию";
-            InlineKeyboardMarkup keyboard = new InlineKeyboardMarkup();
+            InlineKeyboardMarkup keyboard = InlineKeyboardMarkup.builder().build();
 
             botMessenger.sendWithKeyboard(chatId, text, keyboard);
 
@@ -119,14 +122,13 @@ class BotMessengerTest {
         @DisplayName("должен прикрепить inline-клавиатуру к сообщению")
         void shouldAttachKeyboard() throws TelegramApiException {
             setupMessenger();
-            InlineKeyboardMarkup keyboard = new InlineKeyboardMarkup();
+            InlineKeyboardMarkup keyboard = InlineKeyboardMarkup.builder().build();
 
             botMessenger.sendWithKeyboard(12345L, "Text", keyboard);
 
-            verify(mockTelegramClient).execute(argThat(sendMessage ->
-                    sendMessage instanceof SendMessage &&
-                            ((SendMessage) sendMessage).getReplyMarkup() != null
-            ));
+            ArgumentCaptor<SendMessage> captor = ArgumentCaptor.forClass(SendMessage.class);
+            verify(mockTelegramClient).execute(captor.capture());
+            assertNotNull(captor.getValue().getReplyMarkup());
         }
 
         @Test
@@ -201,11 +203,10 @@ class BotMessengerTest {
 
             botMessenger.editMessage(chatId, messageId, "New text", null);
 
-            verify(mockTelegramClient).execute(argThat(editMessage ->
-                    editMessage instanceof EditMessageText &&
-                            ((EditMessageText) editMessage).getChatId().equals(String.valueOf(chatId)) &&
-                            ((EditMessageText) editMessage).getMessageId() == messageId
-            ));
+            ArgumentCaptor<EditMessageText> captor = ArgumentCaptor.forClass(EditMessageText.class);
+            verify(mockTelegramClient).execute(captor.capture());
+            assertEquals(String.valueOf(chatId), captor.getValue().getChatId());
+            assertEquals(messageId, captor.getValue().getMessageId());
         }
 
         @Test
@@ -216,24 +217,22 @@ class BotMessengerTest {
 
             botMessenger.editMessage(12345L, 999, newText, null);
 
-            verify(mockTelegramClient).execute(argThat(editMessage ->
-                    editMessage instanceof EditMessageText &&
-                            ((EditMessageText) editMessage).getText().equals(newText)
-            ));
+            ArgumentCaptor<EditMessageText> captor = ArgumentCaptor.forClass(EditMessageText.class);
+            verify(mockTelegramClient).execute(captor.capture());
+            assertEquals(newText, captor.getValue().getText());
         }
 
         @Test
         @DisplayName("должен обновить клавиатуру")
         void shouldUpdateKeyboard() throws TelegramApiException {
             setupMessenger();
-            InlineKeyboardMarkup newKeyboard = new InlineKeyboardMarkup();
+            InlineKeyboardMarkup newKeyboard = InlineKeyboardMarkup.builder().build();
 
             botMessenger.editMessage(12345L, 999, "Text", newKeyboard);
 
-            verify(mockTelegramClient).execute(argThat(editMessage ->
-                    editMessage instanceof EditMessageText &&
-                            ((EditMessageText) editMessage).getReplyMarkup() != null
-            ));
+            ArgumentCaptor<EditMessageText> captor = ArgumentCaptor.forClass(EditMessageText.class);
+            verify(mockTelegramClient).execute(captor.capture());
+            assertNotNull(captor.getValue().getReplyMarkup());
         }
     }
 
@@ -260,10 +259,9 @@ class BotMessengerTest {
 
             botMessenger.answerCallback(callbackId);
 
-            verify(mockTelegramClient).execute(argThat(answerCallback ->
-                    answerCallback instanceof AnswerCallbackQuery &&
-                            ((AnswerCallbackQuery) answerCallback).getCallbackQueryId().equals(callbackId)
-            ));
+            ArgumentCaptor<AnswerCallbackQuery> captor = ArgumentCaptor.forClass(AnswerCallbackQuery.class);
+            verify(mockTelegramClient).execute(captor.capture());
+            assertEquals(callbackId, captor.getValue().getCallbackQueryId());
         }
 
         @Test
@@ -271,7 +269,6 @@ class BotMessengerTest {
         void shouldHandleEmptyCallbackId() throws TelegramApiException {
             setupMessenger();
 
-            // Should not throw exception
             assertDoesNotThrow(() -> botMessenger.answerCallback(""));
             verify(mockTelegramClient).execute(any(AnswerCallbackQuery.class));
         }
@@ -299,9 +296,9 @@ class BotMessengerTest {
 
             botMessenger.sendRemoveReplyKeyboard(12345L, "Clear keyboard");
 
-            verify(mockTelegramClient).execute(argThat(sendMessage ->
-                    sendMessage instanceof SendMessage
-            ));
+            ArgumentCaptor<SendMessage> captor = ArgumentCaptor.forClass(SendMessage.class);
+            verify(mockTelegramClient).execute(captor.capture());
+            assertNotNull(captor.getValue());
         }
     }
 }

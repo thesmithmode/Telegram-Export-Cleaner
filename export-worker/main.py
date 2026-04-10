@@ -257,10 +257,6 @@ class ExportWorker:
         Raises:
             None (exceptions logged as ERROR and return False)
         """
-
-        Returns:
-            True if all components initialized successfully
-        """
         try:
             logger.info("🚀 Initializing Export Worker...")
 
