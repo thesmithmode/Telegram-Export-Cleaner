@@ -932,17 +932,18 @@ class ExportWorker:
             except ValueError:
                 pass
 
-        tracker = self._create_tracker(job)
-        if tracker:
-            await tracker.start()
-
+        # Получаем total ДО start(), чтобы передать в start(total=total).
+        # Это позволяет сразу показать progress bar с реальным total вместо
+        # двух API calls (start→spinner, set_total→0% bar).
         total = await self.telegram_client.get_messages_count(
             job.chat_id, from_date, to_date
         )
         if job.limit and job.limit > 0 and (total is None or job.limit < total):
             total = job.limit
+
+        tracker = self._create_tracker(job)
         if tracker:
-            await tracker.set_total(total)
+            await tracker.start(total=total)
 
         use_cache = bool(self.message_cache and self.message_cache.enabled)
         batch: list[ExportedMessage] = []

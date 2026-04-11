@@ -1053,7 +1053,9 @@ class TestCancelBeforeStart:
         w.queue_consumer.mark_job_processing = AsyncMock()
         w.queue_consumer.mark_job_completed = AsyncMock()
         w.queue_consumer.mark_job_failed = AsyncMock()
-        w.telegram_client = AsyncMock()
+        # MagicMock (не AsyncMock) — иначе доступ к атрибутам вроде
+        # pipeline() создаёт unawaited coroutines и RuntimeWarning при cleanup.
+        w.telegram_client = MagicMock()
         w.java_client = _make_mock_java_client()
         w.message_cache = MessageCache(enabled=False)
         w.control_redis = AsyncMock()

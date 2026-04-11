@@ -425,11 +425,14 @@ class ProgressTracker:
         """Send the initial 0%/spinner message and start the timing baseline."""
         self._total = total
         self._start_time = time.time()
-        self._last_reported_at = 0.0
+        # Инициализируем в now, а не в 0 — иначе первый track() всегда emit
+        # (time_delta = now - 0 ≈ 1.7B >> _PROGRESS_MIN_INTERVAL_SEC), что
+        # сдвигает все 5%-пороги на 1 (1,6,11,...), ломая тест-ожидания.
+        self._last_reported_at = time.time()
         self._last_reported_pct = 0
         self._baseline_count = 0
         self._message_id = await self._client.send_progress_update(
-            self._user_chat_id, self._task_id, 0, total, started=True
+            self._user_chat_id, self._task_id, 0, total=total, started=True
         )
 
     async def set_total(self, total):
@@ -474,15 +477,18 @@ class ProgressTracker:
         now = time.time()
         pct = min(count * 100 // self._total, 100) if self._total > 0 else 0
 
+        # 100% сообщение отправляет finalize(), не track() — иначе будет
+        # дублирование: track(N==total) + finalize() оба emit при pct=100.
+        if pct >= 100:
+            return
+
         pct_delta = pct - self._last_reported_pct
         time_delta = now - self._last_reported_at
         # Throttle: emit only when pct moved enough OR enough wall-clock passed.
-        # Exception: always allow the 100% edit even if throttles would skip it.
-        if pct < 100:
-            if pct_delta < _PROGRESS_STEP_PCT and time_delta < _PROGRESS_MIN_INTERVAL_SEC:
-                return
-            if pct_delta <= 0:
-                return
+        if pct_delta < _PROGRESS_STEP_PCT and time_delta < _PROGRESS_MIN_INTERVAL_SEC:
+            return
+        if pct_delta <= 0:
+            return
 
         self._last_reported_pct = pct
         self._last_reported_at = now
