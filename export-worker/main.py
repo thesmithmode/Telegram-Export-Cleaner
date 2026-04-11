@@ -626,8 +626,8 @@ class ExportWorker:
 
         if tracker:
             await tracker.set_total(total)
-            if cached_count:
-                await tracker.track(cached_count)
+            if cached_count and not (job.limit and job.limit > 0):
+                await tracker.seed(cached_count)
 
         # Fetch only missing gaps from Telegram, store in cache in batches of 1000
         fetched_count = cached_count
@@ -722,7 +722,22 @@ class ExportWorker:
         if tracker:
             await tracker.set_total(total)
 
-        fetched_count = 0
+        # Seed прогресс-бар уже закэшированным количеством — так юзер сразу видит
+        # реальный процент (напр. 40%), а не 0% → 40% прыжком. Также это сбрасывает
+        # ETA-таймер, чтобы скорость считалась только по свежим сообщениям.
+        #
+        # Только для полного экспорта: при limit-based (total = job.limit) общее
+        # число сообщений в кэше может превышать limit (кэш хранит весь чат), и
+        # seed(cached_count) даст неверные 100% сразу. В limit-режиме начинаем с 0.
+        cached_count = 0
+        if not (job.limit and job.limit > 0):
+            cached_count = await self.message_cache.count_messages(
+                job.chat_id, 0, 2 ** 62
+            )
+            if tracker and cached_count:
+                await tracker.seed(cached_count)
+
+        fetched_count = cached_count
         fresh_count = 0
         latest_new_id = cache_max_id
 
@@ -880,11 +895,10 @@ class ExportWorker:
         nocache_messages: list[ExportedMessage] = []
         count = 0
 
-        use_cache = bool(self.message_cache and self.message_cache.enabled)
-        batch: list[ExportedMessage] = []
-        # Fallback list only used when cache is disabled (edge case)
-        nocache_messages: list[ExportedMessage] = []
-        count = 0
+        # NB: seed() здесь НЕ вызываем. _fetch_all_messages — это fallback, который
+        # перекачивает весь диапазон с нуля (не только gaps), поэтому count += 1
+        # сам дойдёт до total. Если seed'нуть уже закэшированным числом, то count
+        # перевалит за total и прогресс-бар зафиксируется на 100% раньше времени.
 
         try:
             async for message in self.telegram_client.get_chat_history(
