@@ -10,7 +10,6 @@ import re
 import os
 import tempfile
 import time
-from datetime import datetime
 from typing import Optional, Union, AsyncIterator
 
 import httpx
@@ -219,7 +218,6 @@ class JavaBotClient:
         return f"{base}_all.txt"
 
     async def _send_file_to_user(self, chat_id, task_id, text, filename) -> bool:
-        url = f"https://api.telegram.org/bot{self.bot_token}/sendDocument"
         text_bytes = text.encode("utf-8")
         
         # Max 45MB for Telegram Bot API
