@@ -34,7 +34,7 @@ Redis (очереди, locks, cache)
 Основной класс для обработки обновлений от Telegram Bot API.
 
 **Ответственность:**
-- Обработка `/start`, `/help`, `/cancel` команд
+- Обработка `/start`, `/cancel` команд
 - Обработка текстовых сообщений (chat ID, username, link)
 - Обработка callback запросов (выбор дат, диапазонов)
 - Управление wizard UI (inline кнопки)
@@ -118,7 +118,7 @@ void setMyCommands(List<BotCommand> commands)
 ```
 
 `ExportBot` вызывает `setMyCommands(...)` при старте приложения, поэтому у пользователя
-в Telegram сразу появляются подсказки `/start`, `/help`, `/cancel`.
+в Telegram сразу появляются подсказки `/start`, `/cancel`.
 
 ### UserSession
 
