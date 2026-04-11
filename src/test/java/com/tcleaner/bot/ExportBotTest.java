@@ -55,6 +55,13 @@ class ExportBotTest {
         bot = new ExportBot("token", jobProducerMock, messengerMock);
     }
 
+    @Test
+    @DisplayName("При старте регистрируются slash-команды Telegram")
+    void testRegistersSlashCommandsOnStartup() {
+        bot.registerBotCommands();
+        verify(messengerMock).setMyCommands(any());
+    }
+
     @Nested
     @DisplayName("Ввод идентификатора чата")
     class ChatIdentifierInput {

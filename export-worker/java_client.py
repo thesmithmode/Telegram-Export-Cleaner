@@ -311,7 +311,7 @@ class JavaBotClient:
         await self._http_client.aclose()
 
     async def send_progress_update(self, user_chat_id, task_id, message_count, total=None, started=False, elapsed_seconds=0, progress_message_id=None):
-        if total:
+        if total is not None:
             pct = min(message_count * 100 // total, 100) if total > 0 else 0
             text = f"📊 {'▓' * (pct//10)}{'░' * (10-(pct//10))} {pct}% ({message_count}/{total})"
         elif started: text = "⏳ Экспорт начался..."
@@ -336,6 +336,19 @@ class ProgressTracker:
     async def start(self, total=None):
         self._total = total
         self._message_id = await self._client.send_progress_update(self._user_chat_id, self._task_id, 0, total, True)
+
+    async def set_total(self, total):
+        self._total = total
+        if self._message_id and total is not None:
+            await self._client.send_progress_update(
+                self._user_chat_id,
+                self._task_id,
+                0,
+                total,
+                False,
+                0,
+                self._message_id,
+            )
 
     async def track(self, count):
         if not self._total: return
