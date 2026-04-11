@@ -798,6 +798,7 @@ class ExportWorker:
 
         # Step 1: fetch messages NEWER than cache, store in batches of 1000
         batch: list[ExportedMessage] = []
+        step1_cancelled = False
         try:
             async for msg in self.telegram_client.get_chat_history(
                 chat_id=job.chat_id,
@@ -812,7 +813,8 @@ class ExportWorker:
                     latest_new_id = msg.id
                 if len(batch) >= self._CACHE_BATCH_SIZE:
                     if await self._flush_batch_and_check_cancel(job, batch):
-                        return None
+                        step1_cancelled = True
+                        break
                 if tracker:
                     await tracker.track(fetched_count)
         except Exception as e:
@@ -820,6 +822,10 @@ class ExportWorker:
 
         if batch:
             await self.message_cache.store_messages(job.chat_id, batch)
+
+        if step1_cancelled:
+            return None
+
         if fresh_count:
             logger.info(f"  Fetched {fresh_count} new messages above cache max {cache_max_id}")
 
@@ -834,6 +840,7 @@ class ExportWorker:
         for gap_low, gap_high in missing:
             batch = []
             gap_count = 0
+            gap_cancelled = False
             try:
                 async for msg in self.telegram_client.get_chat_history(
                     chat_id=job.chat_id,
@@ -846,7 +853,8 @@ class ExportWorker:
                     gap_count += 1
                     if len(batch) >= self._CACHE_BATCH_SIZE:
                         if await self._flush_batch_and_check_cancel(job, batch):
-                            return None
+                            gap_cancelled = True
+                            break
                     if tracker:
                         await tracker.track(fetched_count)
             except Exception as e:
@@ -857,6 +865,9 @@ class ExportWorker:
             if gap_count:
                 logger.info(f"  Filled gap [{gap_low}-{gap_high}]: {gap_count} messages")
 
+            if gap_cancelled:
+                return None
+
         # Step 3: fetch messages OLDER than cache minimum
         logger.info(f"  Step 3: Fetching older messages...")
         if not job.limit or job.limit <= 0:
@@ -865,6 +876,7 @@ class ExportWorker:
             if cache_min_id > 1:
                 batch = []
                 older_count = 0
+                step3_cancelled = False
                 try:
                     async for msg in self.telegram_client.get_chat_history(
                         chat_id=job.chat_id,
@@ -877,7 +889,8 @@ class ExportWorker:
                         older_count += 1
                         if len(batch) >= self._CACHE_BATCH_SIZE:
                             if await self._flush_batch_and_check_cancel(job, batch):
-                                return None
+                                step3_cancelled = True
+                                break
                         if tracker:
                             await tracker.track(fetched_count)
                 except Exception as e:
@@ -887,6 +900,9 @@ class ExportWorker:
                     await self.message_cache.store_messages(job.chat_id, batch)
                 if older_count:
                     logger.info(f"  Fetched {older_count} older messages below cache min {cache_min_id}")
+
+                if step3_cancelled:
+                    return None
 
         # Считаем итоговое кол-во через ZCOUNT (O(1), без загрузки в память).
         actual_min = 0 if (not job.limit or job.limit <= 0) else full_min
@@ -955,6 +971,7 @@ class ExportWorker:
         # сам дойдёт до total. Если seed'нуть уже закэшированным числом, то count
         # перевалит за total и прогресс-бар зафиксируется на 100% раньше времени.
 
+        cancelled = False
         try:
             async for message in self.telegram_client.get_chat_history(
                 chat_id=job.chat_id,
@@ -969,13 +986,15 @@ class ExportWorker:
                     batch.append(message)
                     if len(batch) >= self._CACHE_BATCH_SIZE:
                         if await self._flush_batch_and_check_cancel(job, batch):
-                            return None
+                            cancelled = True
+                            break
                 else:
                     nocache_messages.append(message)
                     if count % self._CACHE_BATCH_SIZE == 0:
                         if await self.is_cancelled(job.task_id):
                             await self.clear_active_export(job.user_id)
-                            return None
+                            cancelled = True
+                            break
 
                 if tracker:
                     await tracker.track(count)
@@ -985,6 +1004,9 @@ class ExportWorker:
         except Exception as e:
             logger.error(f"❌ Export failed: {e}")
             raise
+
+        if cancelled:
+            return None
 
         # Flush remaining batch
         if batch and use_cache:
