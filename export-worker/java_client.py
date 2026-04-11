@@ -466,6 +466,19 @@ class ProgressTracker:
         if mid:
             self._message_id = mid
 
+    async def set_total(self, total):
+        self._total = total
+        if self._message_id and total is not None:
+            await self._client.send_progress_update(
+                self._user_chat_id,
+                self._task_id,
+                0,
+                total,
+                False,
+                0,
+                self._message_id,
+            )
+
     async def track(self, count):
         """Report progress — throttled by pct step and wall-clock interval."""
         if not self._total:
