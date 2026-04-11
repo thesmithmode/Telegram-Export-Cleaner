@@ -626,8 +626,8 @@ class ExportWorker:
 
         if tracker:
             await tracker.set_total(total)
-            if cached_count:
-                await tracker.track(cached_count)
+            if cached_count and not (job.limit and job.limit > 0):
+                await tracker.seed(cached_count)
 
         # Fetch only missing gaps from Telegram, store in cache in batches of 1000
         fetched_count = cached_count
@@ -682,24 +682,30 @@ class ExportWorker:
             job.chat_id, from_date_str, to_date_str
         )
 
-    async def _export_with_id_cache(self, job: ExportRequest) -> Optional[list[ExportedMessage]]:
+    async def _export_with_id_cache(
+        self, job: ExportRequest
+    ) -> Optional[tuple[int, AsyncGenerator]]:
         """
         Full export (no date filter) with cache by message ID.
 
         1. Check which ID ranges are cached
         2. Fetch newer messages + fill ID gaps
-        3. Store in cache, merge, return
+        3. Store in cache, merge, return (count, generator)
         """
         cached_ranges = await self.message_cache.get_cached_ranges(job.chat_id)
 
         if not cached_ranges:
             logger.info(f"  Cache MISS для чата {job.chat_id} — полная загрузка")
-            # No cache — full fetch, populate cache
-            messages = await self._fetch_all_messages(job)
-            if messages:
-                await self.message_cache.store_messages(job.chat_id, messages)
+            # No cache — full fetch. _fetch_all_messages already caches messages
+            # in batches and returns (count, AsyncGenerator) that reads from cache.
+            # Forward its result directly — double-storing a tuple crashed with
+            # "'int' object has no attribute 'model_dump'".
+            result = await self._fetch_all_messages(job)
+            if result is None:
+                return None
+            if self.message_cache and self.message_cache.enabled:
                 await self.message_cache.evict_if_needed()
-            return (len(messages) if messages else 0, messages) if messages is not None else None
+            return result
 
         cache_max_id = max(r[1] for r in cached_ranges)
         logger.info(f"  Cache HIT для чата {job.chat_id}: ranges={cached_ranges}, cache_max_id={cache_max_id}")
@@ -716,7 +722,22 @@ class ExportWorker:
         if tracker:
             await tracker.set_total(total)
 
-        fetched_count = 0
+        # Seed прогресс-бар уже закэшированным количеством — так юзер сразу видит
+        # реальный процент (напр. 40%), а не 0% → 40% прыжком. Также это сбрасывает
+        # ETA-таймер, чтобы скорость считалась только по свежим сообщениям.
+        #
+        # Только для полного экспорта: при limit-based (total = job.limit) общее
+        # число сообщений в кэше может превышать limit (кэш хранит весь чат), и
+        # seed(cached_count) даст неверные 100% сразу. В limit-режиме начинаем с 0.
+        cached_count = 0
+        if not (job.limit and job.limit > 0):
+            cached_count = await self.message_cache.count_messages(
+                job.chat_id, 0, 2 ** 62
+            )
+            if tracker and cached_count:
+                await tracker.seed(cached_count)
+
+        fetched_count = cached_count
         fresh_count = 0
         latest_new_id = cache_max_id
 
@@ -874,11 +895,10 @@ class ExportWorker:
         nocache_messages: list[ExportedMessage] = []
         count = 0
 
-        use_cache = bool(self.message_cache and self.message_cache.enabled)
-        batch: list[ExportedMessage] = []
-        # Fallback list only used when cache is disabled (edge case)
-        nocache_messages: list[ExportedMessage] = []
-        count = 0
+        # NB: seed() здесь НЕ вызываем. _fetch_all_messages — это fallback, который
+        # перекачивает весь диапазон с нуля (не только gaps), поэтому count += 1
+        # сам дойдёт до total. Если seed'нуть уже закэшированным числом, то count
+        # перевалит за total и прогресс-бар зафиксируется на 100% раньше времени.
 
         try:
             async for message in self.telegram_client.get_chat_history(

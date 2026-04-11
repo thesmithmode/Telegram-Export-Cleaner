@@ -9,6 +9,7 @@ import asyncio
 import re
 import os
 import tempfile
+import time
 from datetime import datetime
 from typing import Optional, Union, AsyncIterator
 
@@ -310,56 +311,220 @@ class JavaBotClient:
         """Close internal httpx client."""
         await self._http_client.aclose()
 
-    async def send_progress_update(self, user_chat_id, task_id, message_count, total=None, started=False, elapsed_seconds=0, progress_message_id=None):
+    @staticmethod
+    def _build_progress_bar(pct: int, width: int = 10) -> str:
+        """Render a 10-block unicode progress bar. Clamps pct to [0, 100]."""
+        clamped = max(0, min(pct, 100))
+        filled = (clamped * width) // 100
+        return "▓" * filled + "░" * (width - filled)
+
+    async def send_progress_update(
+        self,
+        user_chat_id,
+        task_id,
+        message_count,
+        total=None,
+        started=False,
+        progress_message_id=None,
+        eta_text: Optional[str] = None,
+    ):
+        """Send/edit the progress bar message in Telegram.
+
+        When total is known, renders a 10-block bar + pct + counts. If eta_text
+        is provided, appends "· осталось ~<eta_text>". Network/parse errors are
+        swallowed — progress messages are best-effort.
+        """
         if total is not None:
+            # Safe against total == 0 (chat count unknown yet) — we still show a
+            # 0%/(0/0) bar so users don't see the generic "начался..." spinner
+            # forever while Telegram counts messages.
             pct = min(message_count * 100 // total, 100) if total > 0 else 0
-            text = f"📊 {'▓' * (pct//10)}{'░' * (10-(pct//10))} {pct}% ({message_count}/{total})"
-        elif started: text = "⏳ Экспорт начался..."
-        else: text = f"📊 Экспортировано {message_count}..."
+            bar = self._build_progress_bar(pct)
+            text = f"📊 {bar} {pct}% ({message_count}/{total})"
+            if eta_text:
+                text += f" · осталось ~{eta_text}"
+        elif started:
+            text = "⏳ Экспорт начался..."
+        else:
+            text = f"📊 Экспортировано {message_count}..."
 
         try:
             if progress_message_id:
                 url = f"https://api.telegram.org/bot{self.bot_token}/editMessageText"
-                resp = await self._http_client.post(url, data={"chat_id": user_chat_id, "message_id": progress_message_id, "text": text})
+                resp = await self._http_client.post(
+                    url,
+                    data={
+                        "chat_id": user_chat_id,
+                        "message_id": progress_message_id,
+                        "text": text,
+                    },
+                )
                 return progress_message_id if resp.status_code == 200 else None
             else:
                 url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-                resp = await self._http_client.post(url, data={"chat_id": user_chat_id, "text": text})
-                return resp.json().get("result", {}).get("message_id") if resp.status_code == 200 else None
-        except: return None
+                resp = await self._http_client.post(
+                    url,
+                    data={"chat_id": user_chat_id, "text": text},
+                )
+                if resp.status_code == 200:
+                    return resp.json().get("result", {}).get("message_id")
+                return None
+        except Exception:
+            return None
+
+
+# Progress-tracker tuning constants
+_PROGRESS_STEP_PCT = 5            # notify whenever pct grows by at least this much
+_PROGRESS_MIN_INTERVAL_SEC = 3.0  # hard anti-spam: never faster than this between edits
+_ETA_MIN_ELAPSED_SEC = 5.0        # skip ETA while rate estimate is still noisy
+_ETA_MIN_FRESH_COUNT = 100        # same: require some headcount before trusting rate
+
+
+def _format_eta(seconds: float) -> Optional[str]:
+    """Render seconds as a compact RU string (~42 сек / ~7 мин / ~1 ч 20 мин)."""
+    if seconds <= 0:
+        return None
+    sec = int(seconds)
+    if sec < 60:
+        return f"{sec} сек"
+    if sec < 3600:
+        return f"{sec // 60} мин"
+    hours = sec // 3600
+    mins = (sec % 3600) // 60
+    return f"{hours} ч {mins} мин" if mins else f"{hours} ч"
+
 
 class ProgressTracker:
+    """Throttled progress reporter for long exports.
+
+    Features:
+      - Starting offset via seed(cached_count): when the cache already contains
+        part of the requested range, the bar starts at (cached/total)% instead
+        of 0%, and the timing baseline is reset so ETA reflects only fresh work.
+      - ETA: computed from fresh messages/sec rate, shown once the rate estimate
+        is stable (>= _ETA_MIN_ELAPSED_SEC elapsed AND >= _ETA_MIN_FRESH_COUNT).
+      - Throttling: updates are emitted when EITHER pct grew by _PROGRESS_STEP_PCT
+        OR _PROGRESS_MIN_INTERVAL_SEC elapsed since the previous edit. Large pct
+        jumps (e.g. 20% → 45%) are reported as a single edit, not a chain of 5%
+        steps — cheaper and matches user expectation on fast exports.
+    """
+
     def __init__(self, client, user_chat_id, task_id):
-        self._client, self._user_chat_id, self._task_id = client, user_chat_id, task_id
-        self._message_id, self._total, self._last_reported_pct = None, None, 0
-    
+        self._client = client
+        self._user_chat_id = user_chat_id
+        self._task_id = task_id
+        self._message_id: Optional[int] = None
+        self._total: Optional[int] = None
+        self._last_reported_pct = 0
+        self._last_reported_at = 0.0
+        self._start_time = 0.0
+        self._baseline_count = 0
+
     async def start(self, total=None):
+        """Send the initial 0%/spinner message and start the timing baseline."""
         self._total = total
-        self._message_id = await self._client.send_progress_update(self._user_chat_id, self._task_id, 0, total, True)
+        self._start_time = time.time()
+        self._last_reported_at = 0.0
+        self._last_reported_pct = 0
+        self._baseline_count = 0
+        self._message_id = await self._client.send_progress_update(
+            self._user_chat_id, self._task_id, 0, total, started=True
+        )
 
     async def set_total(self, total):
+        """Update the known total (when it's learned after start()) and redraw."""
         self._total = total
         if self._message_id and total is not None:
             await self._client.send_progress_update(
                 self._user_chat_id,
                 self._task_id,
-                0,
+                self._baseline_count,
                 total,
-                False,
-                0,
-                self._message_id,
+                progress_message_id=self._message_id,
             )
 
+    async def seed(self, cached_count: int) -> None:
+        """Seed the bar with already-cached messages and reset the ETA baseline.
+
+        Call this right after set_total() when cache already holds part of the
+        requested window. The bar jumps to (cached_count/total)% and timing is
+        restarted so ETA reflects only the fresh fetch work.
+        """
+        if not self._total or cached_count <= 0:
+            return
+        self._baseline_count = cached_count
+        self._start_time = time.time()  # ETA timer starts fresh from "now"
+        self._last_reported_at = self._start_time
+        self._last_reported_pct = min(cached_count * 100 // self._total, 100)
+        mid = await self._client.send_progress_update(
+            self._user_chat_id,
+            self._task_id,
+            cached_count,
+            self._total,
+            progress_message_id=self._message_id,
+        )
+        if mid:
+            self._message_id = mid
+
     async def track(self, count):
-        if not self._total: return
-        pct = count * 100 // self._total
-        if pct < self._last_reported_pct + 5: return
+        """Report progress — throttled by pct step and wall-clock interval."""
+        if not self._total:
+            return
+        now = time.time()
+        pct = min(count * 100 // self._total, 100) if self._total > 0 else 0
+
+        pct_delta = pct - self._last_reported_pct
+        time_delta = now - self._last_reported_at
+        # Throttle: emit only when pct moved enough OR enough wall-clock passed.
+        # Exception: always allow the 100% edit even if throttles would skip it.
+        if pct < 100:
+            if pct_delta < _PROGRESS_STEP_PCT and time_delta < _PROGRESS_MIN_INTERVAL_SEC:
+                return
+            if pct_delta <= 0:
+                return
+
         self._last_reported_pct = pct
-        mid = await self._client.send_progress_update(self._user_chat_id, self._task_id, count, self._total, False, 0, self._message_id)
-        if mid: self._message_id = mid
+        self._last_reported_at = now
+
+        # ETA: only when rate estimate is trustworthy AND we're not at the finish line
+        eta_text: Optional[str] = None
+        elapsed = now - self._start_time
+        fresh = count - self._baseline_count
+        if (
+            fresh >= _ETA_MIN_FRESH_COUNT
+            and elapsed >= _ETA_MIN_ELAPSED_SEC
+            and count < self._total
+        ):
+            rate = fresh / elapsed  # messages per second in this session
+            if rate > 0:
+                remaining = self._total - count
+                eta_text = _format_eta(remaining / rate)
+
+        mid = await self._client.send_progress_update(
+            self._user_chat_id,
+            self._task_id,
+            count,
+            self._total,
+            progress_message_id=self._message_id,
+            eta_text=eta_text,
+        )
+        if mid:
+            self._message_id = mid
 
     async def finalize(self, count):
-        await self._client.send_progress_update(self._user_chat_id, self._task_id, count, self._total or count, False, 0, self._message_id)
+        """Emit the final 100% edit (bypasses throttling).
+
+        Uses max(total, count) as the denominator so Telegram undercounts
+        (estimate 100 vs actual 110) still render as 100% instead of 110%.
+        """
+        final_total = max(self._total or count, count)
+        await self._client.send_progress_update(
+            self._user_chat_id,
+            self._task_id,
+            count,
+            final_total,
+            progress_message_id=self._message_id,
+        )
 
 
 async def create_java_client() -> JavaBotClient:
