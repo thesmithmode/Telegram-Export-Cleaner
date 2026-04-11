@@ -19,9 +19,9 @@ USER app
 HEALTHCHECK --interval=10s --timeout=5s --retries=5 --start-period=30s \
     CMD curl -sf http://localhost:8080/api/health || exit 1
 
-# Explicitly limit JVM heap — without -Xmx JVM takes 25% of host RAM,
-# not the container mem_limit. On a 4GB host JVM would take ~1GB → OOM kill
-ENV JAVA_OPTS="-Xms256m -Xmx768m -XX:+UseG1GC"
+# Явно ограничиваем heap под сервер 3 ГБ (mem_limit контейнера — 768m).
+# -Xmx640m оставляет ~128m для JVM native memory, metaspace и стека потоков.
+ENV JAVA_OPTS="-Xms256m -Xmx640m -XX:+UseG1GC"
 
 EXPOSE 8080
 STOPSIGNAL SIGTERM
