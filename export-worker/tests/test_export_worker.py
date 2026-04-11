@@ -1182,3 +1182,64 @@ class TestActiveProcessingJobHelpers:
 
         # Не должно бросать исключение
         await worker.clear_active_processing_job()
+
+
+class TestFloodWaitHeartbeat:
+    """on_floodwait callback передаётся в get_chat_history и вызывается при rate limit."""
+
+    @pytest.fixture
+    def worker(self):
+        worker = ExportWorker()
+        worker.queue_consumer = AsyncMock()
+        worker.queue_consumer.mark_job_processing = AsyncMock()
+        worker.queue_consumer.mark_job_completed = AsyncMock()
+        worker.queue_consumer.mark_job_failed = AsyncMock()
+        worker.telegram_client = AsyncMock()
+        worker.java_client = _make_mock_java_client()
+        worker.java_client.send_response = AsyncMock(return_value=True)
+        worker.message_cache = MessageCache(enabled=False)
+        return worker
+
+    @pytest.mark.asyncio
+    async def test_on_floodwait_called_with_wait_time(self, worker):
+        """Когда get_chat_history вызывает on_floodwait — он должен быть передан из _export_with_date_cache."""
+        from java_client import ProgressTracker
+
+        floodwait_calls = []
+
+        async def mock_history(*args, **kwargs):
+            on_floodwait = kwargs.get("on_floodwait")
+            if on_floodwait:
+                await on_floodwait(25)
+                floodwait_calls.append(25)
+            yield ExportedMessage(id=1, type="message", date="2026-04-10T10:00:00", text="test")
+
+        worker.telegram_client.get_chat_history = mock_history
+        worker.telegram_client.get_messages_count = AsyncMock(return_value=1)
+
+        # Настраиваем tracker
+        tracker = MagicMock(spec=ProgressTracker)
+        tracker.start = AsyncMock()
+        tracker.set_total = AsyncMock()
+        tracker.seed = AsyncMock()
+        tracker.track = AsyncMock()
+        tracker.finalize = AsyncMock()
+        tracker.on_floodwait = AsyncMock()
+
+        worker._create_tracker = MagicMock(return_value=tracker)
+
+        job = ExportRequest(
+            task_id="test_flood_123",
+            user_id=42,
+            chat_id=-1001234567890,
+            limit=0,
+            offset_id=0,
+            from_date="2026-04-10T00:00:00",
+            to_date="2026-04-10T23:59:59",
+        )
+
+        await worker._export_with_date_cache(job)
+
+        # on_floodwait был вызван (через mock_history) — проверяем что он был передан
+        assert len(floodwait_calls) == 1
+        assert floodwait_calls[0] == 25

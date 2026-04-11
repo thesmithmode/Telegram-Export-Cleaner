@@ -692,6 +692,23 @@ class ExportWorker:
 
             batch: list[ExportedMessage] = []
             gap_fetched = 0
+
+            # Прежде чем идти в Telegram, проверяем: вдруг сообщения уже есть в messages
+            # (загружены через ID-путь или более ранний экспорт, но date_ranges не обновлён).
+            already_in_db = await self.message_cache.count_messages_by_date(
+                job.chat_id, gap_from, gap_to
+            ) if self.message_cache and self.message_cache.enabled else 0
+            if already_in_db > 0:
+                logger.info(
+                    f"  Gap [{gap_from} - {gap_to}]: {already_in_db} сообщений уже в messages — "
+                    f"обновляем date_ranges без запроса в Telegram"
+                )
+                await self.message_cache.mark_date_range_checked(job.chat_id, gap_from, gap_to)
+                fetched_count += already_in_db
+                if tracker:
+                    await tracker.track(fetched_count)
+                continue
+
             try:
                 async for msg in self.telegram_client.get_chat_history(
                     chat_id=job.chat_id,
@@ -700,6 +717,7 @@ class ExportWorker:
                     min_id=0,
                     from_date=gap_from_dt,
                     to_date=gap_to_dt,
+                    on_floodwait=tracker.on_floodwait if tracker else None,
                 ):
                     batch.append(msg)
                     fetched_count += 1
@@ -717,6 +735,9 @@ class ExportWorker:
                 await self.message_cache.store_messages(job.chat_id, batch)
             if gap_fetched:
                 logger.info(f"  Fetched {gap_fetched} messages for [{gap_from} - {gap_to}]")
+            elif self.message_cache and self.message_cache.enabled:
+                # Telegram вернул 0 сообщений — диапазон проверен, фиксируем чтобы не ходить снова
+                await self.message_cache.mark_date_range_checked(job.chat_id, gap_from, gap_to)
 
         # After storing all gaps, count final total from cache (authoritative)
         count = await self.message_cache.count_messages_by_date(
@@ -804,6 +825,7 @@ class ExportWorker:
                 limit=job.limit,
                 offset_id=0,
                 min_id=cache_max_id,
+                on_floodwait=tracker.on_floodwait if tracker else None,
             ):
                 batch.append(msg)
                 fetched_count += 1
@@ -840,6 +862,7 @@ class ExportWorker:
                     limit=0,
                     offset_id=gap_high + 1,
                     min_id=gap_low - 1,
+                    on_floodwait=tracker.on_floodwait if tracker else None,
                 ):
                     batch.append(msg)
                     fetched_count += 1
@@ -871,6 +894,7 @@ class ExportWorker:
                         limit=0,
                         offset_id=cache_min_id,
                         min_id=0,
+                        on_floodwait=tracker.on_floodwait if tracker else None,
                     ):
                         batch.append(msg)
                         fetched_count += 1
@@ -964,6 +988,7 @@ class ExportWorker:
                 min_id=0,
                 from_date=from_date,
                 to_date=to_date,
+                on_floodwait=tracker.on_floodwait if tracker else None,
             ):
                 count += 1
                 if use_cache:
