@@ -224,40 +224,76 @@ JavaBotClient.send_response(user_chat_id, result.txt):
 
 ## Redis Usage
 
+Redis используется **только как очередь задач и координатор состояния** между Java-ботом и Python-воркером. **Кэш сообщений хранится в SQLite** (см. раздел ниже) — раньше кэш жил в Redis Sorted Sets, но был перенесён на диск для экономии памяти и поддержки больших чатов.
+
 ### Data Structures
 
-| Key | Type | TTL | Purpose |
-|-----|------|-----|---------|
-| `telegram_export` | List | ∞ | Main job queue |
-| `telegram_export_express` | List | ∞ | Priority queue (cached jobs) |
-| `active_export:{userId}` | String (SET NX) | 1h | Prevent duplicate parallel exports |
-| `cancel_export:{taskId}` | String (SETEX) | 30m | Cancel flag for running job |
-| `cache:msgs:{chatId}` | Sorted Set | 30d | Messages by msg_id |
-| `cache:dates:{chatId}` | Sorted Set | 30d | Message IDs by date (UNIX ts) |
-| `cache:ranges:{chatId}` | Sorted Set | 30d | Gap detection |
-| `canonical:{input}` | String (SETEX) | 30d | Canonical ID mappings |
+| Key | Type | TTL | Producer → Consumer | Purpose |
+|-----|------|-----|--------------------|----|
+| `telegram_export` | List | ∞ | Java `ExportJobProducer.LPUSH` → Python `BLPOP` | Основная очередь задач |
+| `telegram_export_express` | List | ∞ | Java (для кэш-hit задач) → Python `BLPOP` | Приоритетная очередь |
+| `telegram_export_processing` | List | ∞ | `BLMOVE` staging area | In-flight jobs для крашей |
+| `telegram_export_express_processing` | List | ∞ | `BLMOVE` staging area | In-flight express jobs |
+| `active_export:{userId}` | String (`SET NX`) | 1h | Java `ExportJobProducer` | Дедупликация параллельных экспортов |
+| `cancel_export:{taskId}` | String (`SETEX`) | 30m | Java ← Python `GET` | Флаг отмены работающей задачи |
+| `staging:jobs` | Set | ∞ | Python `SADD/SREM` | Трекинг in-flight задач (recovery после краша) |
+| `staging:meta:{taskId}` | String | 1h | Python `SETEX/GET/DEL` | Метаданные задачи для recovery |
+| `staging:acked` | Set | ∞ | Python `SREM` | Acknowledgement tracking |
+| `canonical:{input}` | String (`SETEX`) | 30d | Python `SET` ← `GET` | Кэш canonical ID (`@user` / `t.me/...` → numeric) |
+| `canonical:{numericId}` | String (`SETEX`) | 30d | Python `SET` | Обратный маппинг numeric → username |
 
-### Example
+**Memory policy:** `--maxmemory 128mb --maxmemory-policy noeviction`. `noeviction` обязательна — `allkeys-lru` в прошлом молча выкидывала ключи очереди, что приводило к потерянным задачам.
+
+### Пример: постановка задачи
+
+```java
+// Java: ExportJobProducer
+redisTemplate.opsForValue().setIfAbsent(
+    "active_export:" + userId,
+    taskId,
+    Duration.ofHours(1)
+);
+redisTemplate.opsForList().leftPush("telegram_export", jobJson);
+```
 
 ```python
-# Storing messages in cache (after export)
-pipeline.zadd(
-    f"cache:msgs:{chat_id}",
-    {msgpack_data: msg_id}  # score=msg_id for fast lookup
-)
-pipeline.zadd(
-    f"cache:dates:{chat_id}",
-    {str(msg_id): unix_timestamp}  # score=unix_ts for range queries
-)
-pipeline.execute()
-
-# Retrieving cached messages
-messages = await redis.zrangebyscore(
-    f"cache:dates:{chat_id}",
-    start_ts, end_ts,
-    withscores=True  # Returns (msg_id, timestamp)
+# Python: queue_consumer.py
+queue, raw = await self.redis_client.blmove(
+    "telegram_export",
+    "telegram_export_processing",
+    timeout=5,
 )
 ```
+
+---
+
+## Message Cache (SQLite)
+
+Кэш экспортированных сообщений — **локальный SQLite-файл** на диске контейнера Python-воркера (`/data/cache/messages.db`, volume `cache-data`). WAL-режим, размер ограничен `CACHE_MAX_DISK_GB` (по умолчанию 25 ГБ), LRU-эвикция по чатам.
+
+### Зачем SQLite, а не Redis
+
+- **Память:** 300k+ сообщений в чате — это сотни МБ. Держать их в RAM Redis на сервере 2-4 ГБ нецелесообразно.
+- **Persistence:** SQLite WAL переживает рестарт контейнера без AOF-fsync накладных расходов.
+- **Query flexibility:** нужны range-запросы по id **и** по дате. В Redis пришлось бы держать два Sorted Set и синхронизировать их.
+- **Атомарность:** транзакции SQLite дают консистентный `messages + chat_id_ranges + chat_date_ranges + chat_meta` без MULTI/EXEC оркестрации.
+
+### Схема
+
+| Таблица | Назначение |
+|---------|------------|
+| `messages` | Сами сообщения (id, chat_id, date, json blob) |
+| `chat_id_ranges` | Интервалы непрерывно закэшированных msg_id на чат (для детекции gap) |
+| `chat_date_ranges` | Интервалы непрерывно закэшированных дат на чат |
+| `chat_meta` | Размер кэша на чат, `last_access_ts` для LRU |
+
+### 3-path caching (см. `ExportWorker.process_job`)
+
+1. **date-hit** — запрошенный диапазон дат полностью в `chat_date_ranges` → читаем из SQLite, Telegram не дёргаем.
+2. **id-hit** — запрошенный `offset_id + limit` полностью в `chat_id_ranges` → SQLite.
+3. **fallback-miss** — тянем из Pyrogram, складываем результат в SQLite, отмечаем диапазон.
+
+Реализация: `export-worker/message_cache.py`.
 
 ---
 

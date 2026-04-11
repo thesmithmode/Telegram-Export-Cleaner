@@ -61,12 +61,20 @@ jobs:
         run: |
           cd export-worker
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio pytest-cov
+          pip install pytest==8.3.5 pytest-asyncio==0.23.8 pytest-cov==5.0.0
 
       - name: Run unit tests
         run: |
           cd export-worker
-          pytest tests/test_models.py tests/test_json_converter.py -v --cov=. --cov-report=xml
+          pytest \
+            tests/test_models.py \
+            tests/test_json_converter.py \
+            tests/test_export_worker.py \
+            tests/test_message_cache.py \
+            tests/test_queue_consumer.py \
+            tests/test_pyrogram_client.py \
+            tests/test_java_client.py \
+            -v --cov=. --cov-report=xml
 
       - name: Upload coverage reports
         uses: codecov/codecov-action@v4
@@ -116,7 +124,7 @@ jobs:
         run: |
           cd export-worker
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio pytest-cov
+          pip install pytest==8.3.5 pytest-asyncio==0.23.8 pytest-cov==5.0.0
 
       - name: Run integration tests
         run: |
@@ -165,7 +173,7 @@ jobs:
         run: |
           cd export-worker
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio pytest-cov
+          pip install pytest==8.3.5 pytest-asyncio==0.23.8 pytest-cov==5.0.0
 
       - name: Run E2E tests
         run: |
@@ -204,7 +212,7 @@ jobs:
         run: |
           cd export-worker
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio pytest-cov
+          pip install pytest==8.3.5 pytest-asyncio==0.23.8 pytest-cov==5.0.0
 
       - name: Run performance tests
         run: |
