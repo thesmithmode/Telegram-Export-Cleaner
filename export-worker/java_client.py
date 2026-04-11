@@ -331,18 +331,19 @@ class JavaBotClient:
         """Send/edit the progress bar message in Telegram.
 
         When total is known, renders a 10-block bar + pct + counts. If eta_text
-        is provided, appends "· осталось ~<eta_text>". Network/parse errors are
+        is provided, appends "   ~<eta_text>". Network/parse errors are
         swallowed — progress messages are best-effort.
         """
         if total is not None:
             # Safe against total == 0 (chat count unknown yet) — we still show a
-            # 0%/(0/0) bar so users don't see the generic "начался..." spinner
+            # 0%/(0 из 0) bar so users don't see the generic "начался..." spinner
             # forever while Telegram counts messages.
+            # "N из M" instead of "N/M" so Telegram doesn't autolink it as a phone.
             pct = min(message_count * 100 // total, 100) if total > 0 else 0
             bar = self._build_progress_bar(pct)
-            text = f"📊 {bar} {pct}% ({message_count}/{total})"
+            text = f"📊 {bar} {pct}% ({message_count} из {total})"
             if eta_text:
-                text += f" · осталось ~{eta_text}"
+                text += f"   ~{eta_text}"
         elif started:
             text = "⏳ Экспорт начался..."
         else:
@@ -424,11 +425,14 @@ class ProgressTracker:
         """Send the initial 0%/spinner message and start the timing baseline."""
         self._total = total
         self._start_time = time.time()
-        self._last_reported_at = 0.0
+        # Инициализируем в now, а не в 0 — иначе первый track() всегда emit
+        # (time_delta = now - 0 ≈ 1.7B >> _PROGRESS_MIN_INTERVAL_SEC), что
+        # сдвигает все 5%-пороги на 1 (1,6,11,...), ломая тест-ожидания.
+        self._last_reported_at = time.time()
         self._last_reported_pct = 0
         self._baseline_count = 0
         self._message_id = await self._client.send_progress_update(
-            self._user_chat_id, self._task_id, 0, total, started=True
+            self._user_chat_id, self._task_id, 0, total=total, started=True
         )
 
     async def set_total(self, total):
@@ -438,8 +442,8 @@ class ProgressTracker:
             await self._client.send_progress_update(
                 self._user_chat_id,
                 self._task_id,
-                self._baseline_count,
-                total,
+                message_count=self._baseline_count,
+                total=total,
                 progress_message_id=self._message_id,
             )
 
@@ -466,19 +470,6 @@ class ProgressTracker:
         if mid:
             self._message_id = mid
 
-    async def set_total(self, total):
-        self._total = total
-        if self._message_id and total is not None:
-            await self._client.send_progress_update(
-                self._user_chat_id,
-                self._task_id,
-                0,
-                total,
-                False,
-                0,
-                self._message_id,
-            )
-
     async def track(self, count):
         """Report progress — throttled by pct step and wall-clock interval."""
         if not self._total:
@@ -486,15 +477,18 @@ class ProgressTracker:
         now = time.time()
         pct = min(count * 100 // self._total, 100) if self._total > 0 else 0
 
+        # 100% сообщение отправляет finalize(), не track() — иначе будет
+        # дублирование: track(N==total) + finalize() оба emit при pct=100.
+        if pct >= 100:
+            return
+
         pct_delta = pct - self._last_reported_pct
         time_delta = now - self._last_reported_at
         # Throttle: emit only when pct moved enough OR enough wall-clock passed.
-        # Exception: always allow the 100% edit even if throttles would skip it.
-        if pct < 100:
-            if pct_delta < _PROGRESS_STEP_PCT and time_delta < _PROGRESS_MIN_INTERVAL_SEC:
-                return
-            if pct_delta <= 0:
-                return
+        if pct_delta < _PROGRESS_STEP_PCT and time_delta < _PROGRESS_MIN_INTERVAL_SEC:
+            return
+        if pct_delta <= 0:
+            return
 
         self._last_reported_pct = pct
         self._last_reported_at = now

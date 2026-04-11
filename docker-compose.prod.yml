@@ -1,0 +1,107 @@
+# Продакшн-конфигурация для деплоя через GitHub Actions.
+#
+# Переменные окружения со значением ${VAR} берутся из .env файла на сервере.
+# CI создаёт /root/telegram-cleaner/.env из GitHub Secrets перед каждым деплоем.
+#
+# Команда деплоя:
+#   docker compose -f docker-compose.prod.yml --env-file .env pull
+#   docker compose -f docker-compose.prod.yml --env-file .env up -d --remove-orphans
+
+services:
+  java-bot:
+    image: ghcr.io/thesmithmode/telegram-export-cleaner:latest
+    ports:
+      - "127.0.0.1:8081:8080"
+    # Label для фильтрованного docker prune в CI — чтобы не снести
+    # контейнеры SillyTavern и других сервисов на этом же хосте.
+    labels:
+      - "project=telegram-cleaner"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_QUEUE_NAME=telegram_export
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_BOT_USERNAME=ExportCleanerBot
+      - JAVA_API_KEY=${JAVA_API_KEY}
+    volumes:
+      - export-data:/data/export
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    # Снижено с 1024M: выровнено с репо-compose. Dockerfile -Xmx640m рассчитан под 768m.
+    mem_limit: 768m
+
+  python-worker:
+    image: ghcr.io/thesmithmode/telegram-export-python-worker:latest
+    labels:
+      - "project=telegram-cleaner"
+    environment:
+      # Telegram API
+      - TELEGRAM_API_ID=${TELEGRAM_API_ID}
+      - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
+      - TELEGRAM_SESSION_STRING=${TELEGRAM_SESSION_STRING}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      # Java Bot API
+      - JAVA_API_BASE_URL=http://java-bot:8080
+      - JAVA_API_KEY=${JAVA_API_KEY}
+      # Redis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_QUEUE_NAME=telegram_export
+      # Worker (подогнано под weak server: 1 core, 3-4GB RAM)
+      - WORKER_NAME=export-worker-prod
+      - MAX_WORKERS=1
+      - JOB_TIMEOUT=1800
+      - MAX_RETRIES=3
+      - RETRY_BASE_DELAY=1.0
+      - RETRY_MAX_DELAY=32.0
+      # SQLite message cache (critical: hdd volume below)
+      - CACHE_DB_PATH=/data/cache/messages.db
+      - CACHE_ENABLED=true
+      - CACHE_MAX_DISK_GB=25
+      # Logging
+      - LOG_LEVEL=INFO
+      - PYTHONUNBUFFERED=1
+    volumes:
+      # SQLite кэш сообщений — должен переживать рестарты контейнера.
+      - cache-data:/data/cache
+    depends_on:
+      java-bot:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'python.*main.py' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # Увеличено с 512M: выровнено с репо — больше памяти для in-flight батчей и Pyrogram.
+    mem_limit: 768m
+
+  redis:
+    image: redis:7-alpine
+    labels:
+      - "project=telegram-cleaner"
+    # noeviction: выбрасывает ошибку при переполнении вместо тихого удаления ключей.
+    # allkeys-lru в проде молча выкидывал ключи очереди и ломал экспорты.
+    command: redis-server --appendonly yes --appendfsync everysec --maxmemory 128mb --maxmemory-policy noeviction
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+    restart: unless-stopped
+    mem_limit: 256m
+
+volumes:
+  redis-data:
+  export-data:
+  cache-data:

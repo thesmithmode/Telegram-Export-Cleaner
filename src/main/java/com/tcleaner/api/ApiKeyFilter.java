@@ -11,6 +11,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 
 /**
  * Spring Security фильтр для валидации API ключа в заголовке X-API-Key.
@@ -74,8 +76,11 @@ public class ApiKeyFilter extends OncePerRequestFilter {
             // Если не настроен — пропускаем (режим без аутентификации).
             if (expectedKey != null && !expectedKey.isEmpty()) {
                 String providedKey = request.getHeader("X-API-Key");
-                if (!expectedKey.equals(providedKey)) {
-                    log.warn("Попытка доступа к API с неверным ключом: path={}, provided={}", path, providedKey);
+                if (!isKeyValid(providedKey)) {
+                    // Никогда не логируем сам ключ — это полезная нагрузка для атакующего
+                    // и попадает в log aggregation / SIEM. Логируем только факт попытки.
+                    log.warn("Попытка доступа к API с неверным ключом: path={}, header_present={}",
+                            path, providedKey != null);
                     response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                     response.getWriter().write("Invalid API Key");
                     return;
@@ -84,5 +89,24 @@ public class ApiKeyFilter extends OncePerRequestFilter {
         }
 
         filterChain.doFilter(request, response);
+    }
+
+    /**
+     * Timing-safe сравнение переданного ключа с ожидаемым.
+     *
+     * Обычный String.equals() выходит при первом несовпадающем байте,
+     * что позволяет атакующему по времени ответа восстанавливать ключ побайтно.
+     * MessageDigest.isEqual() сравнивает за константное время.
+     *
+     * @param providedKey ключ из заголовка X-API-Key (может быть null)
+     * @return true если ключ совпадает с ожидаемым
+     */
+    private boolean isKeyValid(String providedKey) {
+        if (providedKey == null) {
+            return false;
+        }
+        byte[] expected = expectedKey.getBytes(StandardCharsets.UTF_8);
+        byte[] provided = providedKey.getBytes(StandardCharsets.UTF_8);
+        return MessageDigest.isEqual(expected, provided);
     }
 }

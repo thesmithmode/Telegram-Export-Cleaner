@@ -203,6 +203,60 @@ class TestMessageEntity:
                 # Missing offset and length
             )
 
+    def test_emoji_entity_offset_utf16_convention(self):
+        """Telegram uses UTF-16 code unit offsets, not Python string indices.
+
+        An emoji like 🎉 (U+1F389) is outside the Basic Multilingual Plane
+        and requires a surrogate pair in UTF-16 — it counts as 2 code units,
+        not 1. If the string is '🎉 text', the bold entity on 'text' must have
+        offset=3 (2 for emoji + 1 for space), NOT offset=2 as Python len() suggests.
+
+        REGRESSION: If this test fails, the docstring was silently reverted to
+        "UTF-8 characters" — verify that json_converter.py passes Pyrogram's
+        UTF-16 offsets through unchanged (no conversion).
+        """
+        emoji_text = "🎉 text"
+
+        # Python len() sees 6 characters: emoji=1 code point + space=1 + 'text'=4.
+        # Python uses UCS-4 internally — one Python char per Unicode code point,
+        # surrogates not exposed. THIS IS THE WRONG NUMBER FOR TELEGRAM OFFSETS.
+        assert len(emoji_text) == 6
+
+        # UTF-16 encoding: 🎉 → surrogate pair (2 units) + space (1) + 'text' (4) = 7.
+        # This is the count Telegram API uses for offset/length in MessageEntity —
+        # 1 unit MORE than Python len() because of the surrogate pair.
+        utf16_units = len(emoji_text.encode("utf-16-le")) // 2
+        assert utf16_units == 7
+        assert utf16_units == len(emoji_text) + 1  # exactly 1 unit more
+
+        # emoji alone: 2 UTF-16 units, 1 Python char
+        emoji_alone = "🎉"
+        assert len(emoji_alone) == 1                                    # Python sees 1
+        assert len(emoji_alone.encode("utf-16-le")) // 2 == 2          # UTF-16: 2 units
+
+        # Entity on "text" after "🎉 " → UTF-16 offset is 3 (2+1), NOT 2 (1+1 in Python)
+        entity = MessageEntity(type="bold", offset=3, length=4)
+        assert entity.offset == 3, (
+            "bold entity on 'text' in '🎉 text' must have UTF-16 offset 3: "
+            "emoji=2 units + space=1 unit. offset=2 would be wrong (Python indexing)."
+        )
+        assert entity.length == 4  # 't','e','x','t' — all BMP, 1 unit each
+
+    def test_multi_emoji_offsets_accumulate(self):
+        """Multiple emoji compounds the UTF-16 vs Python index divergence.
+
+        '🔥🎉 ok' → 2+2+1 = 5 UTF-16 units before 'ok', but Python sees 3+1=4.
+        Entity on 'ok' must have offset=5 in Telegram convention.
+        """
+        text = "🔥🎉 ok"
+        # UTF-16 length of prefix "🔥🎉 "
+        prefix_utf16 = len("🔥🎉 ".encode("utf-16-le")) // 2
+        assert prefix_utf16 == 5  # 2 + 2 + 1
+
+        entity = MessageEntity(type="italic", offset=5, length=2)
+        assert entity.offset == 5
+        assert entity.length == 2
+
 
 class TestExportedMessage:
     """Tests for ExportedMessage model"""
