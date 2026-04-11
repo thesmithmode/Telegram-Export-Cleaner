@@ -295,21 +295,21 @@ class ExportWorker:
             # Передаём Redis-клиент в Telegram-клиент для canonical-маппинга
             self.telegram_client.redis_client = self.control_redis
 
-            # 5. Initialize message cache
-            logger.info("4️⃣  Initializing message cache...")
-            # cache_redis — байты (сериализованные Pydantic-объекты в Redis sorted sets)
-            cache_redis = aioredis.Redis(
-                decode_responses=False,
-                **_redis_kwargs,
-            )
+            # 5. Initialize message cache (SQLite on disk)
+            logger.info("4️⃣  Initializing message cache (SQLite)...")
             self.message_cache = MessageCache(
-                redis_client=cache_redis,
-                ttl_seconds=settings.CACHE_TTL_SECONDS,
-                max_memory_mb=settings.CACHE_MAX_MEMORY_MB,
+                db_path=settings.CACHE_DB_PATH,
+                max_disk_bytes=int(settings.CACHE_MAX_DISK_GB * 1024 ** 3),
                 max_messages_per_chat=settings.CACHE_MAX_MESSAGES_PER_CHAT,
+                ttl_seconds=settings.CACHE_TTL_SECONDS,
                 enabled=settings.CACHE_ENABLED,
             )
-            logger.info(f"  Cache: enabled={settings.CACHE_ENABLED}, TTL={settings.CACHE_TTL_SECONDS}s, max_memory={settings.CACHE_MAX_MEMORY_MB}MB")
+            await self.message_cache.initialize()
+            logger.info(
+                f"  Cache: enabled={settings.CACHE_ENABLED}, "
+                f"db={settings.CACHE_DB_PATH}, "
+                f"max_disk={settings.CACHE_MAX_DISK_GB}GB"
+            )
 
             logger.info("✅ All components initialized successfully")
             return True
@@ -982,6 +982,9 @@ class ExportWorker:
 
         if self.java_client:
             await self.java_client.aclose()
+
+        if self.message_cache:
+            await self.message_cache.close()
 
         logger.info(
             f"📊 Final stats: {self.jobs_processed} processed, "
