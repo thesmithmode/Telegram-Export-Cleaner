@@ -704,12 +704,18 @@ class TestExportWorkerProgressReporting:
 
         await worker.process_job(job)
 
-        # Check started notification: send_progress_update(user_chat_id, task_id, message_count, total, started=True, ...)
+        # Check started notification: first call is start() with started=True, total=None
+        # Then set_total(5000) sends total=5000 separately
         calls = worker.java_client.send_progress_update.call_args_list
         assert len(calls) >= 1
-        first_call = calls[0]
-        assert first_call.kwargs["started"] is True
-        assert first_call.args[3] == 5000  # total is 4th positional arg
+
+        # Verify started=True was sent
+        started_call = next((c for c in calls if c.kwargs.get("started") is True), None)
+        assert started_call is not None, "No started=True call found"
+
+        # Verify total=5000 was communicated (via set_total or positional arg)
+        total_calls = [c for c in calls if c.kwargs.get("total") == 5000]
+        assert len(total_calls) >= 1, "Expected at least one call with total=5000"
 
     @pytest.mark.asyncio
     async def test_fetch_all_sends_5pct_milestones(self, worker):
