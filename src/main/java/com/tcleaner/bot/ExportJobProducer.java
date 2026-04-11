@@ -8,9 +8,13 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+
+import org.springframework.data.redis.core.RedisOperations;
+import org.springframework.data.redis.core.SessionCallback;
 
 /**
  * Кладёт задачи на экспорт в Redis-очередь.
@@ -294,19 +298,29 @@ public class ExportJobProducer {
             return null;
         }
 
-        // Проверяем, реально ли задача ещё активна
-        Boolean isProcessing = redis.hasKey("job:processing:" + taskId);
-        Boolean isCompleted = redis.hasKey("job:completed:" + taskId);
-        Boolean isFailed = redis.hasKey("job:failed:" + taskId);
+        // Проверяем статус задачи одним pipeline-запросом (3 RTT → 1 RTT)
+        @SuppressWarnings("unchecked")
+        List<Object> statusResults = redis.executePipelined(new SessionCallback<Object>() {
+            @Override
+            public Object execute(RedisOperations ops) {
+                ops.hasKey("job:processing:" + taskId);
+                ops.hasKey("job:completed:" + taskId);
+                ops.hasKey("job:failed:" + taskId);
+                return null;
+            }
+        });
+        boolean isProcessing = Boolean.TRUE.equals(statusResults.get(0));
+        boolean isCompleted = Boolean.TRUE.equals(statusResults.get(1));
+        boolean isFailed = Boolean.TRUE.equals(statusResults.get(2));
 
-        if (Boolean.TRUE.equals(isCompleted) || Boolean.TRUE.equals(isFailed)) {
+        if (isCompleted || isFailed) {
             // Задача завершена, но ключ не был очищен — чистим
             log.info("Очищаю протухший active_export для user {} (task {} завершена)", userId, taskId);
             redis.delete(ACTIVE_EXPORT_PREFIX + userId);
             return null;
         }
 
-        if (Boolean.TRUE.equals(isProcessing)) {
+        if (isProcessing) {
             // Задача в обработке — действительно активна
             return taskId;
         }

@@ -81,10 +81,7 @@ class TestExportWorkerJobProcessing:
         worker.java_client = _make_mock_java_client()
         worker.telegram_client.get_messages_count = AsyncMock(return_value=100)
         # Disabled cache — tests exercise direct Telegram fetch path
-        worker.message_cache = MessageCache(
-            redis_client=AsyncMock(),
-            enabled=False,
-        )
+        worker.message_cache = MessageCache(enabled=False)
         return worker
 
     @pytest.mark.asyncio
@@ -238,10 +235,7 @@ class TestChatIdNormalization:
         worker.telegram_client = AsyncMock()
         worker.java_client = _make_mock_java_client()
         worker.telegram_client.get_messages_count = AsyncMock(return_value=1)
-        worker.message_cache = MessageCache(
-            redis_client=AsyncMock(),
-            enabled=False,
-        )
+        worker.message_cache = MessageCache(enabled=False)
         worker.control_redis = AsyncMock()
         worker.control_redis.get = AsyncMock(return_value=None)
         return worker
@@ -315,10 +309,7 @@ class TestExportWorkerProgressReporting:
         worker.telegram_client = AsyncMock()
         worker.java_client = _make_mock_java_client()
         worker.telegram_client.get_messages_count = AsyncMock(return_value=100)
-        worker.message_cache = MessageCache(
-            redis_client=AsyncMock(),
-            enabled=False,
-        )
+        worker.message_cache = MessageCache(enabled=False)
         return worker
 
     @pytest.mark.asyncio
@@ -439,26 +430,20 @@ class TestExportWorkerWithCache:
     """Test job processing with cache enabled."""
 
     @pytest.fixture
-    async def redis_client(self):
-        import fakeredis.aioredis
-        client = fakeredis.aioredis.FakeRedis(decode_responses=False)
-        yield client
-        await client.aclose()
-
-    @pytest.fixture
-    async def worker(self, redis_client):
+    async def worker(self, tmp_path):
         worker = ExportWorker()
         worker.queue_consumer = AsyncMock()
         worker.telegram_client = AsyncMock()
         worker.java_client = _make_mock_java_client()
         worker.telegram_client.get_messages_count = AsyncMock(return_value=100)
-        worker.message_cache = MessageCache(
-            redis_client=redis_client,
+        cache = MessageCache(
+            db_path=str(tmp_path / "test_cache.db"),
+            max_disk_bytes=10 * 1024 * 1024,
             ttl_seconds=3600,
-            max_memory_mb=120,
             max_messages_per_chat=1000,
-            enabled=True,
         )
+        await cache.initialize()
+        worker.message_cache = cache
         return worker
 
     @pytest.mark.asyncio
@@ -552,26 +537,20 @@ class TestExportWorkerDateCache:
     """Test date-range export with cache (Vasya→Petya→Kolya scenario)."""
 
     @pytest.fixture
-    async def redis_client(self):
-        import fakeredis.aioredis
-        client = fakeredis.aioredis.FakeRedis(decode_responses=False)
-        yield client
-        await client.aclose()
-
-    @pytest.fixture
-    async def worker(self, redis_client):
+    async def worker(self, tmp_path):
         worker = ExportWorker()
         worker.queue_consumer = AsyncMock()
         worker.telegram_client = AsyncMock()
         worker.java_client = _make_mock_java_client()
         worker.telegram_client.get_messages_count = AsyncMock(return_value=100)
-        worker.message_cache = MessageCache(
-            redis_client=redis_client,
+        cache = MessageCache(
+            db_path=str(tmp_path / "date_cache.db"),
+            max_disk_bytes=10 * 1024 * 1024,
             ttl_seconds=3600,
-            max_memory_mb=120,
             max_messages_per_chat=1000,
-            enabled=True,
         )
+        await cache.initialize()
+        worker.message_cache = cache
         return worker
 
     @pytest.mark.asyncio
@@ -583,7 +562,7 @@ class TestExportWorkerDateCache:
            only fetches 9-10 and 14-15 from Telegram
         """
         worker.telegram_client.verify_and_get_info = AsyncMock(
-            return_value=(True, {"title": "Test Chat", "type": "supergroup"}, None)
+            return_value=(True, {"id": -1001001001, "title": "Test Chat", "type": "supergroup"}, None)
         )
         worker.java_client.send_response = AsyncMock(return_value=True)
 
@@ -601,13 +580,13 @@ class TestExportWorkerDateCache:
         worker.telegram_client.get_chat_history = vasya_history
 
         vasya_job = ExportRequest(
-            task_id="vasya_1", user_id=100, user_chat_id=100, chat_id="testchat",
+            task_id="vasya_1", user_id=100, user_chat_id=100, chat_id=-1001001001,
             from_date="2025-01-11T00:00:00", to_date="2025-01-13T23:59:59",
         )
         await worker.process_job(vasya_job)
 
         # Verify cache has Jan 11-13
-        date_ranges = await worker.message_cache.get_cached_date_ranges("testchat")
+        date_ranges = await worker.message_cache.get_cached_date_ranges(-1001001001)
         assert date_ranges == [["2025-01-11", "2025-01-13"]]
 
         # --- Petya: Jan 1-8 ---
@@ -623,13 +602,13 @@ class TestExportWorkerDateCache:
         worker.telegram_client.get_chat_history = petya_history
 
         petya_job = ExportRequest(
-            task_id="petya_1", user_id=200, user_chat_id=200, chat_id="testchat",
+            task_id="petya_1", user_id=200, user_chat_id=200, chat_id=-1001001001,
             from_date="2025-01-01T00:00:00", to_date="2025-01-08T23:59:59",
         )
         await worker.process_job(petya_job)
 
         # Verify cache has Jan 1-8 and Jan 11-13
-        date_ranges = await worker.message_cache.get_cached_date_ranges("testchat")
+        date_ranges = await worker.message_cache.get_cached_date_ranges(-1001001001)
         assert date_ranges == [["2025-01-01", "2025-01-08"], ["2025-01-11", "2025-01-13"]]
 
         # --- Kolya: Jan 1-15 ---
@@ -656,7 +635,7 @@ class TestExportWorkerDateCache:
         worker.telegram_client.get_chat_history = kolya_history
 
         kolya_job = ExportRequest(
-            task_id="kolya_1", user_id=300, user_chat_id=300, chat_id="testchat",
+            task_id="kolya_1", user_id=300, user_chat_id=300, chat_id=-1001001001,
             from_date="2025-01-01T00:00:00", to_date="2025-01-15T23:59:59",
         )
         await worker.process_job(kolya_job)
@@ -672,7 +651,7 @@ class TestExportWorkerDateCache:
         assert result_ids == list(range(1, 16))
 
         # Cache now has complete Jan 1-15
-        date_ranges = await worker.message_cache.get_cached_date_ranges("testchat")
+        date_ranges = await worker.message_cache.get_cached_date_ranges(-1001001001)
         assert date_ranges == [["2025-01-01", "2025-01-15"]]
 
 
@@ -698,7 +677,7 @@ class TestCancelBeforeStart:
         w.queue_consumer.mark_job_failed = AsyncMock()
         w.telegram_client = AsyncMock()
         w.java_client = _make_mock_java_client()
-        w.message_cache = MessageCache(redis_client=AsyncMock(), enabled=False)
+        w.message_cache = MessageCache(enabled=False)
         w.control_redis = AsyncMock()
         # По умолчанию — не отменено
         w.control_redis.get = AsyncMock(return_value=None)

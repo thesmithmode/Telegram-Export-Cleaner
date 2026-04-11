@@ -504,14 +504,14 @@ class TestCancelSupport:
                 for i in range(1, 101)
             ]
 
-            # Call _check_cancel_and_save at 100 message mark
+            # Call _flush_batch_and_check_cancel with accumulated batch
             job = ExportRequest(
                 task_id="test_123",
                 user_id=456,
                 chat_id=-1001234567890
             )
 
-            is_cancelled = await worker._check_cancel_and_save(job, test_messages, 100)
+            is_cancelled = await worker._flush_batch_and_check_cancel(job, test_messages)
 
             # Verify cancel was detected and messages were saved
             assert is_cancelled == True
