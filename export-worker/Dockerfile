@@ -21,9 +21,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Create non-root user and necessary directories
+# Create non-root user and necessary directories (including SQLite cache dir)
 RUN groupadd -r app && useradd -r -g app app && \
-    mkdir -p session logs && chown -R app:app /app
+    mkdir -p session logs /data/cache && chown -R app:app /app /data
 USER app
 
 # Set environment variables
