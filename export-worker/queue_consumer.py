@@ -357,7 +357,11 @@ class QueueConsumer:
             raw = await self.redis_client.get(f"staging:meta:{task_id}")
 
             # Batch the 4 write operations into one pipeline (4 RTT → 1 RTT)
-            pipe = self.redis_client.pipeline()
+            # transaction=True (MULTI/EXEC) — явно указано, чтобы не зависеть от
+            # дефолта redis-py: частичный fail в середине оставил бы job
+            # в несогласованном состоянии (delete processing выполнено, но staging
+            # ещё числит job → recover_staging_jobs перезапустит уже завершённую).
+            pipe = self.redis_client.pipeline(transaction=True)
             pipe.delete(processing_key)
             pipe.setex(completed_key, JOB_MARKER_TTL, str(datetime.now().isoformat()))
             pipe.srem("staging:jobs", task_id)

@@ -417,8 +417,13 @@ class ExportWorker:
                 # Также сохраняем обратный маппинг canonical:<numeric_id> → username,
                 # чтобы Java-бот мог резолвить числовые ID из пикера в username.
                 if self.control_redis and canonical_id:
+                    # Пишем оба маппинга одним pipeline (2 RTT → 1 RTT).
+                    # Не глотаем исключения: если Redis недоступен или мок в тесте
+                    # настроен неправильно, caller должен это УВИДЕТЬ, а не
+                    # замести под ковёр. Ошибка логируется на WARN — дальнейший
+                    # экспорт не блокируется (маппинг не критичен для самой job),
+                    # но SRE получит сигнал в логах.
                     try:
-                        # Пишем оба маппинга одним pipeline (2 RTT → 1 RTT)
                         pipe = self.control_redis.pipeline()
                         pipe.set(
                             f"canonical:{original_chat_input}",
@@ -433,8 +438,11 @@ class ExportWorker:
                                 ex=86400 * 30,
                             )
                         await pipe.execute()
-                    except Exception:
-                        pass
+                    except Exception as canonical_err:
+                        logger.warning(
+                            f"Failed to write canonical mapping for chat "
+                            f"{original_chat_input!r} → {canonical_id}: {canonical_err}"
+                        )
 
             # --- Cache-aware export ---
             # Оба пути возвращают (count: int, messages: AsyncGenerator) или None.

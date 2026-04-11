@@ -11,7 +11,7 @@ Note: Integration tests with actual Redis should be in separate file
 
 import json
 import pytest
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import Mock, MagicMock, AsyncMock, patch
 
 from models import ExportRequest
 from queue_consumer import QueueConsumer
@@ -185,7 +185,11 @@ class TestQueueConsumerJobManagement:
                 assert call_args[0][1] == 3600  # TTL
 
     async def test_mark_job_completed_deletes_and_sets(self):
-        """Test mark_job_completed removes processing key and sets completed."""
+        """Test mark_job_completed removes processing key and sets completed.
+
+        Real code uses pipeline(transaction=True): pipeline() is sync, queued
+        commands (delete/setex/srem/lrem) are sync too, only execute() is async.
+        """
         with patch('queue_consumer.settings') as mock_settings:
             mock_settings.REDIS_HOST = "redis"
             mock_settings.REDIS_PORT = 6379
@@ -195,8 +199,14 @@ class TestQueueConsumerJobManagement:
 
             with patch('queue_consumer.redis.from_url', new_callable=AsyncMock) as mock_redis:
                 mock_client = AsyncMock()
-                mock_client.delete = AsyncMock(return_value=1)
-                mock_client.setex = AsyncMock(return_value=True)
+                # No staging meta → lrem path skipped
+                mock_client.get = AsyncMock(return_value=None)
+
+                # Pipeline mock: sync pipeline(), sync queueing, async execute()
+                mock_pipe = MagicMock()
+                mock_pipe.execute = AsyncMock(return_value=[1, 1, 1, 1])
+                mock_client.pipeline = MagicMock(return_value=mock_pipe)
+
                 mock_redis.return_value = mock_client
 
                 consumer = QueueConsumer()
@@ -205,12 +215,17 @@ class TestQueueConsumerJobManagement:
                 result = await consumer.mark_job_completed("test_123")
 
                 assert result is True
-                # Verify delete was called first
-                mock_client.delete.assert_called_once_with("job:processing:test_123")
-                # Verify setex was called for completed key
-                mock_client.setex.assert_called_once()
-                call_args = mock_client.setex.call_args
-                assert "job:completed:test_123" in call_args[0]
+                # Regression: pipeline must be created with explicit transaction=True
+                mock_client.pipeline.assert_called_once_with(transaction=True)
+                # delete queued for processing key
+                mock_pipe.delete.assert_any_call("job:processing:test_123")
+                # setex queued for completed key
+                assert any(
+                    call.args[0] == "job:completed:test_123"
+                    for call in mock_pipe.setex.call_args_list
+                )
+                # Pipeline actually executed (otherwise nothing happens on Redis)
+                mock_pipe.execute.assert_awaited_once()
 
     async def test_mark_job_failed_stores_error_json(self):
         """Test mark_job_failed stores error information."""
@@ -647,7 +662,13 @@ class TestStagingDurability:
 
     @pytest.mark.asyncio
     async def test_mark_job_completed_untracks_and_removes_staging(self):
-        """mark_job_completed should untrack from set and LREM from staging list."""
+        """mark_job_completed should untrack from set and LREM from staging list.
+
+        Все 5 операций (delete processing, setex completed, srem staging:jobs,
+        lrem staging_queue, delete staging:meta) должны быть заказаны в pipeline
+        и выполнены одним execute() — атомарно, чтобы не оставлять частичное
+        состояние при падении Redis в середине.
+        """
         import json as _json
         staging_meta = _json.dumps({
             "payload": '{"task_id":"task_123"}',
@@ -655,20 +676,68 @@ class TestStagingDurability:
         })
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=staging_meta)
-        mock_client.lrem = AsyncMock()
-        mock_client.delete = AsyncMock()
+
+        # Pipeline mock: sync queueing, async execute
+        mock_pipe = MagicMock()
+        mock_pipe.execute = AsyncMock(return_value=[1, 1, 1, 1, 1])
+        mock_client.pipeline = MagicMock(return_value=mock_pipe)
+
         consumer = self._make_consumer(mock_client)
         await consumer.mark_job_completed("task_123")
 
-        mock_client.srem.assert_called_with("staging:jobs", "task_123")
-        # staging payload fetched
+        # Regression S2: transaction=True обязателен — иначе partial-fail
+        # оставит job в несогласованном состоянии (processing deleted, staging
+        # ещё числит → recover_staging_jobs перезапустит уже завершённую).
+        mock_client.pipeline.assert_called_once_with(transaction=True)
+
+        # Staging payload получен ДО pipeline (GET не может быть в MULTI с чтением)
         mock_client.get.assert_called_with("staging:meta:task_123")
-        # LREM removes job from staging list
-        mock_client.lrem.assert_called_once_with(
+
+        # Все write-операции заказаны в pipe, а не напрямую в клиент
+        mock_pipe.srem.assert_called_with("staging:jobs", "task_123")
+        mock_pipe.lrem.assert_called_once_with(
             "telegram_export_processing", 1, '{"task_id":"task_123"}'
         )
-        # staging:meta key cleaned up
-        mock_client.delete.assert_called_with("staging:meta:task_123")
+        # delete вызывается дважды: processing key и staging:meta
+        delete_args = [c.args for c in mock_pipe.delete.call_args_list]
+        assert ("job:processing:task_123",) in delete_args
+        assert ("staging:meta:task_123",) in delete_args
+
+        # Pipeline реально выполнен (execute awaited)
+        mock_pipe.execute.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_mark_job_completed_pipeline_failure_reports_false(self):
+        """REGRESSION S2: если execute() падает — mark_job_completed возвращает False.
+
+        Без transaction=True частичный fail оставил бы worker в неконсистентном
+        состоянии и ещё сообщал True в Java → Java считал бы job завершённым,
+        но staging:jobs всё ещё содержал бы task_id и recover_staging_jobs на
+        рестарте перезапустил бы уже «завершённую» работу.
+
+        С transaction=True MULTI/EXEC откатит ВСЕ команды атомарно, и наружу
+        уйдёт False — Java пометит job как failed и повторит позже.
+        """
+        import json as _json
+        staging_meta = _json.dumps({
+            "payload": '{"task_id":"task_123"}',
+            "queue": "telegram_export_processing"
+        })
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=staging_meta)
+
+        mock_pipe = MagicMock()
+        mock_pipe.execute = AsyncMock(side_effect=Exception("EXEC failed"))
+        mock_client.pipeline = MagicMock(return_value=mock_pipe)
+
+        consumer = self._make_consumer(mock_client)
+        result = await consumer.mark_job_completed("task_123")
+
+        assert result is False, (
+            "При падении pipeline.execute() функция ДОЛЖНА вернуть False, "
+            "иначе caller поверит в успех и не перезапустит job"
+        )
+        mock_client.pipeline.assert_called_once_with(transaction=True)
 
     @pytest.mark.asyncio
     async def test_mark_job_failed_untracks_and_removes_staging(self):
