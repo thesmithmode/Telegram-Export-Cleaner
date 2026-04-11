@@ -397,6 +397,22 @@ class MessageCache:
             return [(from_date, to_date)]
         return self._compute_missing_date_ranges(cached, from_date, to_date)
 
+    async def mark_date_range_checked(
+        self, chat_id: Union[int, str], from_date: str, to_date: str
+    ) -> None:
+        """Пометить диапазон дат как проверенный.
+
+        Вызывается когда сообщения за этот период уже есть в таблице messages
+        (загружены через ID-путь или более ранний date-экспорт), либо когда
+        Telegram вернул 0 сообщений за этот период. В обоих случаях повторный
+        запрос в Telegram не нужен.
+        """
+        if not self.enabled or self._db is None:
+            return
+        chat_id_int = int(chat_id)
+        await self._add_date_range(chat_id_int, from_date, to_date)
+        await self._db.commit()
+
     @staticmethod
     def _compute_missing_date_ranges(
         cached: List[List[str]], from_date: str, to_date: str

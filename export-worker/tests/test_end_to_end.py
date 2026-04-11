@@ -426,8 +426,7 @@ class TestWorkerCleanup:
             # Since we can't easily mock shutil.rmtree, just verify method doesn't crash
             await worker.cleanup_temp_files(task_id)
 
-            # Method should complete without error
-            assert True
+            # Метод должен завершиться без исключения — достижение этой строки это и есть проверка
 
     async def test_cleanup_temp_files_handles_missing_directory(self):
         """Test cleanup_temp_files handles missing directories gracefully."""
