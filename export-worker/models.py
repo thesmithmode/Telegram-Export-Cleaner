@@ -77,6 +77,24 @@ class ExportRequest(BaseModel):
     keywords: Optional[str] = Field(None, description="Comma-separated keywords to include")
     exclude_keywords: Optional[str] = Field(None, description="Comma-separated keywords to exclude")
 
+    @field_validator("chat_id", mode="before")
+    @classmethod
+    def coerce_chat_id(cls, v):
+        """Принимает chat_id как int, str-число или username.
+
+        Java иногда сериализует chat_id как строку (числовой ID или username).
+        Числовые строки приводим к int (чтобы вся остальная логика — кэш-ключи,
+        сравнения, передача в Pyrogram — работала с одним типом). Username
+        (нечисловые строки) оставляем как есть — Pyrogram умеет их разрешать.
+        """
+        if isinstance(v, str):
+            stripped = v.strip()
+            try:
+                return int(stripped)
+            except ValueError:
+                return stripped  # username — keep as string
+        return v
+
     @field_validator("from_date", "to_date", mode="before")
     @classmethod
     def validate_date(cls, v: Optional[str]) -> Optional[str]:

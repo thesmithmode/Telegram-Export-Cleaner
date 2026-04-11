@@ -505,22 +505,44 @@ class TestDeadLetterQueue:
         consumer.redis_client = mock_client
         return consumer
 
+    @staticmethod
+    def _dlq_calls(mock_client):
+        """Возвращает только rpush-вызовы, ушедшие в DLQ-очередь.
+
+        Реальный flow get_job() делает несколько rpush:
+          1. RPUSH telegram_export_processing — staging для durability (всегда)
+          2. RPUSH telegram_export_dead       — DLQ (только при ошибке)
+        Фильтруем по имени очереди вместо assert_called_once(), потому что
+        проверять надо именно DLQ-аспект, не staging-механику (она тестируется
+        в TestStagingDurability).
+        """
+        return [
+            c for c in mock_client.rpush.call_args_list
+            if c.args and "_dead" in c.args[0]
+        ]
+
     async def test_invalid_json_moves_to_dlq(self):
         """Невалидный JSON из очереди должен уходить в DLQ, а не теряться."""
         mock_client = AsyncMock()
         mock_client.blpop = AsyncMock(return_value=("telegram_export", "not valid json {"))
         mock_client.rpush = AsyncMock(return_value=1)
+        mock_client.lrem = AsyncMock(return_value=1)
 
         consumer = self._make_consumer(mock_client)
         result = await consumer.get_job()
 
         assert result is None
-        mock_client.rpush.assert_called_once()
-        dlq_call = mock_client.rpush.call_args
-        assert "telegram_export_dead" in dlq_call[0]
-        dlq_entry = json.loads(dlq_call[0][1])
+        dlq_calls = self._dlq_calls(mock_client)
+        assert len(dlq_calls) == 1, "Невалидный JSON должен ровно один раз уйти в DLQ"
+        dlq_call = dlq_calls[0]
+        assert dlq_call.args[0] == "telegram_export_dead"
+        dlq_entry = json.loads(dlq_call.args[1])
         assert "JSON parse error" in dlq_entry["reason"]
         assert dlq_entry["raw"] == "not valid json {"
+        # И должен быть удалён из staging чтобы не подняться при recover_staging
+        mock_client.lrem.assert_called_once_with(
+            "telegram_export_processing", 1, "not valid json {"
+        )
 
     async def test_validation_error_moves_to_dlq(self):
         """ExportRequest с невалидными данными должен уходить в DLQ."""
@@ -528,19 +550,24 @@ class TestDeadLetterQueue:
         mock_client = AsyncMock()
         mock_client.blpop = AsyncMock(return_value=("telegram_export", invalid_job))
         mock_client.rpush = AsyncMock(return_value=1)
+        mock_client.lrem = AsyncMock(return_value=1)
 
         consumer = self._make_consumer(mock_client)
         result = await consumer.get_job()
 
         assert result is None
-        mock_client.rpush.assert_called_once()
-        dlq_call = mock_client.rpush.call_args
-        assert "telegram_export_dead" in dlq_call[0]
-        dlq_entry = json.loads(dlq_call[0][1])
+        dlq_calls = self._dlq_calls(mock_client)
+        assert len(dlq_calls) == 1, "Невалидная задача должна ровно один раз уйти в DLQ"
+        dlq_call = dlq_calls[0]
+        assert dlq_call.args[0] == "telegram_export_dead"
+        dlq_entry = json.loads(dlq_call.args[1])
         assert "Validation error" in dlq_entry["reason"]
+        mock_client.lrem.assert_called_once_with(
+            "telegram_export_processing", 1, invalid_job
+        )
 
     async def test_valid_job_does_not_go_to_dlq(self):
-        """Валидная задача не должна попадать в DLQ."""
+        """Валидная задача не должна попадать в DLQ (но идёт в staging — это OK)."""
         valid_job = json.dumps({
             "task_id": "export_ok",
             "user_id": 123,
@@ -555,7 +582,8 @@ class TestDeadLetterQueue:
 
         assert result is not None
         assert result.task_id == "export_ok"
-        mock_client.rpush.assert_not_called()
+        # В DLQ не уходит — но в staging RPUSH делается (см. TestStagingDurability)
+        assert self._dlq_calls(mock_client) == []
 
 
 class TestStagingDurability:
@@ -628,19 +656,26 @@ class TestStagingDurability:
 
     @pytest.mark.asyncio
     async def test_invalid_json_goes_to_dlq_and_removed_from_staging(self):
-        """Invalid JSON should be removed from staging and moved to DLQ."""
+        """Invalid JSON should be removed from staging (via LREM) and moved to DLQ.
+
+        LREM (а не LPOP) — потому что LPOP удалил бы любой первый элемент очереди,
+        что может быть НЕ нашим payload (например, при гонке с recover_staging_jobs
+        или при горизонтальном масштабировании). LREM удаляет именно наш payload.
+        """
         invalid_json = "not valid json"
         mock_client = AsyncMock()
         mock_client.blpop = AsyncMock(return_value=("telegram_export", invalid_json))
         mock_client.rpush = AsyncMock()
-        mock_client.lpop = AsyncMock()
+        mock_client.lrem = AsyncMock()
 
         consumer = self._make_consumer(mock_client)
         result = await consumer.get_job()
 
         assert result is None
-        # Invalid job removed from staging
-        mock_client.lpop.assert_called_once()
+        # Invalid job removed from staging via LREM с конкретным payload
+        mock_client.lrem.assert_called_once_with(
+            "telegram_export_processing", 1, invalid_json
+        )
         # Moved to DLQ
         dlq_call = [c for c in mock_client.rpush.call_args_list if "dead" in str(c)]
         assert len(dlq_call) > 0

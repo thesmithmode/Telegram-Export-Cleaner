@@ -521,19 +521,66 @@ class ExportWorker:
 
         except Exception as e:
             logger.error(f"❌ Unexpected error in job {job.task_id}: {e}", exc_info=True)
-            # send_response с status="failed" уведомляет юзера через _notify_user_failure
+            # Префикс "Export failed:" даёт юзеру осмысленный текст в Telegram
+            # вместо голого str(e), и совпадает с форматом, который показывает
+            # _notify_user_failure ("❌ Export failed (task ...)").
+            error_text = f"Export failed: {e}"
+
+            # Preferred path: send_response умеет нотифицировать юзера и
+            # выполнить server-side cleanup. Но если сам send_response падает
+            # (OOM, сеть, баг в клиенте), юзер всё равно должен получить
+            # сообщение — поэтому есть direct fallback к _notify_user_failure.
+            # Без fallback после OOM в send_response юзер «зависает» без feedback,
+            # а active_export ключ остаётся в Redis до TTL.
+            notified_via_send_response = False
             if self.java_client:
-                await self.java_client.send_response(
-                    task_id=job.task_id,
-                    status="failed",
-                    messages=[],
-                    error=str(e),
-                    user_chat_id=job.user_chat_id,
+                try:
+                    await self.java_client.send_response(
+                        task_id=job.task_id,
+                        status="failed",
+                        messages=[],
+                        error=error_text,
+                        user_chat_id=job.user_chat_id,
+                    )
+                    notified_via_send_response = True
+                except Exception as notify_err:
+                    logger.error(
+                        f"send_response failed during error handling for "
+                        f"{job.task_id}: {notify_err}. Falling back to direct "
+                        f"user notification.",
+                        exc_info=True,
+                    )
+
+            if (
+                not notified_via_send_response
+                and self.java_client
+                and job.user_chat_id
+            ):
+                try:
+                    await self.java_client._notify_user_failure(
+                        job.user_chat_id, job.task_id, error_text
+                    )
+                except Exception as fallback_err:
+                    logger.error(
+                        f"Direct _notify_user_failure also failed for "
+                        f"{job.task_id}: {fallback_err}"
+                    )
+
+            try:
+                await self.queue_consumer.mark_job_failed(job.task_id, error_text)
+            except Exception as mark_err:
+                logger.error(
+                    f"Failed to mark job {job.task_id} as failed: {mark_err}"
                 )
-            await self.queue_consumer.mark_job_failed(job.task_id, str(e))
+
             self.jobs_failed += 1
             self.log_memory_usage("JOB_ERROR")
-            await self._cleanup_job(job)
+            try:
+                await self._cleanup_job(job)
+            except Exception as cleanup_err:
+                logger.error(
+                    f"Cleanup failed for {job.task_id}: {cleanup_err}"
+                )
             return True
 
     @staticmethod

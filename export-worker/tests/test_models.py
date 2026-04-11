@@ -217,12 +217,17 @@ class TestMessageEntity:
         """
         emoji_text = "🎉 text"
 
-        # Python len() sees 7 characters (UCS-4 internal, 1 char per code point)
-        assert len(emoji_text) == 7
+        # Python len() sees 6 characters: emoji=1 code point + space=1 + 'text'=4.
+        # Python uses UCS-4 internally — one Python char per Unicode code point,
+        # surrogates not exposed. THIS IS THE WRONG NUMBER FOR TELEGRAM OFFSETS.
+        assert len(emoji_text) == 6
 
-        # UTF-16 encoding: 🎉 → surrogate pair (2 units) + space (1) + text (4) = 7
+        # UTF-16 encoding: 🎉 → surrogate pair (2 units) + space (1) + 'text' (4) = 7.
+        # This is the count Telegram API uses for offset/length in MessageEntity —
+        # 1 unit MORE than Python len() because of the surrogate pair.
         utf16_units = len(emoji_text.encode("utf-16-le")) // 2
-        assert utf16_units == 7  # same number by coincidence, but different structure
+        assert utf16_units == 7
+        assert utf16_units == len(emoji_text) + 1  # exactly 1 unit more
 
         # emoji alone: 2 UTF-16 units, 1 Python char
         emoji_alone = "🎉"

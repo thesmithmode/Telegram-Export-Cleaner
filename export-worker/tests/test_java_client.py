@@ -716,8 +716,10 @@ class TestProgressTracker:
         finally:
             p.stop()
 
-    def test_build_progress_bar_clamps_filled(self):
-        # Static method — can be called without an instance
+    async def test_build_progress_bar_clamps_filled(self):
+        # Static method — can be called without an instance.
+        # Метод async просто чтобы попасть под класс-уровневую @pytest.mark.asyncio;
+        # сам _build_progress_bar — sync.
         assert JavaBotClient._build_progress_bar(50) == "▓▓▓▓▓░░░░░"
         assert JavaBotClient._build_progress_bar(100) == "▓▓▓▓▓▓▓▓▓▓"
         assert JavaBotClient._build_progress_bar(110) == "▓▓▓▓▓▓▓▓▓▓"

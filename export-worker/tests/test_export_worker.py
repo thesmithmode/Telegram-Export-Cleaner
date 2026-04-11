@@ -675,6 +675,13 @@ class TestExportWorkerProgressReporting:
         worker = ExportWorker()
         worker.queue_consumer = AsyncMock()
         worker.telegram_client = AsyncMock()
+        # process_job() сначала зовёт verify_and_get_info — если не замокать,
+        # AsyncMock вернёт MagicMock, который нельзя распаковать в (accessible,
+        # info, reason), исключение упадёт в outer except и до _fetch_all
+        # код вообще не дойдёт.
+        worker.telegram_client.verify_and_get_info = AsyncMock(
+            return_value=(True, {"title": "Test", "type": "private"}, None)
+        )
         worker.java_client = _make_mock_java_client()
         worker.telegram_client.get_messages_count = AsyncMock(return_value=100)
         worker.message_cache = MessageCache(enabled=False)
@@ -894,10 +901,12 @@ class TestExportWorkerWithCache:
 
         await worker.process_job(job)
 
-        # Verify: Java received ALL 5 messages (3 cached + 2 new)
+        # Verify: Java received ALL 5 messages (3 cached + 2 new).
+        # messages_for_send из cache-path — это AsyncGenerator (iter_messages
+        # из SQLite), а не list, поэтому собираем через async for.
         args, kwargs = worker.java_client.send_response.call_args
         assert kwargs["status"] == "completed"
-        result_ids = sorted(m.id for m in kwargs["messages"])
+        result_ids = sorted([m.id async for m in kwargs["messages"]])
         assert result_ids == [1, 2, 3, 4, 5]
 
 
@@ -1013,9 +1022,10 @@ class TestExportWorkerDateCache:
         assert ("2025-01-09", "2025-01-10") in fetch_calls
         assert ("2025-01-14", "2025-01-15") in fetch_calls
 
-        # Verify: Java received all 15 messages
+        # Verify: Java received all 15 messages.
+        # date-cache path возвращает AsyncGenerator из iter_messages_by_date.
         last_call = worker.java_client.send_response.call_args
-        result_ids = sorted(m.id for m in last_call.kwargs["messages"])
+        result_ids = sorted([m.id async for m in last_call.kwargs["messages"]])
         assert result_ids == list(range(1, 16))
 
         # Cache now has complete Jan 1-15
