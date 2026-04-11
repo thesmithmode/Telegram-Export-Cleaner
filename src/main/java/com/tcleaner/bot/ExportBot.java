@@ -44,7 +44,7 @@ import java.util.regex.Pattern;
  *
  * <h3>Команды</h3>
  * <ul>
- *   <li>/start, /help — справка, автоматически снимает устаревшую reply-клавиатуру</li>
+ *   <li>/start — справка, автоматически снимает устаревшую reply-клавиатуру</li>
  *   <li>/cancel — отмена активного экспорта</li>
  *   <li>@username, https://t.me/username — запуск диалога</li>
  * </ul>
@@ -84,6 +84,10 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     static final String CB_DATE_RANGE = "date_range";
     static final String CB_FROM_START = "from_start";
     static final String CB_TO_TODAY = "to_today";
+    static final String CB_LAST_24H = "last_24h";
+    static final String CB_LAST_3D = "last_3d";
+    static final String CB_LAST_7D = "last_7d";
+    static final String CB_LAST_30D = "last_30d";
     static final String CB_BACK_TO_MAIN = "back_main";
     static final String CB_BACK_TO_DATE_CHOICE = "back_date_choice";
     static final String CB_BACK_TO_FROM_DATE = "back_from_date";
@@ -109,7 +113,6 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     void registerBotCommands() {
         messenger.setMyCommands(List.of(
                 new BotCommand("/start", "Запустить бота и показать справку"),
-                new BotCommand("/help", "Показать справку"),
                 new BotCommand("/cancel", "Отменить активный экспорт")
         ));
     }
@@ -157,7 +160,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     }
 
     private void handleMessageText(long chatId, long userId, String text) {
-        if (text.startsWith("/start") || text.startsWith("/help")) {
+        if (text.startsWith("/start")) {
             getSession(userId).reset();
             // Снимаем устаревшую reply-клавиатуру (кнопки «Выбрать группу/канал»
             // из прежних версий, закэшированные в Telegram-клиенте пользователя).
@@ -238,6 +241,10 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
                 session.setToDate(null);
                 startExport(chatId, userId, messageId);
             }
+            case CB_LAST_24H -> startQuickRangeExport(chatId, userId, messageId, 1);
+            case CB_LAST_3D -> startQuickRangeExport(chatId, userId, messageId, 3);
+            case CB_LAST_7D -> startQuickRangeExport(chatId, userId, messageId, 7);
+            case CB_LAST_30D -> startQuickRangeExport(chatId, userId, messageId, 30);
             case CB_DATE_RANGE -> {
                 session.setState(UserSession.State.AWAITING_FROM_DATE);
                 messenger.editMessage(chatId, messageId,
@@ -407,6 +414,24 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
                                 .build()))
                 .keyboardRow(new InlineKeyboardRow(
                         InlineKeyboardButton.builder()
+                                .text("⏱ 24 часа")
+                                .callbackData(CB_LAST_24H)
+                                .build(),
+                        InlineKeyboardButton.builder()
+                                .text("🗓 3 дня")
+                                .callbackData(CB_LAST_3D)
+                                .build()))
+                .keyboardRow(new InlineKeyboardRow(
+                        InlineKeyboardButton.builder()
+                                .text("🗓 7 дней")
+                                .callbackData(CB_LAST_7D)
+                                .build(),
+                        InlineKeyboardButton.builder()
+                                .text("🗓 30 дней")
+                                .callbackData(CB_LAST_30D)
+                                .build()))
+                .keyboardRow(new InlineKeyboardRow(
+                        InlineKeyboardButton.builder()
                                 .text("📅 Указать диапазон дат")
                                 .callbackData(CB_DATE_RANGE)
                                 .build()))
@@ -416,6 +441,19 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
                                 .callbackData(CB_BACK_TO_MAIN)
                                 .build()))
                 .build();
+    }
+
+    /**
+     * Быстрый экспорт за последние N календарных дней (включая сегодня).
+     * Устанавливает fromDate = (сегодня - (days - 1)), toDate = null (= до сегодня)
+     * и сразу стартует задачу, редактируя исходное сообщение выбора диапазона.
+     */
+    private void startQuickRangeExport(long chatId, long userId, int messageId, int days) {
+        UserSession session = getSession(userId);
+        LocalDate from = LocalDate.now().minusDays(days - 1L);
+        session.setFromDate(from.atStartOfDay().toString());
+        session.setToDate(null);
+        startExport(chatId, userId, messageId);
     }
 
     private InlineKeyboardMarkup buildFromDateKeyboard() {

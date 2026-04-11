@@ -97,8 +97,9 @@ class MessageConverter:
         """
         Convert MessageEntity list to result.json format.
 
-        MessageEntity has: type, offset (character position), length (character count)
-        result.json format uses the same: offset and length directly
+        MessageEntity has: type, offset (UTF-16 code unit position), length (UTF-16 code units).
+        Telegram API uses UTF-16 offsets — emoji outside BMP (U+10000+) count as 2 units.
+        Pyrogram already returns UTF-16 offsets, so we pass them through unchanged.
         """
         if not entities:
             return None
