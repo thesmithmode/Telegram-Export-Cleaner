@@ -66,7 +66,15 @@ jobs:
       - name: Run unit tests
         run: |
           cd export-worker
-          pytest tests/test_models.py tests/test_json_converter.py -v --cov=. --cov-report=xml
+          pytest \
+            tests/test_models.py \
+            tests/test_json_converter.py \
+            tests/test_export_worker.py \
+            tests/test_message_cache.py \
+            tests/test_queue_consumer.py \
+            tests/test_pyrogram_client.py \
+            tests/test_java_client.py \
+            -v --cov=. --cov-report=xml
 
       - name: Upload coverage reports
         uses: codecov/codecov-action@v4
