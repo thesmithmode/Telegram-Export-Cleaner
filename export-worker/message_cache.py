@@ -410,8 +410,8 @@ class MessageCache:
         if not self.enabled or self._db is None:
             return
         chat_id_int = int(chat_id)
-        async with self._db:
-            await self._add_date_range(chat_id_int, from_date, to_date)
+        await self._add_date_range(chat_id_int, from_date, to_date)
+        await self._db.commit()
 
     @staticmethod
     def _compute_missing_date_ranges(
