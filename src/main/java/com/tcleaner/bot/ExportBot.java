@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.longpolling.interfaces.LongPollingUpdateConsumer;
 import org.telegram.telegrambots.longpolling.starter.SpringLongPollingBot;
 import org.telegram.telegrambots.longpolling.util.LongPollingSingleThreadUpdateConsumer;
+import org.telegram.telegrambots.meta.api.objects.commands.BotCommand;
 import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.message.Message;
@@ -16,10 +17,12 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMa
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardRow;
 
+import jakarta.annotation.PostConstruct;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -100,6 +103,15 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         this.jobProducer = jobProducer;
         this.messenger = messenger;
         log.info("Telegram-бот инициализирован");
+    }
+
+    @PostConstruct
+    void registerBotCommands() {
+        messenger.setMyCommands(List.of(
+                new BotCommand("/start", "Запустить бота и показать справку"),
+                new BotCommand("/help", "Показать справку"),
+                new BotCommand("/cancel", "Отменить активный экспорт")
+        ));
     }
 
     @Override

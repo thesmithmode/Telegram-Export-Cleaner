@@ -6,12 +6,17 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Service;
 import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands;
 import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText;
+import org.telegram.telegrambots.meta.api.objects.commands.BotCommand;
 import org.telegram.telegrambots.meta.api.objects.message.Message;
+import org.telegram.telegrambots.meta.api.objects.commands.scope.BotCommandScopeDefault;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardRemove;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.telegram.telegrambots.meta.generics.TelegramClient;
+
+import java.util.List;
 
 /**
  * Сервис отправки и редактирования сообщений в Telegram.
@@ -159,6 +164,23 @@ public class BotMessenger {
         } catch (TelegramApiException e) {
             log.error("Не удалось отправить сообщение c ReplyKeyboardRemove в чат {}: {}",
                     chatId, e.getMessage());
+        }
+    }
+
+    /**
+     * Регистрирует список slash-команд бота для подсказок в Telegram-клиентах.
+     */
+    public void setMyCommands(List<BotCommand> commands) {
+        try {
+            telegramClient.execute(
+                    SetMyCommands.builder()
+                            .commands(commands)
+                            .scope(new BotCommandScopeDefault())
+                            .build()
+            );
+            log.info("Telegram slash-команды зарегистрированы: {}", commands.size());
+        } catch (TelegramApiException e) {
+            log.error("Не удалось зарегистрировать slash-команды: {}", e.getMessage());
         }
     }
 }
