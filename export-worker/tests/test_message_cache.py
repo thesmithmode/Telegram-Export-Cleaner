@@ -711,3 +711,45 @@ class TestStoreMessagesAtomicity:
             "в ещё-не-закоммиченной транзакции, что невозможно после фикса."
         )
         assert await cache.get_cached_ranges(CHAT) == [[1, 3]]
+
+
+class TestMarkDateRangeChecked:
+    """mark_date_range_checked — явная регистрация проверенного диапазона без сообщений."""
+
+    @pytest.fixture
+    async def cache(self, tmp_path):
+        c = MessageCache(db_path=str(tmp_path / "cache.db"), enabled=True)
+        await c.initialize()
+        yield c
+        await c.close()
+
+    @pytest.mark.asyncio
+    async def test_marks_empty_range_as_covered(self, cache):
+        """Диапазон без сообщений помечается покрытым — повторный get_missing_date_ranges его не возвращает."""
+        await cache.mark_date_range_checked(123, "2025-04-05", "2025-04-08")
+        missing = await cache.get_missing_date_ranges(123, "2025-04-05", "2025-04-08")
+        assert missing == []
+
+    @pytest.mark.asyncio
+    async def test_merges_with_existing_date_ranges(self, cache):
+        """mark_date_range_checked корректно мержит с уже существующими диапазонами."""
+        msgs = [
+            _make_msg(1, date="2025-01-01T10:00:00"),
+            _make_msg(2, date="2025-01-03T10:00:00"),
+        ]
+        await cache.store_messages(123, msgs)
+
+        # mark смежный диапазон Jan 4-6
+        await cache.mark_date_range_checked(123, "2025-01-04", "2025-01-06")
+
+        # Они должны слиться в [Jan 1, Jan 6]
+        ranges = await cache.get_cached_date_ranges(123)
+        assert len(ranges) == 1
+        assert ranges[0] == ["2025-01-01", "2025-01-06"]
+
+    @pytest.mark.asyncio
+    async def test_noop_when_disabled(self):
+        """Отключённый кэш — mark_date_range_checked не падает."""
+        cache = MessageCache(enabled=False)
+        await cache.mark_date_range_checked(123, "2025-01-01", "2025-01-07")
+        # Нет исключения — тест пройден
