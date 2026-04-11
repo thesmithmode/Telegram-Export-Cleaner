@@ -418,6 +418,7 @@ class ProgressTracker:
         self._last_reported_at = 0.0
         self._start_time = 0.0
         self._baseline_count = 0
+        self._last_count: int = 0
 
     async def start(self, total=None):
         """Send the initial 0%/spinner message and start the timing baseline."""
@@ -474,6 +475,7 @@ class ProgressTracker:
 
     async def track(self, count):
         """Report progress — throttled by pct step and wall-clock interval."""
+        self._last_count = count
         if not self._total:
             return
         now = time.time()
@@ -519,6 +521,23 @@ class ProgressTracker:
         )
         if mid:
             self._message_id = mid
+
+    async def on_floodwait(self, wait_seconds: int) -> None:
+        """Heartbeat во время Telegram FloodWait — обновляет прогресс-сообщение.
+
+        Вызывается из pyrogram_client.get_chat_history() перед asyncio.sleep().
+        Показывает пользователю что экспорт жив и ожидает снятия rate limit.
+        """
+        if not self._message_id:
+            return
+        await self._client.send_progress_update(
+            self._user_chat_id,
+            self._task_id,
+            message_count=self._last_count,
+            total=self._total,
+            progress_message_id=self._message_id,
+            eta_text=f"⏳ Telegram: ожидание ~{wait_seconds}с",
+        )
 
     async def finalize(self, count):
         """Emit the final 100% edit (bypasses throttling).
