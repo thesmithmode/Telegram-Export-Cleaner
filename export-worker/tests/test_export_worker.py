@@ -819,7 +819,8 @@ class TestExportWorkerWithCache:
         )
         await cache.initialize()
         worker.message_cache = cache
-        return worker
+        yield worker
+        await cache.close()
 
     @pytest.mark.asyncio
     async def test_first_export_populates_cache(self, worker):
@@ -928,7 +929,8 @@ class TestExportWorkerDateCache:
         )
         await cache.initialize()
         worker.message_cache = cache
-        return worker
+        yield worker
+        await cache.close()
 
     @pytest.mark.asyncio
     async def test_vasya_petya_kolya_date_export(self, worker):
@@ -1063,6 +1065,10 @@ class TestCancelBeforeStart:
         w.control_redis.get = AsyncMock(return_value=None)
         w.control_redis.delete = AsyncMock()
         w.control_redis.set = AsyncMock()
+        # pipeline() — sync в redis-py, должен возвращать pipe-объект, не coroutine.
+        # Без этого control_redis.pipeline() вернёт AsyncMock-coroutine → RuntimeWarning.
+        pipe = _make_pipeline_mock()
+        w.control_redis.pipeline = MagicMock(return_value=pipe)
         return w
 
     @pytest.mark.asyncio

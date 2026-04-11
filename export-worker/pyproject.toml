@@ -9,3 +9,4 @@
 # молча превратились бы в broken generator-fixtures, и половина тестов выдала
 # бы false-pass или непонятные ошибки.
 asyncio_mode = "auto"
+asyncio_loop_scope = "function"
