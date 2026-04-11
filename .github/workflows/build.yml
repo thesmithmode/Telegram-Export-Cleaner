@@ -155,6 +155,19 @@ jobs:
     needs: docker
     timeout-minutes: 15
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy docker-compose.prod.yml to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          port: ${{ secrets.SERVER_PORT }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: docker-compose.prod.yml
+          target: /root/telegram-cleaner/
+          strip_components: 0
+
       - name: SSH Deploy
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -164,100 +177,22 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           envs: GH_TOKEN,GH_ACTOR
           script: |
-            mkdir -p /root/telegram-cleaner && cd /root/telegram-cleaner
-            cat <<EOF > docker-compose.yml
-            services:
-              java-bot:
-                image: ghcr.io/${{ github.repository_owner }}/telegram-export-cleaner:latest
-                ports: ["127.0.0.1:8081:8080"]
-                # Label для фильтрованного docker prune в CI — чтобы не снести
-                # контейнеры SillyTavern и других сервисов на этом же хосте.
-                labels:
-                  - "project=telegram-cleaner"
-                environment:
-                  - REDIS_HOST=redis
-                  - REDIS_PORT=6379
-                  - REDIS_QUEUE_NAME=telegram_export
-                  - TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
-                  - TELEGRAM_BOT_USERNAME=ExportCleanerBot
-                  - JAVA_API_KEY=${{ secrets.JAVA_API_KEY }}
-                volumes:
-                  - export-data:/data/export
-                depends_on: { redis: { condition: service_healthy } }
-                restart: unless-stopped
-                healthcheck:
-                  test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/health || exit 1"]
-                  interval: 10s
-                  timeout: 5s
-                  retries: 5
-                  start_period: 30s
-                # Снижено с 1024M: выровнено с репо-compose. Dockerfile -Xmx640m рассчитан под 768m.
-                mem_limit: 768m
-              python-worker:
-                image: ghcr.io/${{ github.repository_owner }}/telegram-export-python-worker:latest
-                labels:
-                  - "project=telegram-cleaner"
-                environment:
-                  # Telegram API
-                  - TELEGRAM_API_ID=${{ secrets.TELEGRAM_API_ID }}
-                  - TELEGRAM_API_HASH=${{ secrets.TELEGRAM_API_HASH }}
-                  - TELEGRAM_SESSION_STRING=${{ secrets.TELEGRAM_SESSION_STRING }}
-                  - TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
-                  # Java Bot API
-                  - JAVA_API_BASE_URL=http://java-bot:8080
-                  - JAVA_API_KEY=${{ secrets.JAVA_API_KEY }}
-                  # Redis
-                  - REDIS_HOST=redis
-                  - REDIS_PORT=6379
-                  - REDIS_DB=0
-                  - REDIS_QUEUE_NAME=telegram_export
-                  # Worker (подогнано под weak server: 1 core, 3-4GB RAM)
-                  - WORKER_NAME=export-worker-prod
-                  - MAX_WORKERS=1
-                  - JOB_TIMEOUT=1800
-                  - MAX_RETRIES=3
-                  - RETRY_BASE_DELAY=1.0
-                  - RETRY_MAX_DELAY=32.0
-                  # SQLite message cache (critical: hdd volume below)
-                  - CACHE_DB_PATH=/data/cache/messages.db
-                  - CACHE_ENABLED=true
-                  - CACHE_MAX_DISK_GB=25
-                  # Logging
-                  - LOG_LEVEL=INFO
-                  - PYTHONUNBUFFERED=1
-                volumes:
-                  # SQLite кэш сообщений — должен переживать рестарты контейнера.
-                  - cache-data:/data/cache
-                depends_on: { java-bot: { condition: service_healthy } }
-                restart: unless-stopped
-                healthcheck:
-                  test: ["CMD-SHELL", "pgrep -f 'python.*main.py' || exit 1"]
-                  interval: 15s
-                  timeout: 5s
-                  retries: 3
-                  start_period: 10s
-                # Увеличено с 512M: выровнено с репо — больше памяти для in-flight батчей и Pyrogram.
-                mem_limit: 768m
-              redis:
-                image: redis:7-alpine
-                labels:
-                  - "project=telegram-cleaner"
-                # noeviction: выбрасывает ошибку при переполнении вместо тихого удаления ключей.
-                # allkeys-lru в проде молча выкидывал ключи очереди и ломал экспорты.
-                command: redis-server --appendonly yes --appendfsync everysec --maxmemory 128mb --maxmemory-policy noeviction
-                volumes:
-                  - redis-data:/data
-                healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 10s }
-                restart: unless-stopped
-                mem_limit: 256m
-            volumes:
-              redis-data:
-              export-data:
-              cache-data:
-            EOF
+            cd /root/telegram-cleaner
+
+            # ── Секреты в .env (не коммитится) ──────────────────────────────
+            # Структура сервисов — в docker-compose.prod.yml (в репо).
+            # Разделение: конфиг → git, секреты → GitHub Secrets → .env на сервере.
+            cat > .env << 'ENVEOF'
+            TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+            TELEGRAM_API_ID=${{ secrets.TELEGRAM_API_ID }}
+            TELEGRAM_API_HASH=${{ secrets.TELEGRAM_API_HASH }}
+            TELEGRAM_SESSION_STRING=${{ secrets.TELEGRAM_SESSION_STRING }}
+            JAVA_API_KEY=${{ secrets.JAVA_API_KEY }}
+            ENVEOF
+
             echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
-            docker compose pull
-            docker compose up -d --remove-orphans
+            docker compose -f docker-compose.prod.yml --env-file .env pull
+            docker compose -f docker-compose.prod.yml --env-file .env up -d --remove-orphans
 
             # ── Post-deploy smoke test ──────────────────────────────────────
             # Раньше deploy считался успешным, если `compose up -d` вернул 0,
@@ -278,11 +213,11 @@ jobs:
             if [ -z "$HEALTH_OK" ]; then
               echo "❌ /api/health не отвечает 90 сек — деплой сломан"
               echo "--- docker ps ---"
-              docker compose ps
+              docker compose -f docker-compose.prod.yml ps
               echo "--- java-bot logs (tail 100) ---"
-              docker compose logs --tail=100 java-bot || true
+              docker compose -f docker-compose.prod.yml logs --tail=100 java-bot || true
               echo "--- python-worker logs (tail 50) ---"
-              docker compose logs --tail=50 python-worker || true
+              docker compose -f docker-compose.prod.yml logs --tail=50 python-worker || true
               exit 1
             fi
 
