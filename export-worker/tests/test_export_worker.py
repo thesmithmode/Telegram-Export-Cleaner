@@ -1062,7 +1062,7 @@ class TestCancelBeforeStart:
         w.queue_consumer.mark_job_processing = AsyncMock()
         w.queue_consumer.mark_job_completed = AsyncMock()
         w.queue_consumer.mark_job_failed = AsyncMock()
-        w.telegram_client = AsyncMock()
+        w.telegram_client = MagicMock()
         w.java_client = _make_mock_java_client()
         w.message_cache = MessageCache(enabled=False)
         w.control_redis = AsyncMock()
@@ -1121,8 +1121,7 @@ class TestCancelBeforeStart:
         async def mock_history(*args, **kwargs):
             yield ExportedMessage(id=1, date="2025-01-01T00:00:00", text="msg")
 
-        # Assign directly — AsyncMock's __getattr__ will handle function call
-        worker.telegram_client.get_chat_history = MagicMock(side_effect=mock_history)
+        worker.telegram_client.get_chat_history = mock_history
         worker.java_client.send_response = AsyncMock(return_value=True)
 
         await worker.process_job(job)
