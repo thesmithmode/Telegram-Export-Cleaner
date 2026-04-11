@@ -682,24 +682,30 @@ class ExportWorker:
             job.chat_id, from_date_str, to_date_str
         )
 
-    async def _export_with_id_cache(self, job: ExportRequest) -> Optional[list[ExportedMessage]]:
+    async def _export_with_id_cache(
+        self, job: ExportRequest
+    ) -> Optional[tuple[int, AsyncGenerator]]:
         """
         Full export (no date filter) with cache by message ID.
 
         1. Check which ID ranges are cached
         2. Fetch newer messages + fill ID gaps
-        3. Store in cache, merge, return
+        3. Store in cache, merge, return (count, generator)
         """
         cached_ranges = await self.message_cache.get_cached_ranges(job.chat_id)
 
         if not cached_ranges:
             logger.info(f"  Cache MISS для чата {job.chat_id} — полная загрузка")
-            # No cache — full fetch, populate cache
-            messages = await self._fetch_all_messages(job)
-            if messages:
-                await self.message_cache.store_messages(job.chat_id, messages)
+            # No cache — full fetch. _fetch_all_messages already caches messages
+            # in batches and returns (count, AsyncGenerator) that reads from cache.
+            # Forward its result directly — double-storing a tuple crashed with
+            # "'int' object has no attribute 'model_dump'".
+            result = await self._fetch_all_messages(job)
+            if result is None:
+                return None
+            if self.message_cache and self.message_cache.enabled:
                 await self.message_cache.evict_if_needed()
-            return (len(messages) if messages else 0, messages) if messages is not None else None
+            return result
 
         cache_max_id = max(r[1] for r in cached_ranges)
         logger.info(f"  Cache HIT для чата {job.chat_id}: ranges={cached_ranges}, cache_max_id={cache_max_id}")
