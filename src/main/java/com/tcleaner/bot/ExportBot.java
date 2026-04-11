@@ -331,6 +331,12 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         String taskId;
         String targetIdentifier = session.getChatId();
 
+        if (targetIdentifier == null) {
+            messenger.send(chatId, "❌ Сессия истекла. Отправьте @username или ссылку на чат заново.");
+            session.reset();
+            return;
+        }
+
         try {
             taskId = jobProducer.enqueue(userId, chatId, targetIdentifier,
                     session.getFromDate(), session.getToDate());
