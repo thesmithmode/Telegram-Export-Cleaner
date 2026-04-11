@@ -40,20 +40,21 @@ Redis (очереди, locks, cache)
 - Управление wizard UI (inline кнопки)
 - Отслеживание session state для каждого пользователя
 
-**Session States:**
+**Session States (`UserSession.State`):**
 ```
 IDLE
-  ↓ (user starts /start)
-WAITING_CHAT_ID
-  ↓ (user sends chat ID/username)
-WAITING_DATE_MODE
-  ↓ (user chooses: all, range, specific)
-WAITING_START_DATE, WAITING_END_DATE
-  ↓ (user enters dates)
-PROCESSING
-  ↓ (job in queue, waiting for result)
-IDLE (after result sent)
+  ↓ (user sends chat ID / username / t.me link)
+AWAITING_DATE_CHOICE
+  ↓ (user picks: весь чат / 24ч / 3д / 7д / 30д / указать даты)
+AWAITING_FROM_DATE            IDLE (quick-range / "весь чат" → сразу в очередь)
+  ↓ (user types дд.мм.гггг or [⏮ С начала])
+AWAITING_TO_DATE
+  ↓ (user types дд.мм.гггг or [⏭ До сегодня])
+IDLE (job enqueued, Python worker отвечает напрямую через /api/convert)
 ```
+
+Состояния `PROCESSING` нет: Java-бот не ждёт ответа активно — Python-воркер
+сам вызывает `POST /api/convert` и шлёт файл пользователю через Telegram Bot API.
 
 ### ExportJobProducer
 
@@ -73,7 +74,17 @@ IDLE (after result sent)
    telegram_export_express   // приоритетная (кэшированные)
    ```
 
-3. **Cancel Support** — возможность отмены во время обработки
+3. **Quick-Range Shortcuts** — кнопки быстрого экспорта без ввода дат.
+   По клику `fromDate` выставляется в `(today − (N−1) days)`, `toDate = null`
+   (до сегодня включительно), задача сразу уходит в очередь.
+   ```
+   CB_LAST_24H  →  last 1 day
+   CB_LAST_3D   →  last 3 days
+   CB_LAST_7D   →  last 7 days
+   CB_LAST_30D  →  last 30 days
+   ```
+
+4. **Cancel Support** — возможность отмены во время обработки
    ```java
    cancel_export:{taskId}  // SETEX на 30 минут
    ```
@@ -144,48 +155,54 @@ synchronize при изменении state и параметров
 
 ## Wizard Flow
 
-**Пример: Пользователь экспортирует @durov**
+**Путь A — быстрый экспорт (клик «🗓 7 дней»)**
 
 ```
 User: /start
   ↓
-Bot: "Введите chat ID, username или ссылку"
-UserSession: IDLE → WAITING_CHAT_ID
+Bot: "Введите chat ID, username или ссылку на чат"
+UserSession: IDLE
   ↓
-User: @durov
+User: @channel или https://t.me/channel или -1001234567890
   ↓
-Bot: ResolveCanonicalId (Python) → 123456 (durov's ID)
+Bot: "📋 Чат: @channel — выберите диапазон:"
+     [📦 Весь чат]
+     [⏱ 24 часа] [🗓 3 дня] [🗓 7 дней] [🗓 30 дней]
+     [📅 Указать даты] [❌ Отмена]
+UserSession: IDLE → AWAITING_DATE_CHOICE
   ↓
-Bot: "Выбери опцию:"
-     [📦 Весь чат] [📅 Диапазон] [❌ Отмена]
-UserSession: WAITING_CHAT_ID → WAITING_DATE_MODE
-  ↓
-User: clicks [📅 Диапазон]
-  ↓
-Bot: "Начальная дата (дд.мм.гггг) или [⏮ С начала]"
-UserSession: WAITING_DATE_MODE → WAITING_START_DATE
-  ↓
-User: 01.01.2024
-  ↓
-Bot: "Конечная дата (дд.мм.гггг) или [⏭ До сегодня]"
-UserSession: WAITING_START_DATE → WAITING_END_DATE
-  ↓
-User: 31.12.2024
+User: clicks [🗓 7 дней]  ← startQuickRangeExport(days=7)
   ↓
 ExportJobProducer.enqueue()
-  - Check SET NX active_export:{userId}
-  - Create JSON task: {chat_id: 123456, start: 2024-01-01, end: 2024-12-31}
+  - SET NX active_export:{userId}  → дубликат? → отказ
+  - fromDate = today − 6 days, toDate = null (до сегодня)
   - LPUSH to telegram_export_express (likely cached)
+UserSession: AWAITING_DATE_CHOICE → IDLE
   ↓
-Bot: "⏳ Экспорт в очереди..."
-UserSession: WAITING_END_DATE → PROCESSING
+[Python Worker: SQLite date-hit? → fast path. Miss → Pyrogram]
   ↓
-[Python Worker processes...]
+Worker → POST /api/convert → Java → sendFile(user_chat_id, output.txt)
+```
+
+**Путь B — ручной ввод дат**
+
+```
+[...после AWAITING_DATE_CHOICE...]
   ↓
-JavaBotClient calls BotMessenger.sendFile()
+User: clicks [📅 Указать даты]
+UserSession: AWAITING_DATE_CHOICE → AWAITING_FROM_DATE
   ↓
-Bot: [Sends output.txt file]
-UserSession: PROCESSING → IDLE
+Bot: "Введите начальную дату дд.мм.гггг" + [⏮ С начала чата] [↩ Назад]
+  ↓
+User: 01.01.2024  (или [⏮ С начала])
+UserSession: AWAITING_FROM_DATE → AWAITING_TO_DATE
+  ↓
+Bot: "Введите конечную дату дд.мм.гггг" + [⏭ До сегодня] [↩ Назад]
+  ↓
+User: 31.12.2024  (или [⏭ До сегодня])
+  ↓
+ExportJobProducer.enqueue() → ...то же что в пути A...
+UserSession: AWAITING_TO_DATE → IDLE
 ```
 
 ## Redis Keys
