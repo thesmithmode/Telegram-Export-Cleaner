@@ -716,13 +716,6 @@ class TestStoreMessagesAtomicity:
 class TestMarkDateRangeChecked:
     """mark_date_range_checked — явная регистрация проверенного диапазона без сообщений."""
 
-    @pytest.fixture
-    async def cache(self, tmp_path):
-        c = MessageCache(db_path=str(tmp_path / "cache.db"), enabled=True)
-        await c.initialize()
-        yield c
-        await c.close()
-
     @pytest.mark.asyncio
     async def test_marks_empty_range_as_covered(self, cache):
         """Диапазон без сообщений помечается покрытым — повторный get_missing_date_ranges его не возвращает."""
