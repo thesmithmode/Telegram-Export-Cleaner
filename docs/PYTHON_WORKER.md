@@ -352,5 +352,5 @@ redis-cli
 
 See also:
 - [ARCHITECTURE.md](ARCHITECTURE.md) — system design
-- [BOT.md](BOT.md) — Java bot implementation
 - [DEVELOPMENT.md](DEVELOPMENT.md) — contributing guidelines
+- [README.md](../README.md) — project overview & quick start

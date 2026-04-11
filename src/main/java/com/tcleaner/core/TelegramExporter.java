@@ -16,6 +16,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.StreamSupport;
 
 /**
  * Основной обработчик Telegram-экспорта: читает {@code result.json} и
@@ -115,12 +116,11 @@ public class TelegramExporter {
             return List.of();
         }
 
-        List<JsonNode> messages = new ArrayList<>();
-        messagesNode.forEach(messages::add);
-
-        if (filter != null) {
-            messages = filter.filter(messages);
-        }
+        // Single pass: iterate + filter without creating an intermediate ArrayList.
+        List<JsonNode> messages = StreamSupport
+                .stream(messagesNode.spliterator(), false)
+                .filter(n -> filter == null || filter.matches(n))
+                .collect(java.util.stream.Collectors.toList());
 
         log.debug("Найдено {} сообщений для обработки", messages.size());
 

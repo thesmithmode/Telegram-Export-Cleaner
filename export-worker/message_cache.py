@@ -1,239 +1,274 @@
 """
-MessageCache: Redis-backed message cache using sorted sets.
+MessageCache: SQLite-backed message cache stored on disk (HDD/SSD).
 
-Stores exported messages per chat in Redis sorted sets (score=msg_id).
-Tracks cached ranges (by ID and by date) to enable gap detection.
+Replaces the previous Redis sorted-set implementation.  All message data lives
+in a single SQLite file, leaving Redis free for the job queue and short-lived
+state only.
 
-Redis keys:
-  cache:msgs:{chat_id}         — sorted set (score=msg_id, value=msgpack'd message)
-  cache:dates:{chat_id}        — sorted set (score=unix_ts, value=msg_id as bytes)
-  cache:ranges:{chat_id}       — string: JSON array [[low_id, high_id], ...]
-  cache:date_ranges:{chat_id}  — string: JSON array [["2025-01-01","2025-01-08"], ...]
-  cache:meta:{chat_id}         — hash: {last_access: unix_ts, msg_count: int}
+Schema:
+  messages          — msgpack blobs indexed by (chat_id, msg_id) and msg_ts
+  chat_id_ranges    — merged [min_id, max_id] intervals per chat
+  chat_date_ranges  — merged [from_date, to_date] intervals per chat
+  chat_meta         — LRU tracking: last_accessed, msg_count, size_bytes
+
+Capacity example (30 GB HDD, 25 GB budget):
+  ~400 full chats of 250k messages  |  ~2000 average chats of 50k messages
 """
 
-import json
 import logging
+import os
 import time
-from datetime import datetime, date, timedelta
-from typing import AsyncGenerator, List, Tuple, Optional, Union
+from datetime import date, datetime, timedelta, timezone
+from typing import AsyncGenerator, List, Optional, Tuple, Union
 
+import aiosqlite
 import msgpack
 
 from models import ExportedMessage
 
-try:
-    import redis.asyncio as aioredis
-except ImportError:
-    aioredis = None  # type: ignore
-
 logger = logging.getLogger(__name__)
+
+_FETCH_CHUNK = 1_000   # rows per fetchmany — O(1000) RAM peak
+_STORE_BATCH = 1_000   # rows per executemany INSERT
 
 
 class MessageCache:
-    """Per-chat message cache backed by Redis sorted sets."""
+    """Per-chat message cache backed by SQLite on disk."""
 
     def __init__(
         self,
-        redis_client,
-        ttl_seconds: int = 7 * 86400,
-        max_memory_mb: int = 120,
+        db_path: str = "/data/cache/messages.db",
+        max_disk_bytes: int = 25 * 1024 ** 3,
         max_messages_per_chat: int = 100_000,
+        ttl_seconds: int = 30 * 86400,
         enabled: bool = True,
     ):
-        self.redis = redis_client
-        self.ttl = ttl_seconds
-        self.max_memory_mb = max_memory_mb
+        self.db_path = db_path
+        self.max_disk_bytes = max_disk_bytes
         self.max_messages_per_chat = max_messages_per_chat
+        self.ttl = ttl_seconds
         self.enabled = enabled
+        self._db: Optional[aiosqlite.Connection] = None
 
-    # --- Key helpers ---
+    # ------------------------------------------------------------------ #
+    # Lifecycle
+    # ------------------------------------------------------------------ #
 
-    @staticmethod
-    def _msgs_key(chat_id: Union[int, str]) -> str:
-        return f"cache:msgs:{chat_id}"
+    async def initialize(self):
+        """Open SQLite connection and create tables (idempotent)."""
+        if not self.enabled:
+            return
+        db_dir = os.path.dirname(self.db_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
+        self._db = await aiosqlite.connect(self.db_path)
+        await self._db.executescript("""
+            PRAGMA journal_mode=WAL;
+            PRAGMA synchronous=NORMAL;
+            PRAGMA cache_size=-32000;
+            PRAGMA temp_store=MEMORY;
+            PRAGMA mmap_size=268435456;
 
-    @staticmethod
-    def _ranges_key(chat_id: Union[int, str]) -> str:
-        return f"cache:ranges:{chat_id}"
+            CREATE TABLE IF NOT EXISTS messages (
+                chat_id  INTEGER NOT NULL,
+                msg_id   INTEGER NOT NULL,
+                msg_ts   INTEGER NOT NULL,
+                data     BLOB    NOT NULL,
+                PRIMARY KEY (chat_id, msg_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_msg_ts
+                ON messages(chat_id, msg_ts);
 
-    @staticmethod
-    def _dates_key(chat_id: Union[int, str]) -> str:
-        return f"cache:dates:{chat_id}"
+            CREATE TABLE IF NOT EXISTS chat_id_ranges (
+                chat_id  INTEGER NOT NULL,
+                min_id   INTEGER NOT NULL,
+                max_id   INTEGER NOT NULL,
+                PRIMARY KEY (chat_id, min_id)
+            );
 
-    @staticmethod
-    def _date_ranges_key(chat_id: Union[int, str]) -> str:
-        return f"cache:date_ranges:{chat_id}"
+            CREATE TABLE IF NOT EXISTS chat_date_ranges (
+                chat_id    INTEGER NOT NULL,
+                from_date  TEXT    NOT NULL,
+                to_date    TEXT    NOT NULL,
+                PRIMARY KEY (chat_id, from_date)
+            );
 
-    @staticmethod
-    def _meta_key(chat_id: Union[int, str]) -> str:
-        return f"cache:meta:{chat_id}"
+            CREATE TABLE IF NOT EXISTS chat_meta (
+                chat_id       INTEGER PRIMARY KEY,
+                last_accessed REAL    NOT NULL DEFAULT 0,
+                msg_count     INTEGER NOT NULL DEFAULT 0,
+                size_bytes    INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        await self._db.commit()
+        logger.info(f"MessageCache initialized at {self.db_path}")
 
-    # --- Serialization ---
+    async def close(self):
+        """Close the SQLite connection."""
+        if self._db:
+            await self._db.close()
+            self._db = None
+
+    # ------------------------------------------------------------------ #
+    # Serialization
+    # ------------------------------------------------------------------ #
 
     @staticmethod
     def _serialize(msg: ExportedMessage) -> bytes:
-        """Serialize ExportedMessage to msgpack bytes."""
         return msgpack.packb(msg.model_dump(exclude_none=True), use_bin_type=True)
 
     @staticmethod
     def _deserialize(data: bytes) -> ExportedMessage:
-        """Deserialize msgpack bytes to ExportedMessage."""
         obj = msgpack.unpackb(data, raw=False)
         return ExportedMessage(**obj)
 
-    # --- Core API ---
-
-    STORE_BATCH_SIZE = 5000
-    GET_CHUNK_SIZE = 10_000  # Messages per Redis read — limits peak raw-bytes buffer
+    # ------------------------------------------------------------------ #
+    # Core write API
+    # ------------------------------------------------------------------ #
 
     async def store_messages(
         self, chat_id: Union[int, str], messages: List[ExportedMessage]
     ) -> int:
-        """Store messages in cache, update ranges. Returns count stored."""
-        if not self.enabled or not messages:
+        """Store messages in cache, update ranges and metadata.
+
+        Writes in batches of _STORE_BATCH rows — O(batch) RAM regardless of
+        how many messages are passed.  Returns the number of rows stored.
+        """
+        if not self.enabled or not messages or self._db is None:
             return 0
 
-        msgs_key = self._msgs_key(chat_id)
-        dates_key = self._dates_key(chat_id)
-        meta_key = self._meta_key(chat_id)
+        chat_id_int = int(chat_id)
+        now = time.time()
 
-        # Батчинг: разбиваем на чанки чтобы не убить Redis одним пайплайном
-        for i in range(0, len(messages), self.STORE_BATCH_SIZE):
-            batch = messages[i:i + self.STORE_BATCH_SIZE]
+        # Prepare rows and track approximate size
+        rows: list = []
+        total_bytes = 0
+        for msg in messages:
+            data = self._serialize(msg)
+            ts = int(self._parse_date_to_timestamp(msg.date) or 0)
+            rows.append((chat_id_int, msg.id, ts, data))
+            total_bytes += len(data)
 
-            # Telegram message IDs are unique within a chat — no dedup check needed.
-            # Single pipeline: add new entries via ZADD.
-            pipe = self.redis.pipeline()
-            for msg in batch:
-                pipe.zadd(msgs_key, {self._serialize(msg): msg.id})
-                ts = self._parse_date_to_timestamp(msg.date)
-                if ts is not None:
-                    pipe.zadd(dates_key, {str(msg.id).encode(): ts})
-            await pipe.execute()
+        # INSERT OR REPLACE: newest import always wins
+        for i in range(0, len(rows), _STORE_BATCH):
+            await self._db.executemany(
+                "INSERT OR REPLACE INTO messages(chat_id, msg_id, msg_ts, data)"
+                " VALUES (?,?,?,?)",
+                rows[i : i + _STORE_BATCH],
+            )
+        await self._db.commit()
 
-        # Update ID ranges
+        # Merge ID ranges
         msg_ids = sorted(m.id for m in messages)
-        new_range = [msg_ids[0], msg_ids[-1]]
-        await self._add_range(chat_id, new_range)
+        await self._add_range(chat_id_int, msg_ids[0], msg_ids[-1])
 
-        # Update date ranges
-        dates = sorted(set(self._extract_date_str(m.date) for m in messages if m.date))
+        # Merge date ranges
+        dates = sorted({self._extract_date_str(m.date) for m in messages if m.date})
         if dates:
-            await self._add_date_range(chat_id, [dates[0], dates[-1]])
+            await self._add_date_range(chat_id_int, dates[0], dates[-1])
 
-        # Update metadata
-        final_count = await self.redis.zcard(msgs_key)
-        await self.redis.hset(meta_key, mapping={
-            "last_access": str(int(time.time())),
-            "msg_count": str(final_count),
-        })
+        # Upsert metadata
+        async with self._db.execute(
+            "SELECT COUNT(*) FROM messages WHERE chat_id=?", (chat_id_int,)
+        ) as cur:
+            row = await cur.fetchone()
+            actual_count = row[0] if row else len(messages)
 
-        # Set/refresh TTL on all keys
-        await self._refresh_ttl(chat_id)
+        await self._db.execute(
+            """
+            INSERT INTO chat_meta(chat_id, last_accessed, msg_count, size_bytes)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                last_accessed = excluded.last_accessed,
+                msg_count     = excluded.msg_count,
+                size_bytes    = chat_meta.size_bytes + excluded.size_bytes
+            """,
+            (chat_id_int, now, actual_count, total_bytes),
+        )
+        await self._db.commit()
 
-        logger.debug(f"Cached {len(messages)} messages for chat {chat_id} (total: {final_count})")
+        logger.debug(
+            f"Cached {len(messages)} msgs for chat {chat_id_int} (total: {actual_count})"
+        )
+        await self.evict_if_needed()
         return len(messages)
 
-    async def get_messages(
-        self, chat_id: Union[int, str], low_id: int, high_id: int
-    ) -> List[ExportedMessage]:
-        """Retrieve cached messages in [low_id, high_id] range, sorted by ID ascending.
-
-        Reads from Redis in chunks of GET_CHUNK_SIZE to avoid loading a large raw-bytes
-        buffer into memory all at once (prevents OOM for chats with 100k+ cached messages).
-        """
-        if not self.enabled:
-            return []
-
-        msgs_key = self._msgs_key(chat_id)
-        messages = []
-        offset = 0
-
-        while True:
-            raw_items = await self.redis.zrangebyscore(
-                msgs_key, low_id, high_id,
-                start=offset, num=self.GET_CHUNK_SIZE,
-            )
-            if not raw_items:
-                break
-
-            for data in raw_items:
-                try:
-                    messages.append(self._deserialize(data))
-                except Exception as e:
-                    logger.warning(f"Failed to deserialize cached message: {e}")
-
-            offset += len(raw_items)
-            if len(raw_items) < self.GET_CHUNK_SIZE:
-                break
-
-        if not messages:
-            return []
-
-        # Touch last_access
-        await self._touch(chat_id)
-        await self._refresh_ttl(chat_id)
-
-        return messages
-
-    async def count_messages(
-        self, chat_id: Union[int, str], low_id: int, high_id: int
-    ) -> int:
-        """Count cached messages in [low_id, high_id] without loading them. O(1) via ZCOUNT."""
-        if not self.enabled:
-            return 0
-        return await self.redis.zcount(self._msgs_key(chat_id), low_id, high_id)
+    # ------------------------------------------------------------------ #
+    # Core read API
+    # ------------------------------------------------------------------ #
 
     async def iter_messages(
         self, chat_id: Union[int, str], low_id: int, high_id: int
     ) -> AsyncGenerator[ExportedMessage, None]:
-        """Async generator: yield messages one at a time from cache.
+        """Async generator — yields messages sorted by msg_id.
 
-        Memory: O(GET_CHUNK_SIZE) — reads Redis in chunks, never holds full list.
-        Use instead of get_messages() for large chats to avoid OOM.
+        Memory: O(_FETCH_CHUNK) — never loads the full result into RAM.
         """
-        if not self.enabled:
+        if not self.enabled or self._db is None:
             return
-        msgs_key = self._msgs_key(chat_id)
-        offset = 0
-        while True:
-            raw_items = await self.redis.zrangebyscore(
-                msgs_key, low_id, high_id,
-                start=offset, num=self.GET_CHUNK_SIZE,
-            )
-            if not raw_items:
-                break
-            for data in raw_items:
-                try:
-                    yield self._deserialize(data)
-                except Exception as e:
-                    logger.warning(f"Failed to deserialize cached message: {e}")
-            offset += len(raw_items)
-            if len(raw_items) < self.GET_CHUNK_SIZE:
-                break
-        await self._touch(chat_id)
-        await self._refresh_ttl(chat_id)
+
+        chat_id_int = int(chat_id)
+        await self._touch(chat_id_int)
+
+        async with self._db.execute(
+            "SELECT data FROM messages"
+            " WHERE chat_id=? AND msg_id BETWEEN ? AND ?"
+            " ORDER BY msg_id",
+            (chat_id_int, low_id, high_id),
+        ) as cursor:
+            while True:
+                rows = await cursor.fetchmany(_FETCH_CHUNK)
+                if not rows:
+                    break
+                for row in rows:
+                    try:
+                        yield self._deserialize(row[0])
+                    except Exception as exc:
+                        logger.warning(f"Deserialize error (chat {chat_id_int}): {exc}")
+
+    async def get_messages(
+        self, chat_id: Union[int, str], low_id: int, high_id: int
+    ) -> List[ExportedMessage]:
+        """Return messages as a list. Prefer iter_messages() for large chats."""
+        result = []
+        async for msg in self.iter_messages(chat_id, low_id, high_id):
+            result.append(msg)
+        return result
+
+    async def count_messages(
+        self, chat_id: Union[int, str], low_id: int, high_id: int
+    ) -> int:
+        """Count messages in [low_id, high_id] — fast via primary key index."""
+        if not self.enabled or self._db is None:
+            return 0
+        async with self._db.execute(
+            "SELECT COUNT(*) FROM messages"
+            " WHERE chat_id=? AND msg_id BETWEEN ? AND ?",
+            (int(chat_id), low_id, high_id),
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else 0
+
+    # ------------------------------------------------------------------ #
+    # ID-range management
+    # ------------------------------------------------------------------ #
 
     async def get_cached_ranges(self, chat_id: Union[int, str]) -> List[List[int]]:
-        """Return list of [low, high] ranges cached for this chat."""
-        if not self.enabled:
+        """Return list of [min_id, max_id] cached intervals for this chat."""
+        if not self.enabled or self._db is None:
             return []
-
-        ranges_key = self._ranges_key(chat_id)
-        raw = await self.redis.get(ranges_key)
-        if not raw:
-            return []
-
-        try:
-            return json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            return []
+        async with self._db.execute(
+            "SELECT min_id, max_id FROM chat_id_ranges"
+            " WHERE chat_id=? ORDER BY min_id",
+            (int(chat_id),),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [[r[0], r[1]] for r in rows]
 
     async def get_missing_ranges(
         self, chat_id: Union[int, str], requested_low: int, requested_high: int
     ) -> List[Tuple[int, int]]:
-        """Given requested [low, high], return sub-ranges NOT in cache."""
+        """Given [low, high], return sub-ranges NOT present in cache."""
         if not self.enabled:
             return [(requested_low, requested_high)]
 
@@ -241,137 +276,107 @@ class MessageCache:
         if not cached:
             return [(requested_low, requested_high)]
 
-        # Subtract cached intervals from [requested_low, requested_high]
-        missing = []
+        missing: list = []
         current = requested_low
-
         for low, high in cached:
             if low > current:
-                # Gap before this cached range
                 gap_end = min(low - 1, requested_high)
                 if gap_end >= current:
                     missing.append((current, gap_end))
             current = max(current, high + 1)
             if current > requested_high:
                 break
-
-        # Gap after last cached range
         if current <= requested_high:
             missing.append((current, requested_high))
-
         return missing
 
     @staticmethod
     def merge_and_sort(
         cached: List[ExportedMessage], fresh: List[ExportedMessage]
     ) -> List[ExportedMessage]:
-        """Merge two lists, deduplicate by ID, sort ascending by ID."""
-        by_id = {}
-        for msg in cached:
-            by_id[msg.id] = msg
-        for msg in fresh:
-            by_id[msg.id] = msg  # fresh overwrites cached (newer data)
+        """Merge two message lists, deduplicate by ID, sort by ID ascending."""
+        by_id = {msg.id: msg for msg in cached}
+        by_id.update({msg.id: msg for msg in fresh})  # fresh wins
         return sorted(by_id.values(), key=lambda m: m.id)
 
-    # --- Date-aware API ---
+    # ------------------------------------------------------------------ #
+    # Date-range API
+    # ------------------------------------------------------------------ #
+
+    async def iter_messages_by_date(
+        self, chat_id: Union[int, str], from_date: str, to_date: str
+    ) -> AsyncGenerator[ExportedMessage, None]:
+        """Stream messages in [from_date, to_date] (YYYY-MM-DD), sorted by msg_id."""
+        if not self.enabled or self._db is None:
+            return
+
+        chat_id_int = int(chat_id)
+        ts_from = int(self._date_str_to_timestamp(from_date))
+        ts_to   = int(self._date_str_to_timestamp(to_date)) + 86400 - 1
+        await self._touch(chat_id_int)
+
+        async with self._db.execute(
+            "SELECT data FROM messages"
+            " WHERE chat_id=? AND msg_ts BETWEEN ? AND ?"
+            " ORDER BY msg_id",
+            (chat_id_int, ts_from, ts_to),
+        ) as cursor:
+            while True:
+                rows = await cursor.fetchmany(_FETCH_CHUNK)
+                if not rows:
+                    break
+                for row in rows:
+                    try:
+                        yield self._deserialize(row[0])
+                    except Exception as exc:
+                        logger.warning(f"Deserialize error (chat {chat_id_int}): {exc}")
 
     async def get_messages_by_date(
         self, chat_id: Union[int, str], from_date: str, to_date: str
     ) -> List[ExportedMessage]:
-        """Retrieve cached messages within [from_date, to_date] (inclusive, YYYY-MM-DD)."""
-        if not self.enabled:
-            return []
-
-        dates_key = self._dates_key(chat_id)
-        ts_from = self._date_str_to_timestamp(from_date)
-        # to_date is inclusive: end of day
-        ts_to = self._date_str_to_timestamp(to_date) + 86400 - 1
-
-        # Get msg_ids from date index
-        raw_ids = await self.redis.zrangebyscore(dates_key, ts_from, ts_to)
-        if not raw_ids:
-            return []
-
-        msg_ids = [int(mid) for mid in raw_ids]
-        if not msg_ids:
-            return []
-
-        # Fetch actual messages by ID range
-        min_id = min(msg_ids)
-        max_id = max(msg_ids)
-        all_msgs = await self.get_messages(chat_id, min_id, max_id)
-
-        # Filter to only the msg_ids from the date index (exact match)
-        id_set = set(msg_ids)
-        return [m for m in all_msgs if m.id in id_set]
+        """Return date-filtered messages as a list."""
+        result = []
+        async for msg in self.iter_messages_by_date(chat_id, from_date, to_date):
+            result.append(msg)
+        return result
 
     async def count_messages_by_date(
         self, chat_id: Union[int, str], from_date: str, to_date: str
     ) -> int:
-        """Return count of cached messages in [from_date, to_date] — O(1), no data loaded."""
-        if not self.enabled:
+        """Count messages in [from_date, to_date] — fast via idx_msg_ts."""
+        if not self.enabled or self._db is None:
             return 0
-        dates_key = self._dates_key(chat_id)
-        ts_from = self._date_str_to_timestamp(from_date)
-        ts_to = self._date_str_to_timestamp(to_date) + 86400 - 1
-        return await self.redis.zcount(dates_key, ts_from, ts_to)
-
-    async def iter_messages_by_date(
-        self, chat_id: Union[int, str], from_date: str, to_date: str
-    ) -> AsyncGenerator:
-        """Stream cached messages in [from_date, to_date], sorted by msg_id, O(chunk) memory.
-
-        Loads msg_id list from the date index (integers only, lightweight),
-        then streams full message objects via iter_messages filtered to that id set.
-        """
-        if not self.enabled:
-            return
-
-        dates_key = self._dates_key(chat_id)
-        ts_from = self._date_str_to_timestamp(from_date)
-        ts_to = self._date_str_to_timestamp(to_date) + 86400 - 1
-
-        raw_ids = await self.redis.zrangebyscore(dates_key, ts_from, ts_to)
-        if not raw_ids:
-            return
-
-        msg_ids = [int(mid) for mid in raw_ids]
-        if not msg_ids:
-            return
-
-        id_set = set(msg_ids)
-        min_id = min(msg_ids)
-        max_id = max(msg_ids)
-
-        async for msg in self.iter_messages(chat_id, min_id, max_id):
-            if msg.id in id_set:
-                yield msg
+        ts_from = int(self._date_str_to_timestamp(from_date))
+        ts_to   = int(self._date_str_to_timestamp(to_date)) + 86400 - 1
+        async with self._db.execute(
+            "SELECT COUNT(*) FROM messages"
+            " WHERE chat_id=? AND msg_ts BETWEEN ? AND ?",
+            (int(chat_id), ts_from, ts_to),
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else 0
 
     async def get_cached_date_ranges(self, chat_id: Union[int, str]) -> List[List[str]]:
-        """Return list of [from_date, to_date] date ranges cached for this chat."""
-        if not self.enabled:
+        """Return list of [from_date, to_date] intervals cached for this chat."""
+        if not self.enabled or self._db is None:
             return []
-
-        raw = await self.redis.get(self._date_ranges_key(chat_id))
-        if not raw:
-            return []
-
-        try:
-            return json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            return []
+        async with self._db.execute(
+            "SELECT from_date, to_date FROM chat_date_ranges"
+            " WHERE chat_id=? ORDER BY from_date",
+            (int(chat_id),),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [[r[0], r[1]] for r in rows]
 
     async def get_missing_date_ranges(
         self, chat_id: Union[int, str], from_date: str, to_date: str
     ) -> List[Tuple[str, str]]:
-        """Given requested [from_date, to_date], return sub-ranges NOT in cache."""
+        """Given [from_date, to_date], return sub-ranges NOT present in cache."""
         if not self.enabled:
             return [(from_date, to_date)]
-
         cached = await self.get_cached_date_ranges(chat_id)
         if not cached:
             return [(from_date, to_date)]
-
         return self._compute_missing_date_ranges(cached, from_date, to_date)
 
     @staticmethod
@@ -380,15 +385,12 @@ class MessageCache:
     ) -> List[Tuple[str, str]]:
         """Subtract cached date intervals from [from_date, to_date]."""
         req_start = date.fromisoformat(from_date)
-        req_end = date.fromisoformat(to_date)
-
-        missing = []
+        req_end   = date.fromisoformat(to_date)
+        missing: list = []
         current = req_start
-
         for low_s, high_s in cached:
-            low = date.fromisoformat(low_s)
+            low  = date.fromisoformat(low_s)
             high = date.fromisoformat(high_s)
-
             if low > current:
                 gap_end = min(low - timedelta(days=1), req_end)
                 if gap_end >= current:
@@ -396,19 +398,146 @@ class MessageCache:
             current = max(current, high + timedelta(days=1))
             if current > req_end:
                 break
-
         if current <= req_end:
             missing.append((current.isoformat(), req_end.isoformat()))
-
         return missing
 
-    # --- Date helpers ---
+    # ------------------------------------------------------------------ #
+    # Internal range merge helpers
+    # ------------------------------------------------------------------ #
+
+    async def _add_range(self, chat_id: int, new_min: int, new_max: int):
+        """Merge [new_min, new_max] into this chat's stored ID ranges."""
+        cached = await self.get_cached_ranges(chat_id)
+        merged = self._merge_intervals(cached + [[new_min, new_max]])
+        await self._db.execute(
+            "DELETE FROM chat_id_ranges WHERE chat_id=?", (chat_id,)
+        )
+        await self._db.executemany(
+            "INSERT INTO chat_id_ranges(chat_id, min_id, max_id) VALUES (?,?,?)",
+            [(chat_id, r[0], r[1]) for r in merged],
+        )
+        await self._db.commit()
+
+    @staticmethod
+    def _merge_intervals(intervals: List[List[int]]) -> List[List[int]]:
+        """Classic interval merge (overlapping or adjacent → single interval)."""
+        if not intervals:
+            return []
+        sorted_iv = sorted(intervals, key=lambda x: x[0])
+        merged = [sorted_iv[0][:]]
+        for low, high in sorted_iv[1:]:
+            last = merged[-1]
+            if low <= last[1] + 1:
+                last[1] = max(last[1], high)
+            else:
+                merged.append([low, high])
+        return merged
+
+    async def _add_date_range(self, chat_id: int, new_from: str, new_to: str):
+        """Merge [new_from, new_to] into this chat's stored date ranges."""
+        cached = await self.get_cached_date_ranges(chat_id)
+        merged = self._merge_date_intervals(cached + [[new_from, new_to]])
+        await self._db.execute(
+            "DELETE FROM chat_date_ranges WHERE chat_id=?", (chat_id,)
+        )
+        await self._db.executemany(
+            "INSERT INTO chat_date_ranges(chat_id, from_date, to_date) VALUES (?,?,?)",
+            [(chat_id, r[0], r[1]) for r in merged],
+        )
+        await self._db.commit()
+
+    @staticmethod
+    def _merge_date_intervals(intervals: List[List[str]]) -> List[List[str]]:
+        """Merge overlapping or adjacent date intervals (YYYY-MM-DD strings)."""
+        if not intervals:
+            return []
+        sorted_iv = sorted(intervals, key=lambda x: x[0])
+        merged = [sorted_iv[0][:]]
+        for low_s, high_s in sorted_iv[1:]:
+            last      = merged[-1]
+            last_high = date.fromisoformat(last[1])
+            curr_low  = date.fromisoformat(low_s)
+            if curr_low <= last_high + timedelta(days=1):
+                if high_s > last[1]:
+                    last[1] = high_s
+            else:
+                merged.append([low_s, high_s])
+        return merged
+
+    # ------------------------------------------------------------------ #
+    # LRU touch & eviction
+    # ------------------------------------------------------------------ #
+
+    async def _touch(self, chat_id: int):
+        """Update last_accessed timestamp for LRU tracking."""
+        if self._db is None:
+            return
+        await self._db.execute(
+            "UPDATE chat_meta SET last_accessed=? WHERE chat_id=?",
+            (time.time(), chat_id),
+        )
+        await self._db.commit()
+
+    async def evict_if_needed(self) -> int:
+        """Evict least-recently-used chats until disk usage is under 90% of budget.
+
+        Evicts whole chats atomically so cache ranges stay consistent.
+        Returns the number of chats evicted.
+        """
+        if self._db is None:
+            return 0
+
+        async with self._db.execute(
+            "SELECT COALESCE(SUM(size_bytes), 0) FROM chat_meta"
+        ) as cur:
+            row = await cur.fetchone()
+            total_bytes: int = row[0] if row else 0
+
+        target = int(self.max_disk_bytes * 0.9)
+        if total_bytes <= target:
+            return 0
+
+        # Fetch candidates sorted oldest-first (LRU)
+        async with self._db.execute(
+            "SELECT chat_id, size_bytes FROM chat_meta ORDER BY last_accessed ASC"
+        ) as cur:
+            candidates = await cur.fetchall()
+
+        evicted = 0
+        for chat_id, size in candidates:
+            if total_bytes <= target:
+                break
+            await self._db.execute(
+                "DELETE FROM messages WHERE chat_id=?", (chat_id,)
+            )
+            await self._db.execute(
+                "DELETE FROM chat_id_ranges WHERE chat_id=?", (chat_id,)
+            )
+            await self._db.execute(
+                "DELETE FROM chat_date_ranges WHERE chat_id=?", (chat_id,)
+            )
+            await self._db.execute(
+                "DELETE FROM chat_meta WHERE chat_id=?", (chat_id,)
+            )
+            await self._db.commit()
+            total_bytes -= size
+            evicted += 1
+            logger.info(
+                f"Evicted LRU cache for chat {chat_id} "
+                f"({size // 1024} KB freed, remaining ~{total_bytes // 1024 // 1024} MB)"
+            )
+
+        return evicted
+
+    # ------------------------------------------------------------------ #
+    # Date/timestamp helpers
+    # ------------------------------------------------------------------ #
 
     @staticmethod
     def _parse_date_to_timestamp(date_str: str) -> Optional[float]:
         """Parse ISO datetime string to unix timestamp (UTC)."""
         try:
-            from datetime import timezone
             dt = datetime.fromisoformat(date_str)
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
@@ -419,7 +548,6 @@ class MessageCache:
     @staticmethod
     def _date_str_to_timestamp(date_str: str) -> float:
         """Parse YYYY-MM-DD to unix timestamp (start of day, UTC)."""
-        from datetime import timezone
         dt = datetime.fromisoformat(date_str + "T00:00:00").replace(tzinfo=timezone.utc)
         return dt.timestamp()
 
@@ -427,132 +555,3 @@ class MessageCache:
     def _extract_date_str(date_iso: str) -> str:
         """Extract YYYY-MM-DD from ISO datetime string."""
         return date_iso[:10]
-
-    # --- Range management ---
-
-    async def _add_range(self, chat_id: Union[int, str], new_range: List[int]):
-        """Add a new [low, high] interval and merge overlapping/adjacent."""
-        ranges = await self.get_cached_ranges(chat_id)
-        ranges.append(new_range)
-        merged = self._merge_intervals(ranges)
-        # If per-chat cap was enforced, adjust ranges to reflect actual data
-        await self.redis.set(self._ranges_key(chat_id), json.dumps(merged))
-
-    @staticmethod
-    def _merge_intervals(intervals: List[List[int]]) -> List[List[int]]:
-        """Merge overlapping and adjacent intervals. Classic interval merge."""
-        if not intervals:
-            return []
-
-        sorted_intervals = sorted(intervals, key=lambda x: x[0])
-        merged = [sorted_intervals[0][:]]  # copy first
-
-        for low, high in sorted_intervals[1:]:
-            last = merged[-1]
-            if low <= last[1] + 1:  # overlapping or adjacent
-                last[1] = max(last[1], high)
-            else:
-                merged.append([low, high])
-
-        return merged
-
-    async def _add_date_range(self, chat_id: Union[int, str], new_range: List[str]):
-        """Add a new [from_date, to_date] interval and merge overlapping/adjacent."""
-        ranges = await self.get_cached_date_ranges(chat_id)
-        ranges.append(new_range)
-        merged = self._merge_date_intervals(ranges)
-        await self.redis.set(self._date_ranges_key(chat_id), json.dumps(merged))
-
-    @staticmethod
-    def _merge_date_intervals(intervals: List[List[str]]) -> List[List[str]]:
-        """Merge overlapping and adjacent date intervals (YYYY-MM-DD strings)."""
-        if not intervals:
-            return []
-
-        sorted_intervals = sorted(intervals, key=lambda x: x[0])
-        merged = [sorted_intervals[0][:]]
-
-        for low_s, high_s in sorted_intervals[1:]:
-            last = merged[-1]
-            last_high = date.fromisoformat(last[1])
-            curr_low = date.fromisoformat(low_s)
-
-            # Adjacent (next day) or overlapping
-            if curr_low <= last_high + timedelta(days=1):
-                if high_s > last[1]:
-                    last[1] = high_s
-            else:
-                merged.append([low_s, high_s])
-
-        return merged
-
-    # --- TTL & metadata ---
-
-    async def _refresh_ttl(self, chat_id: Union[int, str]):
-        """Set/refresh TTL on all cache keys for chat."""
-        pipe = self.redis.pipeline()
-        pipe.expire(self._msgs_key(chat_id), self.ttl)
-        pipe.expire(self._dates_key(chat_id), self.ttl)
-        pipe.expire(self._ranges_key(chat_id), self.ttl)
-        pipe.expire(self._date_ranges_key(chat_id), self.ttl)
-        pipe.expire(self._meta_key(chat_id), self.ttl)
-        await pipe.execute()
-
-    async def _touch(self, chat_id: Union[int, str]):
-        """Update last_access timestamp."""
-        await self.redis.hset(
-            self._meta_key(chat_id),
-            "last_access",
-            str(int(time.time())),
-        )
-
-    # --- Eviction ---
-
-    async def evict_if_needed(self) -> int:
-        """Evict oldest-accessed chats until under memory budget. Returns count evicted."""
-        evicted = 0
-
-        # Scan for all cache:meta:* keys
-        meta_keys = []
-        async for key in self.redis.scan_iter(match="cache:meta:*"):
-            if isinstance(key, bytes):
-                key = key.decode()
-            meta_keys.append(key)
-
-        if not meta_keys:
-            return 0
-
-        # Get last_access for each, sort oldest first
-        chat_access = []
-        for mk in meta_keys:
-            chat_id = mk.replace("cache:meta:", "")
-            last_access = await self.redis.hget(mk, "last_access")
-            ts = int(last_access) if last_access else 0
-            chat_access.append((ts, chat_id))
-
-        chat_access.sort()  # oldest first
-
-        # Check memory (use Redis INFO if available, else estimate)
-        for _, chat_id in chat_access:
-            try:
-                info = await self.redis.info("memory")
-                used_mb = info.get("used_memory", 0) / (1024 * 1024)
-            except Exception:
-                # Fallback: always evict at least one if max_memory_mb=0
-                used_mb = self.max_memory_mb + 1
-
-            if used_mb <= self.max_memory_mb:
-                break
-
-            # Evict this chat
-            pipe = self.redis.pipeline()
-            pipe.delete(self._msgs_key(chat_id))
-            pipe.delete(self._dates_key(chat_id))
-            pipe.delete(self._ranges_key(chat_id))
-            pipe.delete(self._date_ranges_key(chat_id))
-            pipe.delete(self._meta_key(chat_id))
-            await pipe.execute()
-            evicted += 1
-            logger.info(f"Evicted cache for chat {chat_id} (last access: {_})")
-
-        return evicted

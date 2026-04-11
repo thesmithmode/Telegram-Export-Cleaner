@@ -52,10 +52,11 @@ class Settings(BaseSettings):
     RETRY_BASE_DELAY: float = 1.0  # seconds
     RETRY_MAX_DELAY: float = 32.0  # seconds
 
-    # Message Cache
+    # Message Cache (SQLite on disk)
     CACHE_ENABLED: bool = True
-    CACHE_TTL_SECONDS: int = 30 * 86400  # 30 days
-    CACHE_MAX_MEMORY_MB: int = 6000
+    CACHE_TTL_SECONDS: int = 30 * 86400          # 30 days
+    CACHE_DB_PATH: str = "/data/cache/messages.db"
+    CACHE_MAX_DISK_GB: float = 25.0               # ~400 full chats of 250k msgs
     CACHE_MAX_MESSAGES_PER_CHAT: int = 100_000
 
     # Logging
