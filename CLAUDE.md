@@ -36,10 +36,8 @@ README.md                     Быстрый старт
 - `docs/ARCHITECTURE.md` — полная схема системы
 - `docs/DEVELOPMENT.md` — dev-процесс, CI/CD
 - `docs/API.md` — REST API reference
-- `docs/BOT.md` — бот-команды, wizard UI
 - `docs/PYTHON_WORKER.md` — worker internals
 - `docs/SETUP.md` — деплой и конфигурация
-- `docs/SPECIFICATION.md` — функциональные требования
 - `README.md` — быстрый старт, переменные окружения
 - JavaDoc — `/** */` комментарии в каждом публичном Java-классе/методе (не отдельный файл)
 
