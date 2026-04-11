@@ -468,14 +468,17 @@ class TestTelegramClientDateFiltering:
         # Messages: Jan 3, Jan 2, Jan 1 (newest→oldest)
         raw_messages = [
             MagicMock(id=3, date=datetime(2025, 1, 3), entities=None, media=None,
+                      from_user=None,
                       forward_from=None, forward_sender_name=None,
                       forward_date=None, edit_date=None, reply_to_message_id=None,
                       caption=None, caption_entities=None, text="m3"),
             MagicMock(id=2, date=datetime(2025, 1, 2), entities=None, media=None,
+                      from_user=None,
                       forward_from=None, forward_sender_name=None,
                       forward_date=None, edit_date=None, reply_to_message_id=None,
                       caption=None, caption_entities=None, text="m2"),
             MagicMock(id=1, date=datetime(2025, 1, 1), entities=None, media=None,
+                      from_user=None,
                       forward_from=None, forward_sender_name=None,
                       forward_date=None, edit_date=None, reply_to_message_id=None,
                       caption=None, caption_entities=None, text="m1"),
@@ -487,17 +490,21 @@ class TestTelegramClientDateFiltering:
                 iteration_count += 1
                 yield msg
 
+        def fake_convert(m):
+            return ExportedMessage(id=m.id, date="2025-01-01T00:00:00", text=m.text)
+
         mock_pyrogram.get_chat_history = mock_get_chat_history
         client.client = mock_pyrogram
 
-        # from_date=Jan 2: should get m3, m2, then stop at m1 (older than from_date)
-        collected = []
-        async for msg in client.get_chat_history(123, from_date=datetime(2025, 1, 2)):
-            collected.append(msg.id)
+        with patch("pyrogram_client.MessageConverter.convert_message", side_effect=fake_convert):
+            # from_date=Jan 2: should get m3, m2, then stop at m1 (older than from_date)
+            collected = []
+            async for msg in client.get_chat_history(123, from_date=datetime(2025, 1, 2)):
+                collected.append(msg.id)
 
-        assert collected == [3, 2]
-        # Key assertion: iteration stopped early, didn't process m1
-        assert iteration_count == 3  # saw m1 but returned immediately
+            assert collected == [3, 2]
+            # Key assertion: iteration stopped early, didn't process m1
+            assert iteration_count == 3  # saw m1 but returned immediately
 
     @pytest.mark.asyncio
     async def test_to_date_skips_newer_messages(self):
@@ -508,14 +515,17 @@ class TestTelegramClientDateFiltering:
 
         raw_messages = [
             MagicMock(id=3, date=datetime(2025, 1, 3), entities=None, media=None,
+                      from_user=None,
                       forward_from=None, forward_sender_name=None,
                       forward_date=None, edit_date=None, reply_to_message_id=None,
                       caption=None, caption_entities=None, text="m3"),
             MagicMock(id=2, date=datetime(2025, 1, 2), entities=None, media=None,
+                      from_user=None,
                       forward_from=None, forward_sender_name=None,
                       forward_date=None, edit_date=None, reply_to_message_id=None,
                       caption=None, caption_entities=None, text="m2"),
             MagicMock(id=1, date=datetime(2025, 1, 1), entities=None, media=None,
+                      from_user=None,
                       forward_from=None, forward_sender_name=None,
                       forward_date=None, edit_date=None, reply_to_message_id=None,
                       caption=None, caption_entities=None, text="m1"),
@@ -525,15 +535,19 @@ class TestTelegramClientDateFiltering:
             for msg in raw_messages:
                 yield msg
 
+        def fake_convert(m):
+            return ExportedMessage(id=m.id, date="2025-01-01T00:00:00", text=m.text)
+
         mock_pyrogram.get_chat_history = mock_get_chat_history
         client.client = mock_pyrogram
 
-        # to_date=Jan 2: should skip m3, get m2 and m1
-        collected = []
-        async for msg in client.get_chat_history(123, to_date=datetime(2025, 1, 2)):
-            collected.append(msg.id)
+        with patch("pyrogram_client.MessageConverter.convert_message", side_effect=fake_convert):
+            # to_date=Jan 2: should skip m3, get m2 and m1
+            collected = []
+            async for msg in client.get_chat_history(123, to_date=datetime(2025, 1, 2)):
+                collected.append(msg.id)
 
-        assert collected == [2, 1]
+            assert collected == [2, 1]
 
     @pytest.mark.asyncio
     async def test_mixed_naive_aware_datetimes_are_handled(self):
@@ -545,16 +559,19 @@ class TestTelegramClientDateFiltering:
         raw_messages = [
             # aware datetime
             MagicMock(id=3, date=datetime(2025, 1, 3, tzinfo=timezone.utc), entities=None, media=None,
+                      from_user=None,
                       forward_from=None, forward_sender_name=None,
                       forward_date=None, edit_date=None, reply_to_message_id=None,
                       caption=None, caption_entities=None, text="m3"),
             # naive datetime
             MagicMock(id=2, date=datetime(2025, 1, 2), entities=None, media=None,
+                      from_user=None,
                       forward_from=None, forward_sender_name=None,
                       forward_date=None, edit_date=None, reply_to_message_id=None,
                       caption=None, caption_entities=None, text="m2"),
             # aware datetime (older than from_date)
             MagicMock(id=1, date=datetime(2025, 1, 1, tzinfo=timezone.utc), entities=None, media=None,
+                      from_user=None,
                       forward_from=None, forward_sender_name=None,
                       forward_date=None, edit_date=None, reply_to_message_id=None,
                       caption=None, caption_entities=None, text="m1"),
@@ -564,14 +581,18 @@ class TestTelegramClientDateFiltering:
             for msg in raw_messages:
                 yield msg
 
+        def fake_convert(m):
+            return ExportedMessage(id=m.id, date="2025-01-01T00:00:00", text=m.text)
+
         mock_pyrogram.get_chat_history = mock_get_chat_history
         client.client = mock_pyrogram
 
-        collected = []
-        async for msg in client.get_chat_history(123, from_date=datetime(2025, 1, 2)):
-            collected.append(msg.id)
+        with patch("pyrogram_client.MessageConverter.convert_message", side_effect=fake_convert):
+            collected = []
+            async for msg in client.get_chat_history(123, from_date=datetime(2025, 1, 2)):
+                collected.append(msg.id)
 
-        assert collected == [3, 2]
+            assert collected == [3, 2]
 
 
 class TestTelegramClientFloodWait:
