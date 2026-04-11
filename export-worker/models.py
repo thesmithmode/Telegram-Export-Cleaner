@@ -113,8 +113,22 @@ class MessageEntity(BaseModel):
     )
 
     type: str = Field(..., description="Entity type: bold, italic, code, url, etc")
-    offset: int = Field(..., description="Start offset in UTF-8 characters")
-    length: int = Field(..., description="Length in UTF-8 characters")
+    offset: int = Field(
+        ...,
+        description=(
+            "Start offset in UTF-16 code units (Telegram API convention). "
+            "Emoji and other characters outside the Basic Multilingual Plane "
+            "(U+10000+) count as 2 units each — consistent with Java char[] "
+            "and JavaScript string.length, NOT with Python len()."
+        ),
+    )
+    length: int = Field(
+        ...,
+        description=(
+            "Length in UTF-16 code units (Telegram API convention). "
+            "Same UTF-16 surrogate-pair counting as offset."
+        ),
+    )
     url: Optional[str] = Field(None, description="URL for text_url/custom_emoji")
     user_id: Optional[int] = Field(None, description="User ID for text_mention")
 
