@@ -12,7 +12,7 @@ Handles:
 import logging
 import json
 import asyncio
-from typing import Optional, Callable, Any
+from typing import Optional
 from datetime import datetime
 
 import redis.asyncio as redis
