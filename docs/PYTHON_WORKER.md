@@ -219,7 +219,9 @@ def create_progress_tracker(
     task_id: str
 ) -> ProgressTracker
     # Create tracker for real-time progress updates
-    # Sends updates via Java Bot to user
+    # Sends updates via Java Bot to user.
+    # Worker starts tracker immediately ("Экспорт начался..."),
+    # then updates the same message to progress bar when total is known.
 ```
 
 ## Cancel Support

@@ -237,11 +237,17 @@ class TelegramClient:
                                 logger.debug(f"Skipping duplicate message {message.id}")
                                 continue
 
-                            # Date filtering (Pyrogram iterates newest→oldest)
-                            if from_date and message.date < from_date:
-                                logger.debug(f"Reached message older than from_date ({message.date} < {from_date}), stopping")
+                            # Date filtering (Pyrogram iterates newest→oldest).
+                            # Pyrogram may return either naive or aware datetimes depending
+                            # on message type / library version, so normalize before compare.
+                            message_date = ensure_utc(getattr(message, "date", None))
+                            if from_date and message_date and message_date < from_date:
+                                logger.debug(
+                                    f"Reached message older than from_date "
+                                    f"({message_date} < {from_date}), stopping"
+                                )
                                 return
-                            if to_date and message.date > to_date:
+                            if to_date and message_date and message_date > to_date:
                                 continue
 
                             # Track this message ID and update last offset for restart-on-FloodWait
