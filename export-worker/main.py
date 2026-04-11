@@ -874,6 +874,12 @@ class ExportWorker:
         nocache_messages: list[ExportedMessage] = []
         count = 0
 
+        use_cache = bool(self.message_cache and self.message_cache.enabled)
+        batch: list[ExportedMessage] = []
+        # Fallback list only used when cache is disabled (edge case)
+        nocache_messages: list[ExportedMessage] = []
+        count = 0
+
         try:
             async for message in self.telegram_client.get_chat_history(
                 chat_id=job.chat_id,
