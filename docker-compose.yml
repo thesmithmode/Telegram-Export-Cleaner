@@ -26,8 +26,8 @@ services:
       - redis_data:/data
     # Кэш сообщений переехал в SQLite на диск — Redis теперь только для очереди и статусов.
     # noeviction: выбрасывает ошибку при переполнении вместо тихого удаления ключей.
-    command: redis-server --appendonly yes --appendfsync everysec --maxmemory 128mb --maxmemory-policy noeviction
-    mem_limit: 256m
+    command: redis-server --appendonly yes --appendfsync everysec --maxmemory 256mb --maxmemory-policy noeviction
+    mem_limit: 512m
     cpus: '0.25'
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
