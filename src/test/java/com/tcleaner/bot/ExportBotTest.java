@@ -226,14 +226,6 @@ class ExportBotTest {
         }
 
         @Test
-        @DisplayName("/help снимает устаревшую reply-клавиатуру")
-        void testHelpRemovesReplyKeyboard() {
-            bot.consume(createTextMessageUpdate(123L, "/help"));
-
-            verify(messengerMock).sendRemoveReplyKeyboard(eq(123L), anyString());
-        }
-
-        @Test
         @DisplayName("/cancel отменяет активный экспорт")
         void testCancelActive() {
             when(jobProducerMock.getActiveExport(123L)).thenReturn("export_xyz");

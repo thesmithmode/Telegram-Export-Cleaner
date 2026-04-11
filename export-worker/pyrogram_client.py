@@ -280,9 +280,9 @@ class TelegramClient:
                         )
                         raise
 
-                    # Create dedup set on first FloodWait
+                    # Create dedup set on first FloodWait, starting with last yielded message
                     if seen_message_ids is None:
-                        seen_message_ids = set()
+                        seen_message_ids = {last_offset_id}
 
                     # Use Telegram's suggested wait as minimum
                     wait_time = min(

@@ -568,3 +568,146 @@ class TestVasyaPetyaKolyaScenario:
         # Future user requesting Jan 1-20 → only Jan 16-20 missing
         missing = await cache.get_missing_date_ranges(CHAT_A, "2025-01-01", "2025-01-20")
         assert missing == [("2025-01-16", "2025-01-20")]
+
+
+class TestStoreMessagesAtomicity:
+    """REGRESSION S3 — store_messages должен быть атомарным.
+
+    До фикса store_messages делал 3+ независимых commit'а: messages, id_ranges,
+    date_ranges, chat_meta. Crash между ними оставлял БД в несогласованном
+    состоянии: сообщения есть, но ranges/meta нет. Следующий запрос шёл в
+    fallback-miss, перезаписывая те же сообщения, а LRU-эвиктор ошибался в
+    размере чата. Теперь — ОДИН commit в конце, rollback при любой ошибке.
+
+    Эти тесты обязаны падать, если кто-то откатит фикс и вернёт промежуточные
+    commit'ы в store_messages / _add_range / _add_date_range.
+    """
+
+    @pytest.mark.asyncio
+    async def test_failure_after_insert_rolls_back_messages(
+        self, cache, monkeypatch
+    ):
+        """Если _add_range падает после INSERT сообщений — ВСЁ откатывается.
+
+        Сценарий: executemany INSERT messages выполнен, но _add_range бросает
+        ошибку. В старом коде commit() был ДО _add_range → сообщения уже в БД.
+        В новом коде commit() в самом конце → rollback откатывает сообщения.
+        """
+        CHAT = 777
+        messages = _make_messages([1, 2, 3])
+
+        original_add_range = cache._add_range
+
+        async def failing_add_range(chat_id, new_min, new_max):
+            # Простая эмуляция сбоя ПОСЛЕ того, как INSERT messages уже выполнен
+            # в рамках ещё НЕ закоммиченной транзакции.
+            raise RuntimeError("simulated crash during _add_range")
+
+        monkeypatch.setattr(cache, "_add_range", failing_add_range)
+
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            await cache.store_messages(CHAT, messages)
+
+        # Восстанавливаем метод, чтобы дальше можно было читать
+        monkeypatch.setattr(cache, "_add_range", original_add_range)
+
+        # КЛЮЧЕВОЕ: сообщения НЕ должны остаться в БД — транзакция откатилась.
+        retrieved = await cache.get_messages(CHAT, 0, 1_000_000)
+        assert retrieved == [], (
+            "Сообщения остались в БД после отката. Либо commit() вызван до "
+            "_add_range (старый баг), либо rollback() не сработал."
+        )
+
+        # Ranges тоже не должны появиться
+        id_ranges = await cache.get_cached_ranges(CHAT)
+        assert id_ranges == []
+
+        date_ranges = await cache.get_cached_date_ranges(CHAT)
+        assert date_ranges == []
+
+    @pytest.mark.asyncio
+    async def test_failure_after_date_range_rolls_back_everything(
+        self, cache, monkeypatch
+    ):
+        """Если _add_date_range падает — rollback откатывает messages И id_ranges."""
+        CHAT = 888
+        messages = _make_messages([10, 11, 12])
+
+        async def failing_add_date_range(chat_id, new_from, new_to):
+            raise RuntimeError("simulated crash during _add_date_range")
+
+        monkeypatch.setattr(cache, "_add_date_range", failing_add_date_range)
+
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            await cache.store_messages(CHAT, messages)
+
+        # Ничего не должно остаться: ни сообщений, ни id_ranges, ни date_ranges
+        assert await cache.get_messages(CHAT, 0, 1_000_000) == []
+        assert await cache.get_cached_ranges(CHAT) == []
+        assert await cache.get_cached_date_ranges(CHAT) == []
+
+    @pytest.mark.asyncio
+    async def test_successful_store_commits_everything_in_one_transaction(
+        self, cache
+    ):
+        """Happy path: все 4 группы записей видны после успешного store_messages."""
+        CHAT = 999
+        messages = [
+            _make_msg(1, date="2025-03-01T10:00:00"),
+            _make_msg(2, date="2025-03-02T10:00:00"),
+            _make_msg(3, date="2025-03-03T10:00:00"),
+        ]
+        count = await cache.store_messages(CHAT, messages)
+        assert count == 3
+
+        # Messages
+        assert len(await cache.get_messages(CHAT, 1, 3)) == 3
+        # ID ranges
+        assert await cache.get_cached_ranges(CHAT) == [[1, 3]]
+        # Date ranges
+        assert await cache.get_cached_date_ranges(CHAT) == [["2025-03-01", "2025-03-03"]]
+        # Meta populated (LRU tracking)
+        async with cache._db.execute(
+            "SELECT msg_count, size_bytes FROM chat_meta WHERE chat_id=?", (CHAT,)
+        ) as cur:
+            row = await cur.fetchone()
+        assert row is not None
+        assert row[0] == 3  # msg_count
+        assert row[1] > 0   # size_bytes
+
+    @pytest.mark.asyncio
+    async def test_rollback_leaves_previously_stored_data_intact(
+        self, cache, monkeypatch
+    ):
+        """Откат неудачного store_messages НЕ должен трогать уже сохранённые данные.
+
+        Это критично: если первый батч прошёл, а второй упал — первый должен
+        остаться нетронутым.
+        """
+        CHAT = 1111
+        # Первый успешный батч
+        first = _make_messages([1, 2, 3])
+        await cache.store_messages(CHAT, first)
+
+        # Второй батч — падает в _add_range
+        second = _make_messages([100, 101, 102])
+
+        async def failing_add_range(chat_id, new_min, new_max):
+            raise RuntimeError("second batch must fail")
+
+        monkeypatch.setattr(cache, "_add_range", failing_add_range)
+
+        with pytest.raises(RuntimeError):
+            await cache.store_messages(CHAT, second)
+
+        monkeypatch.undo()
+
+        # Первый батч остался
+        retrieved = await cache.get_messages(CHAT, 1, 1_000_000)
+        ids = sorted(m.id for m in retrieved)
+        assert ids == [1, 2, 3], (
+            f"Откат второго батча снёс первый. Получено: {ids}. "
+            "Это значит rollback слишком широкий — либо первый батч тоже был "
+            "в ещё-не-закоммиченной транзакции, что невозможно после фикса."
+        )
+        assert await cache.get_cached_ranges(CHAT) == [[1, 3]]
