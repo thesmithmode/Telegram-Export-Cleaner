@@ -352,19 +352,25 @@ class QueueConsumer:
             processing_key = f"job:processing:{task_id}"
             completed_key = f"job:completed:{task_id}"
 
-            # Remove from processing
-            await self.redis_client.delete(processing_key)
+            # Resolve staging metadata before pipeline (needs a GET)
+            import json as _json
+            raw = await self.redis_client.get(f"staging:meta:{task_id}")
 
-            # Set completed marker
-            await self.redis_client.setex(
-                completed_key,
-                JOB_MARKER_TTL,
-                str(datetime.now().isoformat())
-            )
+            # Batch the 4 write operations into one pipeline (4 RTT → 1 RTT)
+            pipe = self.redis_client.pipeline()
+            pipe.delete(processing_key)
+            pipe.setex(completed_key, JOB_MARKER_TTL, str(datetime.now().isoformat()))
+            pipe.srem("staging:jobs", task_id)
+            if raw:
+                try:
+                    meta = _json.loads(raw)
+                    pipe.lrem(meta["queue"], 1, meta["payload"])
+                except Exception:
+                    pass
+            pipe.delete(f"staging:meta:{task_id}")
+            await pipe.execute()
 
             logger.debug(f"Marked job completed: {task_id}")
-            await self._untrack_staging_job(task_id)
-            await self._remove_from_staging(task_id)
             return True
 
         except Exception as e:

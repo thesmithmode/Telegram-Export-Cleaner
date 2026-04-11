@@ -418,19 +418,21 @@ class ExportWorker:
                 # чтобы Java-бот мог резолвить числовые ID из пикера в username.
                 if self.control_redis and canonical_id:
                     try:
-                        await self.control_redis.set(
+                        # Пишем оба маппинга одним pipeline (2 RTT → 1 RTT)
+                        pipe = self.control_redis.pipeline()
+                        pipe.set(
                             f"canonical:{original_chat_input}",
                             str(canonical_id),
                             ex=86400 * 30,
                         )
-                        # Обратный маппинг: по numeric_id находим username
                         chat_username = chat_info.get("username")
                         if chat_username:
-                            await self.control_redis.set(
+                            pipe.set(
                                 f"canonical:{canonical_id}",
                                 chat_username,
                                 ex=86400 * 30,
                             )
+                        await pipe.execute()
                     except Exception:
                         pass
 
@@ -927,11 +929,15 @@ class ExportWorker:
             pending_result = await self.queue_consumer.get_pending_jobs()
             pending = pending_result["jobs"]
             total = pending_result["total_count"]
-            # Notify the job that is about to start
-            await self._notify_queue_position(current_task_id, 0, total)
-            # Notify remaining queued jobs of their new position
-            for i, job in enumerate(pending):
-                await self._notify_queue_position(job.task_id, i + 1, total)
+            # Notify all jobs in parallel (one HTTP call per user, no sequential waiting)
+            await asyncio.gather(
+                self._notify_queue_position(current_task_id, 0, total),
+                *[
+                    self._notify_queue_position(job.task_id, i + 1, total)
+                    for i, job in enumerate(pending)
+                ],
+                return_exceptions=True,
+            )
         except Exception as e:
             logger.warning(f"Could not update queue positions: {e}")
 
