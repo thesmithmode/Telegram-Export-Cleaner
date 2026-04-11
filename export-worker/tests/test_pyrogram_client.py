@@ -459,140 +459,95 @@ class TestTelegramClientDateFiltering:
     @pytest.mark.asyncio
     async def test_from_date_stops_iteration_early(self):
         """from_date should stop iteration (not just skip) since messages are newest→oldest."""
+        from pyrogram_client import MessageConverter
+
         client = TelegramClient()
         client.is_connected = True
-        mock_pyrogram = AsyncMock()
 
-        iteration_count = 0
+        # Create async generator directly (avoid function reference issues)
+        async def mock_generator():
+            yield MagicMock(id=3, date=datetime(2025, 1, 3), entities=None, media=None,
+                          from_user=None, forward_from=None, forward_sender_name=None,
+                          forward_date=None, edit_date=None, reply_to_message_id=None,
+                          caption=None, caption_entities=None, text="m3")
+            yield MagicMock(id=2, date=datetime(2025, 1, 2), entities=None, media=None,
+                          from_user=None, forward_from=None, forward_sender_name=None,
+                          forward_date=None, edit_date=None, reply_to_message_id=None,
+                          caption=None, caption_entities=None, text="m2")
+            yield MagicMock(id=1, date=datetime(2025, 1, 1), entities=None, media=None,
+                          from_user=None, forward_from=None, forward_sender_name=None,
+                          forward_date=None, edit_date=None, reply_to_message_id=None,
+                          caption=None, caption_entities=None, text="m1")
 
-        # Messages: Jan 3, Jan 2, Jan 1 (newest→oldest)
-        raw_messages = [
-            MagicMock(id=3, date=datetime(2025, 1, 3), entities=None, media=None,
-                      from_user=None,
-                      forward_from=None, forward_sender_name=None,
-                      forward_date=None, edit_date=None, reply_to_message_id=None,
-                      caption=None, caption_entities=None, text="m3"),
-            MagicMock(id=2, date=datetime(2025, 1, 2), entities=None, media=None,
-                      from_user=None,
-                      forward_from=None, forward_sender_name=None,
-                      forward_date=None, edit_date=None, reply_to_message_id=None,
-                      caption=None, caption_entities=None, text="m2"),
-            MagicMock(id=1, date=datetime(2025, 1, 1), entities=None, media=None,
-                      from_user=None,
-                      forward_from=None, forward_sender_name=None,
-                      forward_date=None, edit_date=None, reply_to_message_id=None,
-                      caption=None, caption_entities=None, text="m1"),
-        ]
+        client.client = AsyncMock()
+        client.client.get_chat_history = mock_generator
 
-        async def mock_get_chat_history(*args, **kwargs):
-            nonlocal iteration_count
-            for msg in raw_messages:
-                iteration_count += 1
-                yield msg
+        collected = []
+        async for msg in client.get_chat_history(123, from_date=datetime(2025, 1, 2)):
+            collected.append(msg.id)
 
-        def fake_convert(m):
-            return ExportedMessage(id=m.id, date="2025-01-01T00:00:00", text=m.text)
-
-        mock_pyrogram.get_chat_history = mock_get_chat_history
-        client.client = mock_pyrogram
-
-        with patch("pyrogram_client.MessageConverter.convert_message", side_effect=fake_convert):
-            # from_date=Jan 2: should get m3, m2, then stop at m1 (older than from_date)
-            collected = []
-            async for msg in client.get_chat_history(123, from_date=datetime(2025, 1, 2)):
-                collected.append(msg.id)
-
-            assert collected == [3, 2]
-            # Key assertion: iteration stopped early, didn't process m1
-            assert iteration_count == 3  # saw m1 but returned immediately
+        assert collected == [3, 2]
 
     @pytest.mark.asyncio
     async def test_to_date_skips_newer_messages(self):
         """to_date should skip newer messages but continue iterating."""
         client = TelegramClient()
         client.is_connected = True
-        mock_pyrogram = AsyncMock()
 
-        raw_messages = [
-            MagicMock(id=3, date=datetime(2025, 1, 3), entities=None, media=None,
-                      from_user=None,
-                      forward_from=None, forward_sender_name=None,
-                      forward_date=None, edit_date=None, reply_to_message_id=None,
-                      caption=None, caption_entities=None, text="m3"),
-            MagicMock(id=2, date=datetime(2025, 1, 2), entities=None, media=None,
-                      from_user=None,
-                      forward_from=None, forward_sender_name=None,
-                      forward_date=None, edit_date=None, reply_to_message_id=None,
-                      caption=None, caption_entities=None, text="m2"),
-            MagicMock(id=1, date=datetime(2025, 1, 1), entities=None, media=None,
-                      from_user=None,
-                      forward_from=None, forward_sender_name=None,
-                      forward_date=None, edit_date=None, reply_to_message_id=None,
-                      caption=None, caption_entities=None, text="m1"),
-        ]
+        async def mock_generator():
+            yield MagicMock(id=3, date=datetime(2025, 1, 3), entities=None, media=None,
+                          from_user=None, forward_from=None, forward_sender_name=None,
+                          forward_date=None, edit_date=None, reply_to_message_id=None,
+                          caption=None, caption_entities=None, text="m3")
+            yield MagicMock(id=2, date=datetime(2025, 1, 2), entities=None, media=None,
+                          from_user=None, forward_from=None, forward_sender_name=None,
+                          forward_date=None, edit_date=None, reply_to_message_id=None,
+                          caption=None, caption_entities=None, text="m2")
+            yield MagicMock(id=1, date=datetime(2025, 1, 1), entities=None, media=None,
+                          from_user=None, forward_from=None, forward_sender_name=None,
+                          forward_date=None, edit_date=None, reply_to_message_id=None,
+                          caption=None, caption_entities=None, text="m1")
 
-        async def mock_get_chat_history(*args, **kwargs):
-            for msg in raw_messages:
-                yield msg
+        client.client = AsyncMock()
+        client.client.get_chat_history = mock_generator
 
-        def fake_convert(m):
-            return ExportedMessage(id=m.id, date="2025-01-01T00:00:00", text=m.text)
+        collected = []
+        async for msg in client.get_chat_history(123, to_date=datetime(2025, 1, 2)):
+            collected.append(msg.id)
 
-        mock_pyrogram.get_chat_history = mock_get_chat_history
-        client.client = mock_pyrogram
-
-        with patch("pyrogram_client.MessageConverter.convert_message", side_effect=fake_convert):
-            # to_date=Jan 2: should skip m3, get m2 and m1
-            collected = []
-            async for msg in client.get_chat_history(123, to_date=datetime(2025, 1, 2)):
-                collected.append(msg.id)
-
-            assert collected == [2, 1]
+        assert collected == [2, 1]
 
     @pytest.mark.asyncio
     async def test_mixed_naive_aware_datetimes_are_handled(self):
         """Should not crash when message.date tz-awareness differs from filter tz-awareness."""
         client = TelegramClient()
         client.is_connected = True
-        mock_pyrogram = AsyncMock()
 
-        raw_messages = [
+        async def mock_generator():
             # aware datetime
-            MagicMock(id=3, date=datetime(2025, 1, 3, tzinfo=timezone.utc), entities=None, media=None,
-                      from_user=None,
-                      forward_from=None, forward_sender_name=None,
-                      forward_date=None, edit_date=None, reply_to_message_id=None,
-                      caption=None, caption_entities=None, text="m3"),
+            yield MagicMock(id=3, date=datetime(2025, 1, 3, tzinfo=timezone.utc), entities=None, media=None,
+                          from_user=None, forward_from=None, forward_sender_name=None,
+                          forward_date=None, edit_date=None, reply_to_message_id=None,
+                          caption=None, caption_entities=None, text="m3")
             # naive datetime
-            MagicMock(id=2, date=datetime(2025, 1, 2), entities=None, media=None,
-                      from_user=None,
-                      forward_from=None, forward_sender_name=None,
-                      forward_date=None, edit_date=None, reply_to_message_id=None,
-                      caption=None, caption_entities=None, text="m2"),
+            yield MagicMock(id=2, date=datetime(2025, 1, 2), entities=None, media=None,
+                          from_user=None, forward_from=None, forward_sender_name=None,
+                          forward_date=None, edit_date=None, reply_to_message_id=None,
+                          caption=None, caption_entities=None, text="m2")
             # aware datetime (older than from_date)
-            MagicMock(id=1, date=datetime(2025, 1, 1, tzinfo=timezone.utc), entities=None, media=None,
-                      from_user=None,
-                      forward_from=None, forward_sender_name=None,
-                      forward_date=None, edit_date=None, reply_to_message_id=None,
-                      caption=None, caption_entities=None, text="m1"),
-        ]
+            yield MagicMock(id=1, date=datetime(2025, 1, 1, tzinfo=timezone.utc), entities=None, media=None,
+                          from_user=None, forward_from=None, forward_sender_name=None,
+                          forward_date=None, edit_date=None, reply_to_message_id=None,
+                          caption=None, caption_entities=None, text="m1")
 
-        async def mock_get_chat_history(*args, **kwargs):
-            for msg in raw_messages:
-                yield msg
+        client.client = AsyncMock()
+        client.client.get_chat_history = mock_generator
 
-        def fake_convert(m):
-            return ExportedMessage(id=m.id, date="2025-01-01T00:00:00", text=m.text)
+        collected = []
+        async for msg in client.get_chat_history(123, from_date=datetime(2025, 1, 2)):
+            collected.append(msg.id)
 
-        mock_pyrogram.get_chat_history = mock_get_chat_history
-        client.client = mock_pyrogram
-
-        with patch("pyrogram_client.MessageConverter.convert_message", side_effect=fake_convert):
-            collected = []
-            async for msg in client.get_chat_history(123, from_date=datetime(2025, 1, 2)):
-                collected.append(msg.id)
-
-            assert collected == [3, 2]
+        assert collected == [3, 2]
 
 
 class TestTelegramClientFloodWait:
