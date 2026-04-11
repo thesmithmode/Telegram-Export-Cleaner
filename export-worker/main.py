@@ -824,7 +824,7 @@ class ExportWorker:
             logger.info(f"  Fetched {fresh_count} new messages above cache max {cache_max_id}")
 
         # Step 2: fill ID gaps
-        logger.info(f"  Step 2: Computing missing ID ranges...")
+        logger.info("  Step 2: Computing missing ID ranges...")
         full_min = min(r[0] for r in cached_ranges)
         full_max = max(cache_max_id, latest_new_id)
         logger.info(f"    Range to check: [{full_min}, {full_max}]")
@@ -858,7 +858,7 @@ class ExportWorker:
                 logger.info(f"  Filled gap [{gap_low}-{gap_high}]: {gap_count} messages")
 
         # Step 3: fetch messages OLDER than cache minimum
-        logger.info(f"  Step 3: Fetching older messages...")
+        logger.info("  Step 3: Fetching older messages...")
         if not job.limit or job.limit <= 0:
             cache_min_id = min(r[0] for r in cached_ranges)
             logger.info(f"    Cache min ID: {cache_min_id}")
