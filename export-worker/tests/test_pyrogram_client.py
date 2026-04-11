@@ -6,7 +6,7 @@ Covers connection, authentication, message export, and error handling.
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime
+from datetime import datetime, timezone
 from pyrogram.errors import Unauthorized, BadRequest, PeerIdInvalid
 
 from pyrogram_client import TelegramClient
@@ -540,6 +540,44 @@ class TestTelegramClientDateFiltering:
             collected.append(msg.id)
 
         assert collected == [2, 1]
+
+    @pytest.mark.asyncio
+    async def test_mixed_naive_aware_datetimes_are_handled(self):
+        """Should not crash when message.date tz-awareness differs from filter tz-awareness."""
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+
+        raw_messages = [
+            # aware datetime
+            MagicMock(id=3, date=datetime(2025, 1, 3, tzinfo=timezone.utc), entities=None, media=None,
+                      forward_from=None, forward_sender_name=None,
+                      forward_date=None, edit_date=None, reply_to_message_id=None,
+                      caption=None, caption_entities=None, text="m3"),
+            # naive datetime
+            MagicMock(id=2, date=datetime(2025, 1, 2), entities=None, media=None,
+                      forward_from=None, forward_sender_name=None,
+                      forward_date=None, edit_date=None, reply_to_message_id=None,
+                      caption=None, caption_entities=None, text="m2"),
+            # aware datetime (older than from_date)
+            MagicMock(id=1, date=datetime(2025, 1, 1, tzinfo=timezone.utc), entities=None, media=None,
+                      forward_from=None, forward_sender_name=None,
+                      forward_date=None, edit_date=None, reply_to_message_id=None,
+                      caption=None, caption_entities=None, text="m1"),
+        ]
+
+        async def mock_get_chat_history(*args, **kwargs):
+            for msg in raw_messages:
+                yield msg
+
+        mock_pyrogram.get_chat_history = mock_get_chat_history
+        client.client = mock_pyrogram
+
+        collected = []
+        async for msg in client.get_chat_history(123, from_date=datetime(2025, 1, 2)):
+            collected.append(msg.id)
+
+        assert collected == [3, 2]
 
 
 class TestTelegramClientFloodWait:
