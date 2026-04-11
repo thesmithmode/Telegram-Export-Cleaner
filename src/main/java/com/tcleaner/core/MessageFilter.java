@@ -7,7 +7,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Predicate;
 
 /**
@@ -19,8 +21,8 @@ public class MessageFilter {
     private LocalDate endDate;
     private final List<String> keywords;
     private final List<String> excludeKeywords;
-    private final List<String> includeTypes;
-    private final List<String> excludeTypes;
+    private final Set<String> includeTypes;
+    private final Set<String> excludeTypes;
     private final List<Predicate<JsonNode>> customPredicates;
 
     /**
@@ -29,8 +31,8 @@ public class MessageFilter {
     public MessageFilter() {
         this.keywords = new ArrayList<>();
         this.excludeKeywords = new ArrayList<>();
-        this.includeTypes = new ArrayList<>();
-        this.excludeTypes = new ArrayList<>();
+        this.includeTypes = new HashSet<>();
+        this.excludeTypes = new HashSet<>();
         this.customPredicates = new ArrayList<>();
     }
 
