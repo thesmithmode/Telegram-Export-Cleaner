@@ -22,5 +22,8 @@ psutil==5.9.8
 # Serialization (cache)
 msgpack==1.0.7
 
+# SQLite async driver (disk-based message cache)
+aiosqlite==0.20.0
+
 # Environment management
 python-dotenv==1.0.0

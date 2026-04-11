@@ -4,19 +4,53 @@
 
 Бот экспортирует чаты в текст: Java Bot → Redis очередь → Python Worker → /api/convert → результат пользователю.
 
-**Стек:** Java 21, Spring Boot 3.4.4, Python 3.11, Pyrogram 2.0.106, Redis 7, Docker.
+**Стек:** Java 21, Spring Boot 3.4.4, Python 3.11, Pyrogram 2.0.106, Redis 7, SQLite, Docker.
 
-See [ARCHITECTURE.md](docs/ARCHITECTURE.md), [DEVELOPMENT.md](docs/DEVELOPMENT.md), [API.md](docs/API.md) for details.
+## Структура проекта
+
+```
+src/main/java/com/tcleaner/   Java Spring Boot бэкенд
+  bot/                        Telegram-бот, очередь задач
+  api/                        REST API, безопасность
+  core/                       Парсинг и фильтрация экспорта
+  format/                     Форматирование вывода
+src/test/java/com/tcleaner/   Java-тесты (JUnit 5)
+export-worker/                Python Pyrogram worker
+  main.py                     ExportWorker, точка входа
+  message_cache.py            SQLite-кэш сообщений (HDD)
+  queue_consumer.py           BLPOP-консьюмер Redis-очереди
+  pyrogram_client.py          Pyrogram + canonical ID resolver
+  java_client.py              HTTP-клиент /api/convert
+  config.py / models.py       Настройки и Pydantic-модели
+  json_converter.py           Конвертация Telegram JSON
+  tests/                      Python-тесты (pytest)
+docs/                         Документация (см. ниже)
+Dockerfile                    Java bot образ
+docker-compose.yml            Все сервисы (redis, java-bot, worker)
+pom.xml / checkstyle.xml      Maven + code style
+README.md                     Быстрый старт
+```
+
+## Документация
+
+- `docs/ARCHITECTURE.md` — полная схема системы
+- `docs/DEVELOPMENT.md` — dev-процесс, CI/CD
+- `docs/API.md` — REST API reference
+- `docs/PYTHON_WORKER.md` — worker internals
+- `docs/SETUP.md` — деплой и конфигурация
+- `README.md` — быстрый старт, переменные окружения
+- JavaDoc — `/** */` комментарии в каждом публичном Java-классе/методе (не отдельный файл)
 
 ## ⚠️ Критичные правила
 
 1. **НИКОГДА не запускать тесты локально** — только GitHub Actions CI
-2. **НИКОГДА не пересобирать контейнеры вручную** — только GitHub Actions  
+2. **НИКОГДА не пересобирать контейнеры вручную** — только GitHub Actions
 3. **Коммиты:** FIX:, FEAT:, REFACTOR: на РУССКОМ (ЗАГЛАВНЫЕ префиксы)
 4. **НИКОГДА не добавлять Co-Authored-By** в коммиты
-5. **Merge dev→main: ALWAYS --squash** (один коммит на main)
-6. **Пушить только в dev/Review**, main только явно
-7. **При конфликте локального и удалённого репо — ВСЕГДА приоритет у origin** (reset к remote, не rebase локального)
+5. **Автор коммитов:** всегда `thesmithmode <117716736+thesmithmode@users.noreply.github.com>` — задан в `git config` репозитория, не менять
+6. **Merge dev→main: ALWAYS --squash** (один коммит на main)
+7. **Пушить только в dev/Review**, main только явно
+8. **При конфликте локального и удалённого репо — ВСЕГДА приоритет у origin** (reset к remote, не rebase локального)
 
 ## Java пакеты
 
@@ -29,13 +63,13 @@ See [ARCHITECTURE.md](docs/ARCHITECTURE.md), [DEVELOPMENT.md](docs/DEVELOPMENT.m
 
 - **main.py** — ExportWorker (3-path caching: date/id/fallback)
 - **pyrogram_client.py** — async Pyrogram, canonical ID resolver
-- **message_cache.py** — Redis sorted sets (by msg_id, by date)
+- **message_cache.py** — SQLite на HDD (LRU по чатам, merge intervals, WAL)
 - **queue_consumer.py** — BLPOP consumer, job lifecycle
 - **java_client.py** — HTTP POST /api/convert, progress tracking
 
 ## Тестирование & качество
 
-- Java: JUnit 5 + AssertJ, 80% JaCoCo, Embedded Redis (ТОЛЬКО в CI)
-- Python: pytest + conftest, AsyncMock, moки Redis/Pyrogram (ТОЛЬКО в CI)
-- All public classes: JavaDoc (Java) + docstrings (Python)
+- **Java** — `src/test/java/com/tcleaner/`: JUnit 5 + AssertJ, 80% JaCoCo, Embedded Redis (ТОЛЬКО в CI)
+- **Python** — `export-worker/tests/`: pytest + conftest.py, AsyncMock, SQLite tmp_path (ТОЛЬКО в CI)
+- Все публичные классы: JavaDoc (Java) + docstrings (Python)
 - Code style: checkstyle.xml (Java), PEP 8 (Python)

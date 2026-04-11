@@ -263,7 +263,41 @@ messages = await redis.zrangebyscore(
 
 ## Key Design Decisions
 
-### 1. Streaming JSON Processing
+### 1. O(1) Memory Streaming Strategy
+
+**Why:** System handles 100MB+ exports and must work on 2-4GB RAM servers
+
+**Solution:** Sквозной streaming на каждом слое:
+- **Python Worker**: Messages не накапливаются в `all_fetched` list, а пишут батчами (1000 шт) прямо в SQLite cache
+- **Multipart Upload**: Spring Boot `file-size-threshold=1MB` выбрасывает файлы > 1МБ с RAM на диск автоматически
+- **Jackson Streaming**: `JsonParser` не строит DOM дерево, а идет по токенам. Memory = одно текущее сообщение (~200 bytes)
+- **StreamingResponseBody**: Java response пишет результат прямо в сокет, не буферизуя
+
+**Result:** Peak memory usage O(1) regardless of chat size (including 300k+ message chats)
+
+---
+
+### 2. UTF-16 Entity Offsets ("The Emoji Bug")
+
+**Problem:** Telegram Bot API возвращает offsets сущностей (bold, link, code) в UTF-16 кодировке (2 байта/символ, суррогатные пары для эмодзи). Python использует Unicode code points (UTF-32). Прямое применение смещений приводит к "съезжанию" текста на сообщениях с эмодзи.
+
+**Solution:** В методе `_transform_entities` текст кодируется в `utf-16-le`, смещения применяются к байтам (`offset * 2`), затем декодируются обратно.
+
+**Result:** 100% точность Markdown-разметки на любых эмодзи и символах.
+
+---
+
+### 3. Asynchronous Timeout Handling in Spring Boot 3.4
+
+**Problem:** `StreamingResponseBody` переводит обработку запроса в асинхронный режим. Дефолтный таймаут Spring — 30 секунд. На файлах > 30MB это приводит к `ReadError` (Service Unavailable).
+
+**Solution:** `WebConfig.java` устанавливает `setDefaultTimeout(-1)` (без таймаута) и создает `ThreadPoolTaskExecutor` для асинхронных задач, чтобы не блокировать потоки Tomcat.
+
+**Result:** Надежная обработка файлов любого размера.
+
+---
+
+### 4. Streaming JSON Processing
 
 **Why:** Telegram exports can be 100MB+ files. Loading into memory → OOM.
 
@@ -280,7 +314,7 @@ while (parser.nextToken() != JsonToken.END_ARRAY) {
 
 ---
 
-### 2. 3-Path Caching (Python Worker)
+### 5. 3-Path Caching (Python Worker)
 
 **Why:** Minimize Telegram API calls (FloodWait limits)
 
@@ -293,7 +327,7 @@ while (parser.nextToken() != JsonToken.END_ARRAY) {
 
 ---
 
-### 3. SET NX for Duplicate Protection
+### 6. SET NX for Duplicate Protection
 
 **Why:** User can click "export" multiple times (network lag, double-tap)
 
@@ -310,7 +344,7 @@ if (!acquired) {
 
 ---
 
-### 4. Express Queue for Cached Exports
+### 7. Express Queue for Cached Exports
 
 **Why:** Cached exports should complete faster than full exports
 
@@ -422,8 +456,8 @@ services:
 
 ## Related Documentation
 
-- 🤖 [BOT.md](BOT.md) — Java Bot detailed guide
 - 🐍 [PYTHON_WORKER.md](PYTHON_WORKER.md) — Python Worker detailed guide
 - 📡 [API.md](API.md) — REST API reference
 - 🔧 [SETUP.md](SETUP.md) — Deployment & Configuration
 - 📖 [DEVELOPMENT.md](DEVELOPMENT.md) — Contributing guidelines
+- 📘 [README.md](../README.md) — Primary project documentation & quick start

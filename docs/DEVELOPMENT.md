@@ -328,6 +328,6 @@ pip list | grep -E "pyrogram|redis|pydantic"
 
 - 📖 [ARCHITECTURE.md](ARCHITECTURE.md) — система архитектура
 - 📡 [API.md](API.md) — REST API документация
-- 🤖 [BOT.md](BOT.md) — Java Bot документация
 - 🐍 [PYTHON_WORKER.md](PYTHON_WORKER.md) — Python Worker документация
 - 🔧 [SETUP.md](SETUP.md) — установка и конфигурация
+- 📘 [README.md](../README.md) — быстрый старт и обзор

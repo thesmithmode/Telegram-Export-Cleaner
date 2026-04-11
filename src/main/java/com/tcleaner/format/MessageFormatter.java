@@ -1,5 +1,7 @@
 package com.tcleaner.format;
 
+import java.util.regex.Pattern;
+
 /**
  * Утилита форматирования одного сообщения в строку вывода.
  *
@@ -7,6 +9,9 @@ package com.tcleaner.format;
  * Отделена от MessageProcessor чтобы формат можно было менять независимо.</p>
  */
 public class MessageFormatter {
+
+    /** Compiled once at class load — shared across all calls to normalizeNewlines(). */
+    private static final Pattern NEWLINE_PATTERN = Pattern.compile("\\r\\n|\\r|\\n");
 
     private MessageFormatter() {
     }
@@ -32,6 +37,6 @@ public class MessageFormatter {
      * @return текст без переносов строк
      */
     public static String normalizeNewlines(String text) {
-        return text.replaceAll("\\r\\n|\\r|\\n", " ");
+        return NEWLINE_PATTERN.matcher(text).replaceAll(" ");
     }
 }
