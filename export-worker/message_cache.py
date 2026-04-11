@@ -133,6 +133,13 @@ class MessageCache:
 
         Writes in batches of _STORE_BATCH rows — O(batch) RAM regardless of
         how many messages are passed.  Returns the number of rows stored.
+
+        Атомарность: все 4 группы записей (messages, chat_id_ranges,
+        chat_date_ranges, chat_meta) выполняются в ОДНОЙ транзакции с одним
+        commit() в конце.  Crash в середине откатит всё — иначе сообщения
+        оказались бы в БД без ranges/meta, и 3-path cache на следующем запуске
+        ушёл бы в fallback-miss, переписывая уже сохранённые данные (а LRU
+        eviction ошибся бы в размере чата).
         """
         if not self.enabled or not messages or self._db is None:
             return 0
@@ -149,47 +156,58 @@ class MessageCache:
             rows.append((chat_id_int, msg.id, ts, data))
             total_bytes += len(data)
 
-        # INSERT OR REPLACE: newest import always wins
-        for i in range(0, len(rows), _STORE_BATCH):
-            await self._db.executemany(
-                "INSERT OR REPLACE INTO messages(chat_id, msg_id, msg_ts, data)"
-                " VALUES (?,?,?,?)",
-                rows[i : i + _STORE_BATCH],
+        try:
+            # INSERT OR REPLACE: newest import always wins
+            for i in range(0, len(rows), _STORE_BATCH):
+                await self._db.executemany(
+                    "INSERT OR REPLACE INTO messages(chat_id, msg_id, msg_ts, data)"
+                    " VALUES (?,?,?,?)",
+                    rows[i : i + _STORE_BATCH],
+                )
+
+            # Merge ID ranges (без commit внутри — см. докстринг helper'ов)
+            msg_ids = sorted(m.id for m in messages)
+            await self._add_range(chat_id_int, msg_ids[0], msg_ids[-1])
+
+            # Merge date ranges
+            dates = sorted({self._extract_date_str(m.date) for m in messages if m.date})
+            if dates:
+                await self._add_date_range(chat_id_int, dates[0], dates[-1])
+
+            # Upsert metadata
+            async with self._db.execute(
+                "SELECT COUNT(*) FROM messages WHERE chat_id=?", (chat_id_int,)
+            ) as cur:
+                row = await cur.fetchone()
+                actual_count = row[0] if row else len(messages)
+
+            await self._db.execute(
+                """
+                INSERT INTO chat_meta(chat_id, last_accessed, msg_count, size_bytes)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    last_accessed = excluded.last_accessed,
+                    msg_count     = excluded.msg_count,
+                    size_bytes    = chat_meta.size_bytes + excluded.size_bytes
+                """,
+                (chat_id_int, now, actual_count, total_bytes),
             )
-        await self._db.commit()
 
-        # Merge ID ranges
-        msg_ids = sorted(m.id for m in messages)
-        await self._add_range(chat_id_int, msg_ids[0], msg_ids[-1])
-
-        # Merge date ranges
-        dates = sorted({self._extract_date_str(m.date) for m in messages if m.date})
-        if dates:
-            await self._add_date_range(chat_id_int, dates[0], dates[-1])
-
-        # Upsert metadata
-        async with self._db.execute(
-            "SELECT COUNT(*) FROM messages WHERE chat_id=?", (chat_id_int,)
-        ) as cur:
-            row = await cur.fetchone()
-            actual_count = row[0] if row else len(messages)
-
-        await self._db.execute(
-            """
-            INSERT INTO chat_meta(chat_id, last_accessed, msg_count, size_bytes)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(chat_id) DO UPDATE SET
-                last_accessed = excluded.last_accessed,
-                msg_count     = excluded.msg_count,
-                size_bytes    = chat_meta.size_bytes + excluded.size_bytes
-            """,
-            (chat_id_int, now, actual_count, total_bytes),
-        )
-        await self._db.commit()
+            # Единственный commit — атомарно фиксирует ВСЁ или НИЧЕГО
+            await self._db.commit()
+        except Exception:
+            # При любой ошибке откатываем всё, чтобы не оставлять messages
+            # без ranges/meta (это ломало бы 3-path кэш при следующем запросе).
+            try:
+                await self._db.rollback()
+            except Exception:
+                pass
+            raise
 
         logger.debug(
             f"Cached {len(messages)} msgs for chat {chat_id_int} (total: {actual_count})"
         )
+        # evict_if_needed — отдельная операция, её фейл не должен трогать транзакцию store
         await self.evict_if_needed()
         return len(messages)
 
@@ -407,7 +425,11 @@ class MessageCache:
     # ------------------------------------------------------------------ #
 
     async def _add_range(self, chat_id: int, new_min: int, new_max: int):
-        """Merge [new_min, new_max] into this chat's stored ID ranges."""
+        """Merge [new_min, new_max] into this chat's stored ID ranges.
+
+        ВАЖНО: без commit() — caller (store_messages) коммитит всё одним
+        транзакционным блоком, чтобы messages/ranges/meta были атомарны.
+        """
         cached = await self.get_cached_ranges(chat_id)
         merged = self._merge_intervals(cached + [[new_min, new_max]])
         await self._db.execute(
@@ -417,7 +439,6 @@ class MessageCache:
             "INSERT INTO chat_id_ranges(chat_id, min_id, max_id) VALUES (?,?,?)",
             [(chat_id, r[0], r[1]) for r in merged],
         )
-        await self._db.commit()
 
     @staticmethod
     def _merge_intervals(intervals: List[List[int]]) -> List[List[int]]:
@@ -435,7 +456,11 @@ class MessageCache:
         return merged
 
     async def _add_date_range(self, chat_id: int, new_from: str, new_to: str):
-        """Merge [new_from, new_to] into this chat's stored date ranges."""
+        """Merge [new_from, new_to] into this chat's stored date ranges.
+
+        ВАЖНО: без commit() — caller (store_messages) коммитит всё одним
+        транзакционным блоком.
+        """
         cached = await self.get_cached_date_ranges(chat_id)
         merged = self._merge_date_intervals(cached + [[new_from, new_to]])
         await self._db.execute(
@@ -445,7 +470,6 @@ class MessageCache:
             "INSERT INTO chat_date_ranges(chat_id, from_date, to_date) VALUES (?,?,?)",
             [(chat_id, r[0], r[1]) for r in merged],
         )
-        await self._db.commit()
 
     @staticmethod
     def _merge_date_intervals(intervals: List[List[str]]) -> List[List[str]]:

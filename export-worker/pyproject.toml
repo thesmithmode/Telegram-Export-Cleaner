@@ -1,0 +1,12 @@
+[tool.pytest.ini_options]
+# asyncio_mode=auto — чтобы async-фикстуры и async-тесты распознавались без
+# явного @pytest_asyncio.fixture / @pytest.mark.asyncio декораторов.
+#
+# ВАЖНО: без этой настройки (strict — дефолт pytest-asyncio 0.23+) тесты в
+# test_message_cache.py и test_export_worker.py с фикстурами вида
+#     @pytest.fixture
+#     async def cache(tmp_path): ...
+# молча превратились бы в broken generator-fixtures, и половина тестов выдала
+# бы false-pass или непонятные ошибки.
+asyncio_mode = "auto"
+asyncio_loop_scope = "function"

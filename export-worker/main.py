@@ -417,8 +417,13 @@ class ExportWorker:
                 # Также сохраняем обратный маппинг canonical:<numeric_id> → username,
                 # чтобы Java-бот мог резолвить числовые ID из пикера в username.
                 if self.control_redis and canonical_id:
+                    # Пишем оба маппинга одним pipeline (2 RTT → 1 RTT).
+                    # Не глотаем исключения: если Redis недоступен или мок в тесте
+                    # настроен неправильно, caller должен это УВИДЕТЬ, а не
+                    # замести под ковёр. Ошибка логируется на WARN — дальнейший
+                    # экспорт не блокируется (маппинг не критичен для самой job),
+                    # но SRE получит сигнал в логах.
                     try:
-                        # Пишем оба маппинга одним pipeline (2 RTT → 1 RTT)
                         pipe = self.control_redis.pipeline()
                         pipe.set(
                             f"canonical:{original_chat_input}",
@@ -433,8 +438,11 @@ class ExportWorker:
                                 ex=86400 * 30,
                             )
                         await pipe.execute()
-                    except Exception:
-                        pass
+                    except Exception as canonical_err:
+                        logger.warning(
+                            f"Failed to write canonical mapping for chat "
+                            f"{original_chat_input!r} → {canonical_id}: {canonical_err}"
+                        )
 
             # --- Cache-aware export ---
             # Оба пути возвращают (count: int, messages: AsyncGenerator) или None.
@@ -513,19 +521,66 @@ class ExportWorker:
 
         except Exception as e:
             logger.error(f"❌ Unexpected error in job {job.task_id}: {e}", exc_info=True)
-            # send_response с status="failed" уведомляет юзера через _notify_user_failure
+            # Префикс "Export failed:" даёт юзеру осмысленный текст в Telegram
+            # вместо голого str(e), и совпадает с форматом, который показывает
+            # _notify_user_failure ("❌ Export failed (task ...)").
+            error_text = f"Export failed: {e}"
+
+            # Preferred path: send_response умеет нотифицировать юзера и
+            # выполнить server-side cleanup. Но если сам send_response падает
+            # (OOM, сеть, баг в клиенте), юзер всё равно должен получить
+            # сообщение — поэтому есть direct fallback к _notify_user_failure.
+            # Без fallback после OOM в send_response юзер «зависает» без feedback,
+            # а active_export ключ остаётся в Redis до TTL.
+            notified_via_send_response = False
             if self.java_client:
-                await self.java_client.send_response(
-                    task_id=job.task_id,
-                    status="failed",
-                    messages=[],
-                    error=str(e),
-                    user_chat_id=job.user_chat_id,
+                try:
+                    await self.java_client.send_response(
+                        task_id=job.task_id,
+                        status="failed",
+                        messages=[],
+                        error=error_text,
+                        user_chat_id=job.user_chat_id,
+                    )
+                    notified_via_send_response = True
+                except Exception as notify_err:
+                    logger.error(
+                        f"send_response failed during error handling for "
+                        f"{job.task_id}: {notify_err}. Falling back to direct "
+                        f"user notification.",
+                        exc_info=True,
+                    )
+
+            if (
+                not notified_via_send_response
+                and self.java_client
+                and job.user_chat_id
+            ):
+                try:
+                    await self.java_client._notify_user_failure(
+                        job.user_chat_id, job.task_id, error_text
+                    )
+                except Exception as fallback_err:
+                    logger.error(
+                        f"Direct _notify_user_failure also failed for "
+                        f"{job.task_id}: {fallback_err}"
+                    )
+
+            try:
+                await self.queue_consumer.mark_job_failed(job.task_id, error_text)
+            except Exception as mark_err:
+                logger.error(
+                    f"Failed to mark job {job.task_id} as failed: {mark_err}"
                 )
-            await self.queue_consumer.mark_job_failed(job.task_id, str(e))
+
             self.jobs_failed += 1
             self.log_memory_usage("JOB_ERROR")
-            await self._cleanup_job(job)
+            try:
+                await self._cleanup_job(job)
+            except Exception as cleanup_err:
+                logger.error(
+                    f"Cleanup failed for {job.task_id}: {cleanup_err}"
+                )
             return True
 
     @staticmethod
@@ -877,17 +932,18 @@ class ExportWorker:
             except ValueError:
                 pass
 
-        tracker = self._create_tracker(job)
-        if tracker:
-            await tracker.start()
-
+        # Получаем total ДО start(), чтобы передать в start(total=total).
+        # Это позволяет сразу показать progress bar с реальным total вместо
+        # двух API calls (start→spinner, set_total→0% bar).
         total = await self.telegram_client.get_messages_count(
             job.chat_id, from_date, to_date
         )
         if job.limit and job.limit > 0 and (total is None or job.limit < total):
             total = job.limit
+
+        tracker = self._create_tracker(job)
         if tracker:
-            await tracker.set_total(total)
+            await tracker.start(total=total)
 
         use_cache = bool(self.message_cache and self.message_cache.enabled)
         batch: list[ExportedMessage] = []

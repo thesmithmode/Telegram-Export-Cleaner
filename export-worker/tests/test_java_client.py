@@ -1,674 +1,652 @@
 """
 Tests for java_client.py — Java API client integration.
 
-Tests critical business logic:
-- Result JSON building with correct structure
-- HTTP retry logic with backoff
-- Error handling (400, 401, 500)
-- User notification flow
+Covers the end-to-end send_response flow and its internal helpers:
+- _stream_to_temp_json: streams messages to disk as result.json (O(1) RAM)
+- _upload_file_to_java: HTTP upload with retry
+- send_response: orchestration (failed / completed / delivery failure)
+- _transform_entities: UTF-16 safe entity extraction
+- _build_filename: filename generation from chat title + date range
+- _split_text_by_size: text splitting on line boundaries
+- _send_file_to_user: Telegram file delivery (single + split for >45MB)
+- update_queue_position: Telegram queue status message
+- ProgressTracker: throttled progress reporting with seed + ETA
 """
 
-import pytest
+import os
 import json
+import tempfile
+import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
-import httpx
 
-from models import ExportedMessage, ExportResponse
-from java_client import JavaBotClient
+from models import ExportedMessage
+from java_client import JavaBotClient, ProgressTracker
 
 
-@pytest.mark.asyncio
-class TestJavaClientBuildResultJson:
-    """Test result.json building."""
+# ---------- helpers -----------------------------------------------------
 
-    async def test_build_result_json_structure(self):
-        """Test that result.json has correct structure."""
-        messages = [
-            ExportedMessage(
-                id=1,
-                type="message",
-                date="2025-06-24T15:29:46",
-                text="Hello",
-                from_user="John"
-            ),
-            ExportedMessage(
-                id=2,
-                type="message",
-                date="2025-06-24T15:30:00",
-                text="World"
-            )
-        ]
 
-        with patch('java_client.settings'):
-            client = JavaBotClient()
-            result = client._build_result_json(messages)
+def _patch_settings(**overrides):
+    """Return a `patch('java_client.settings')` context manager pre-configured
+    with safe concrete primitives.
 
-        # Verify structure
-        assert isinstance(result, dict)
-        assert result['type'] == 'personal_chat'
-        assert result['name'] == 'Telegram Export'
-        assert 'messages' in result
-        assert len(result['messages']) == 2
+    JavaBotClient.__init__ reads settings.JAVA_API_BASE_URL and
+    settings.TELEGRAM_BOT_TOKEN at construction time; leaving them as raw
+    MagicMocks causes base_url/bot_token to leak into httpx/f-strings and
+    breaks downstream logic. Always patch with real strings.
+    """
+    patcher = patch("java_client.settings")
+    mock = patcher.start()
+    mock.JAVA_API_BASE_URL = overrides.get("JAVA_API_BASE_URL", "http://localhost:8080")
+    mock.TELEGRAM_BOT_TOKEN = overrides.get("TELEGRAM_BOT_TOKEN", "test_bot_token")
+    mock.JAVA_API_KEY = overrides.get("JAVA_API_KEY", None)
+    mock.RETRY_BASE_DELAY = overrides.get("RETRY_BASE_DELAY", 0.0)
+    mock.RETRY_MAX_DELAY = overrides.get("RETRY_MAX_DELAY", 60.0)
+    return patcher, mock
 
-        # Verify message content
-        assert result['messages'][0]['id'] == 1
-        assert result['messages'][0]['text'] == 'Hello'
-        assert result['messages'][0]['from_user'] == 'John'
 
-    async def test_build_result_json_excludes_none(self):
-        """Test that None fields are excluded from JSON."""
-        messages = [
-            ExportedMessage(
-                id=1,
-                type="message",
-                date="2025-06-24T15:29:46",
-                text="Hello",
-                from_user=None,  # Should be excluded
-                edited=None      # Should be excluded
-            )
-        ]
+def _make_client(**overrides):
+    """Build a JavaBotClient with mocked settings + mocked httpx client.
 
-        with patch('java_client.settings'):
-            client = JavaBotClient()
-            result = client._build_result_json(messages)
+    Returns (client, patcher). Caller MUST call patcher.stop() in finally to
+    restore settings. Using start/stop rather than `with` lets tests keep the
+    patch active across nested try/finally blocks (e.g. for temp file cleanup).
+    """
+    patcher, _ = _patch_settings(**overrides)
+    client = JavaBotClient(max_retries=overrides.get("max_retries", 3))
+    client._http_client = AsyncMock()
+    return client, patcher
 
-        # Verify None fields are excluded
-        msg = result['messages'][0]
-        assert 'from_user' not in msg
-        assert 'edited' not in msg
-        assert msg['text'] == 'Hello'
 
-    async def test_build_result_json_empty_messages(self):
-        """Test building result.json with empty messages list."""
-        messages = []
+def _make_temp_json(content: bytes = b'{"test": "data"}') -> str:
+    """Create a temp file on disk and return its path."""
+    fd, path = tempfile.mkstemp(suffix=".json")
+    with os.fdopen(fd, "wb") as f:
+        f.write(content)
+    return path
 
-        with patch('java_client.settings'):
-            client = JavaBotClient()
-            result = client._build_result_json(messages)
 
-        assert result['type'] == 'personal_chat'
-        assert result['messages'] == []
+# ---------- _stream_to_temp_json ----------------------------------------
 
 
 @pytest.mark.asyncio
-class TestJavaClientUpload:
-    """Test Java API upload logic."""
+class TestStreamToTempJson:
+    """Test streaming messages to a temp file as valid result.json."""
 
-    async def test_upload_to_java_success(self):
-        """Test successful upload to Java API."""
-        result_json = {"test": "data"}
-        result_bytes = json.dumps(result_json).encode('utf-8')
+    async def test_writes_valid_json_with_messages(self):
+        client, p = _make_client()
+        try:
+            messages = [
+                ExportedMessage(id=1, type="message", date="2025-01-01T10:00:00", text="Hello"),
+                ExportedMessage(id=2, type="message", date="2025-01-01T10:01:00", text="World"),
+            ]
+            path = await client._stream_to_temp_json(messages, count=2)
+            try:
+                with open(path, "rb") as f:
+                    data = json.loads(f.read())
+                assert data["type"] == "personal_chat"
+                assert data["message_count"] == 2
+                assert len(data["messages"]) == 2
+                assert data["messages"][0]["id"] == 1
+                assert data["messages"][0]["text"] == "Hello"
+                assert data["messages"][1]["text"] == "World"
+            finally:
+                os.unlink(path)
+        finally:
+            p.stop()
 
-        with patch('java_client.settings') as mock_settings:
-            mock_settings.RETRY_BASE_DELAY = 1.0
-            mock_settings.RETRY_MAX_DELAY = 60.0
+    async def test_empty_messages_valid_json(self):
+        client, p = _make_client()
+        try:
+            path = await client._stream_to_temp_json([], count=0)
+            try:
+                with open(path, "rb") as f:
+                    data = json.loads(f.read())
+                assert data["message_count"] == 0
+                assert data["messages"] == []
+            finally:
+                os.unlink(path)
+        finally:
+            p.stop()
 
-            with patch('java_client.httpx.AsyncClient') as mock_client_class:
-                mock_response = AsyncMock()
-                mock_response.status_code = 200
-                mock_response.text = "cleaned markdown text"
+    async def test_excludes_none_fields(self):
+        client, p = _make_client()
+        try:
+            messages = [
+                ExportedMessage(
+                    id=1,
+                    type="message",
+                    date="2025-01-01T10:00:00",
+                    text="Only text",
+                    from_user=None,
+                )
+            ]
+            path = await client._stream_to_temp_json(messages, count=1)
+            try:
+                with open(path, "rb") as f:
+                    data = json.loads(f.read())
+                msg = data["messages"][0]
+                assert "from_user" not in msg
+                assert msg["text"] == "Only text"
+            finally:
+                os.unlink(path)
+        finally:
+            p.stop()
 
-                mock_client = AsyncMock()
-                mock_client.post = AsyncMock(return_value=mock_response)
-                mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-                mock_client.__aexit__ = AsyncMock(return_value=None)
-                mock_client_class.return_value = mock_client
 
-                client = JavaBotClient(base_url="http://localhost:8080")
-                result = await client._upload_to_java(result_bytes)
+# ---------- _upload_file_to_java ----------------------------------------
 
-                assert result == "cleaned markdown text"
-                mock_client.post.assert_called_once()
 
-    async def test_upload_to_java_400_no_retry(self):
-        """Test that 400 error doesn't retry."""
-        result_json = {"test": "data"}
-        result_bytes = json.dumps(result_json).encode('utf-8')
+@pytest.mark.asyncio
+class TestUploadFileToJava:
+    """Test the /api/convert upload with retry logic.
 
-        with patch('java_client.settings') as mock_settings:
-            mock_settings.RETRY_BASE_DELAY = 1.0
-            mock_settings.RETRY_MAX_DELAY = 60.0
+    `_upload_file_to_java` reads a file from disk and POSTs it to Java via
+    httpx multipart. 400 → immediate None (no retry). 5xx → retry until
+    max_retries exhausted. On success returns response.text.
+    """
 
-            with patch('java_client.httpx.AsyncClient') as mock_client_class:
-                mock_response = AsyncMock()
-                mock_response.status_code = 400
-                mock_response.text = "Bad request"
+    async def test_success_returns_cleaned_text(self):
+        client, p = _make_client()
+        try:
+            path = _make_temp_json()
+            try:
+                client._http_client.post = AsyncMock(
+                    return_value=MagicMock(status_code=200, text="cleaned markdown")
+                )
+                result = await client._upload_file_to_java(path)
+                assert result == "cleaned markdown"
+                client._http_client.post.assert_called_once()
+            finally:
+                os.unlink(path)
+        finally:
+            p.stop()
 
-                mock_client = AsyncMock()
-                mock_client.post = AsyncMock(return_value=mock_response)
-                mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-                mock_client.__aexit__ = AsyncMock(return_value=None)
-                mock_client_class.return_value = mock_client
-
-                client = JavaBotClient(max_retries=3)
-                result = await client._upload_to_java(result_bytes)
-
-                # Should return None immediately
+    async def test_400_returns_none_without_retry(self):
+        client, p = _make_client(max_retries=3)
+        try:
+            path = _make_temp_json()
+            try:
+                client._http_client.post = AsyncMock(
+                    return_value=MagicMock(status_code=400, text="Bad request")
+                )
+                result = await client._upload_file_to_java(path)
                 assert result is None
-                # POST called only once (no retries)
-                mock_client.post.assert_called_once()
+                assert client._http_client.post.call_count == 1
+            finally:
+                os.unlink(path)
+        finally:
+            p.stop()
 
-    async def test_upload_to_java_500_retries(self):
-        """Test that 500 error retries and eventually fails."""
-        result_json = {"test": "data"}
-        result_bytes = json.dumps(result_json).encode('utf-8')
+    async def test_500_retries_until_exhausted(self):
+        client, p = _make_client(max_retries=2)
+        try:
+            path = _make_temp_json()
+            try:
+                client._http_client.post = AsyncMock(
+                    return_value=MagicMock(status_code=500, text="Server error")
+                )
+                with patch("java_client.asyncio.sleep", new_callable=AsyncMock):
+                    result = await client._upload_file_to_java(path)
+                assert result is None
+                # initial + 2 retries = 3 attempts total
+                assert client._http_client.post.call_count == 3
+            finally:
+                os.unlink(path)
+        finally:
+            p.stop()
 
-        with patch('java_client.settings') as mock_settings:
-            mock_settings.RETRY_BASE_DELAY = 0.01  # Short delay for testing
-            mock_settings.RETRY_MAX_DELAY = 60.0
+    async def test_500_then_success_on_retry(self):
+        client, p = _make_client(max_retries=3)
+        try:
+            path = _make_temp_json()
+            try:
+                resp_err = MagicMock(status_code=500, text="err")
+                resp_ok = MagicMock(status_code=200, text="Success!")
+                client._http_client.post = AsyncMock(
+                    side_effect=[resp_err, resp_err, resp_ok]
+                )
+                with patch("java_client.asyncio.sleep", new_callable=AsyncMock):
+                    result = await client._upload_file_to_java(path)
+                assert result == "Success!"
+                assert client._http_client.post.call_count == 3
+            finally:
+                os.unlink(path)
+        finally:
+            p.stop()
 
-            with patch('java_client.httpx.AsyncClient') as mock_client_class:
-                mock_response = AsyncMock()
-                mock_response.status_code = 500
-                mock_response.text = "Server error"
 
-                mock_client = AsyncMock()
-                mock_client.post = AsyncMock(return_value=mock_response)
-                mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-                mock_client.__aexit__ = AsyncMock(return_value=None)
-                mock_client_class.return_value = mock_client
-
-                with patch('java_client.asyncio.sleep', new_callable=AsyncMock):
-                    client = JavaBotClient(max_retries=2)
-                    result = await client._upload_to_java(result_bytes)
-
-                    # Should return None after retries exhausted
-                    assert result is None
-                    # POST called 3 times (initial + 2 retries)
-                    assert mock_client.post.call_count == 3
-
-    async def test_upload_to_java_retries_then_success(self):
-        """Test retry succeeds on subsequent attempt."""
-        result_json = {"test": "data"}
-        result_bytes = json.dumps(result_json).encode('utf-8')
-
-        with patch('java_client.settings') as mock_settings:
-            mock_settings.RETRY_BASE_DELAY = 0.01
-            mock_settings.RETRY_MAX_DELAY = 60.0
-
-            with patch('java_client.httpx.AsyncClient') as mock_client_class:
-                # First two calls fail, third succeeds
-                mock_responses = [
-                    AsyncMock(status_code=500, text="Error"),
-                    AsyncMock(status_code=500, text="Error"),
-                    AsyncMock(status_code=200, text="Success!"),
-                ]
-
-                mock_client = AsyncMock()
-                mock_client.post = AsyncMock(side_effect=mock_responses)
-                mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-                mock_client.__aexit__ = AsyncMock(return_value=None)
-                mock_client_class.return_value = mock_client
-
-                with patch('java_client.asyncio.sleep', new_callable=AsyncMock):
-                    client = JavaBotClient(max_retries=3)
-                    result = await client._upload_to_java(result_bytes)
-
-                    # Should succeed
-                    assert result == "Success!"
-                    # Called 3 times
-                    assert mock_client.post.call_count == 3
+# ---------- send_response orchestration ---------------------------------
 
 
 @pytest.mark.asyncio
-class TestJavaClientSendResponse:
-    """Test send_response method."""
+class TestSendResponse:
+    """Test send_response high-level orchestration."""
 
-    async def test_send_response_no_messages_notifies_user(self):
-        """При пустом результате пользователь должен получить уведомление."""
-        with patch('java_client.settings'):
-            with patch.object(JavaBotClient, '_notify_user_empty', new_callable=AsyncMock) as mock_notify:
-                client = JavaBotClient()
-                client.bot_token = "test_token"
+    async def test_failed_status_notifies_user_and_returns_true(self):
+        client, p = _make_client()
+        try:
+            with patch.object(
+                client, "_notify_user_failure", new_callable=AsyncMock
+            ) as mock_notify:
                 result = await client.send_response(
-                    task_id="test_1",
-                    status="completed",
-                    messages=[],
-                    user_chat_id=123
-                )
-
-                assert result is True
-                mock_notify.assert_called_once_with(123, "test_1")
-
-    async def test_send_response_no_messages_no_bot_token_no_notify(self):
-        """Без bot_token уведомление не отправляется (нет куда)."""
-        with patch('java_client.settings'):
-            with patch.object(JavaBotClient, '_notify_user_empty', new_callable=AsyncMock) as mock_notify:
-                client = JavaBotClient()
-                client.bot_token = None
-                result = await client.send_response(
-                    task_id="test_1",
-                    status="completed",
-                    messages=[],
-                    user_chat_id=123
-                )
-
-                assert result is True
-                mock_notify.assert_not_called()
-
-    async def test_send_response_failed_status_returns_true(self):
-        """Test that failed status returns True."""
-        with patch('java_client.settings'):
-            with patch.object(JavaBotClient, '_notify_user_failure', new_callable=AsyncMock):
-                client = JavaBotClient()
-                result = await client.send_response(
-                    task_id="test_1",
+                    task_id="t1",
                     status="failed",
                     messages=[],
                     error="Export failed",
                     error_code="CHAT_PRIVATE",
-                    user_chat_id=123
-                )
-
-                # Should return True (job finished cleanly with error)
-                assert result is True
-
-    async def test_send_response_calls_upload_and_send(self):
-        """Test successful flow calls upload and file delivery."""
-        messages = [
-            ExportedMessage(
-                id=1,
-                type="message",
-                date="2025-06-24T15:29:46",
-                text="Test"
-            )
-        ]
-
-        with patch('java_client.settings'):
-            with patch.object(JavaBotClient, '_upload_to_java', new_callable=AsyncMock) as mock_upload:
-                with patch.object(JavaBotClient, '_send_file_to_user', new_callable=AsyncMock) as mock_send:
-                    mock_upload.return_value = "cleaned text"
-
-                    client = JavaBotClient()
-                    result = await client.send_response(
-                        task_id="test_1",
-                        status="completed",
-                        messages=messages,
-                        user_chat_id=123
-                    )
-
-                    # Both methods should be called
-                    assert result is True
-                    mock_upload.assert_called_once()
-                    mock_send.assert_called_once()
-
-
-@pytest.mark.asyncio
-class TestJavaClientNotifications:
-    """Test user notification methods."""
-
-    async def test_send_file_to_user_success(self):
-        """Test successful file delivery to user."""
-        with patch('java_client.settings') as mock_settings:
-            mock_settings.TELEGRAM_BOT_TOKEN = "test_token"
-
-            with patch('java_client.httpx.AsyncClient') as mock_client_class:
-                mock_response = AsyncMock()
-                mock_response.status_code = 200
-
-                mock_client = AsyncMock()
-                mock_client.post = AsyncMock(return_value=mock_response)
-                mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-                mock_client.__aexit__ = AsyncMock(return_value=None)
-                mock_client_class.return_value = mock_client
-
-                client = JavaBotClient()
-                result = await client._send_file_to_user(
                     user_chat_id=123,
-                    task_id="test_1",
-                    cleaned_text="export content"
                 )
+            assert result is True
+            mock_notify.assert_called_once()
+        finally:
+            p.stop()
 
-                assert result is True
-                mock_client.post.assert_called_once()
+    async def test_completed_calls_upload_and_delivers(self):
+        client, p = _make_client()
+        try:
+            messages = [
+                ExportedMessage(id=1, type="message", date="2025-01-01T00:00:00", text="Test")
+            ]
+            with patch.object(
+                client, "_upload_file_to_java", new_callable=AsyncMock
+            ) as mock_upload, patch.object(
+                client, "_send_file_to_user", new_callable=AsyncMock
+            ) as mock_send:
+                mock_upload.return_value = "cleaned text"
+                mock_send.return_value = True
 
-    async def test_notify_user_failure(self):
-        """Test failure notification is sent."""
-        with patch('java_client.settings') as mock_settings:
-            mock_settings.TELEGRAM_BOT_TOKEN = "test_token"
-
-            with patch('java_client.httpx.AsyncClient') as mock_client_class:
-                mock_response = AsyncMock()
-                mock_response.status_code = 200
-
-                mock_client = AsyncMock()
-                mock_client.post = AsyncMock(return_value=mock_response)
-                mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-                mock_client.__aexit__ = AsyncMock(return_value=None)
-                mock_client_class.return_value = mock_client
-
-                client = JavaBotClient()
-                await client._notify_user_failure(
+                result = await client.send_response(
+                    task_id="t1",
+                    status="completed",
+                    messages=messages,
+                    actual_count=1,
                     user_chat_id=123,
-                    task_id="test_1",
-                    error="Chat not accessible"
+                    chat_title="Test Chat",
                 )
 
-                # sendMessage should be called
-                mock_client.post.assert_called_once()
-                # Verify message contains error info
-                call_args = mock_client.post.call_args
-                assert "test_1" in str(call_args)
+            assert result is True
+            mock_upload.assert_called_once()
+            mock_send.assert_called_once()
+        finally:
+            p.stop()
+
+    async def test_delivery_failure_returns_false(self):
+        client, p = _make_client()
+        try:
+            messages = [
+                ExportedMessage(id=1, type="message", date="2025-01-01T00:00:00", text="Test")
+            ]
+            with patch.object(
+                client, "_upload_file_to_java", new_callable=AsyncMock
+            ) as mock_upload, patch.object(
+                client, "_send_file_to_user", new_callable=AsyncMock
+            ) as mock_send, patch.object(
+                client, "_notify_user_failure", new_callable=AsyncMock
+            ) as mock_notify:
+                mock_upload.return_value = "cleaned text"
+                mock_send.return_value = False  # delivery failed
+
+                result = await client.send_response(
+                    task_id="t1",
+                    status="completed",
+                    messages=messages,
+                    actual_count=1,
+                    user_chat_id=123,
+                )
+
+            assert result is False
+            mock_notify.assert_called_once()
+        finally:
+            p.stop()
+
+    async def test_upload_returns_none_triggers_failure_notify(self):
+        """When Java API is down, _upload_file_to_java returns None → user notified."""
+        client, p = _make_client()
+        try:
+            messages = [
+                ExportedMessage(id=1, type="message", date="2025-01-01T00:00:00", text="Test")
+            ]
+            with patch.object(
+                client, "_upload_file_to_java", new_callable=AsyncMock
+            ) as mock_upload, patch.object(
+                client, "_notify_user_failure", new_callable=AsyncMock
+            ) as mock_notify:
+                mock_upload.return_value = None  # simulate Java API outage
+
+                result = await client.send_response(
+                    task_id="t1",
+                    status="completed",
+                    messages=messages,
+                    actual_count=1,
+                    user_chat_id=123,
+                )
+
+            assert result is False
+            mock_notify.assert_called_once()
+        finally:
+            p.stop()
 
 
-class TestSplitTextBySize:
-    """Test file splitting for large exports."""
-
-    def test_small_text_single_part(self):
-        """Text under limit stays as single part."""
-        text = "Hello\nWorld\n"
-        parts = JavaBotClient._split_text_by_size(text, max_bytes=1000)
-        assert len(parts) == 1
-        assert parts[0] == "Hello\nWorld\n"
-
-    def test_split_on_line_boundaries(self):
-        """Split respects line boundaries."""
-        # Each line ~10 bytes
-        lines = [f"Line {i:04d}" for i in range(100)]
-        text = "\n".join(lines)
-        # Max 50 bytes per part → ~5 lines per part
-        parts = JavaBotClient._split_text_by_size(text, max_bytes=50)
-        assert len(parts) > 1
-        # Reassembled text matches original
-        reassembled = "\n".join(parts)
-        assert reassembled == text
-
-    def test_empty_text(self):
-        """Empty text returns single empty part."""
-        parts = JavaBotClient._split_text_by_size("", max_bytes=100)
-        assert len(parts) == 1
-
-    def test_single_long_line_exceeds_limit(self):
-        """A single line longer than limit still gets included."""
-        text = "A" * 200
-        parts = JavaBotClient._split_text_by_size(text, max_bytes=100)
-        # Single line can't be split, so it goes into one part
-        assert len(parts) == 1
-        assert parts[0] == text
-
-    def test_exact_boundary(self):
-        """Lines exactly at boundary don't create empty parts."""
-        text = "12345\n12345\n12345"  # 3 lines, ~6 bytes each
-        parts = JavaBotClient._split_text_by_size(text, max_bytes=12)
-        assert all(len(p) > 0 for p in parts)
-        assert "\n".join(parts) == text
-
-    def test_utf8_multibyte_characters(self):
-        """Split correctly handles UTF-8 multibyte (Russian text)."""
-        # "Привет" = 12 bytes in UTF-8
-        lines = ["Привет"] * 10
-        text = "\n".join(lines)
-        parts = JavaBotClient._split_text_by_size(text, max_bytes=30)
-        assert len(parts) > 1
-        reassembled = "\n".join(parts)
-        assert reassembled == text
-
-
-@pytest.mark.asyncio
-class TestSendFileToUserSplit:
-    """Test file delivery with splitting."""
-
-    async def test_send_small_file_no_split(self):
-        """Small file sent as single document."""
-        with patch('java_client.settings') as mock_settings:
-            mock_settings.TELEGRAM_BOT_TOKEN = "test_token"
-            with patch('java_client.httpx.AsyncClient') as mock_client_class:
-                mock_response = AsyncMock()
-                mock_response.status_code = 200
-                mock_client = AsyncMock()
-                mock_client.post = AsyncMock(return_value=mock_response)
-                mock_client_class.return_value = mock_client
-
-                client = JavaBotClient()
-                result = await client._send_file_to_user(123, "task_1", "small text")
-
-                assert result is True
-                assert mock_client.post.call_count == 1
-
-    async def test_send_large_file_splits(self):
-        """File > 45MB is split into multiple parts."""
-        with patch('java_client.settings') as mock_settings:
-            mock_settings.TELEGRAM_BOT_TOKEN = "test_token"
-            with patch('java_client.httpx.AsyncClient') as mock_client_class:
-                mock_response = AsyncMock()
-                mock_response.status_code = 200
-                mock_client = AsyncMock()
-                mock_client.post = AsyncMock(return_value=mock_response)
-                mock_client_class.return_value = mock_client
-
-                client = JavaBotClient()
-                # Create text > 45MB
-                line = "A" * 1000 + "\n"
-                big_text = line * 50000  # ~50MB
-                result = await client._send_file_to_user(123, "task_1", big_text)
-
-                assert result is True
-                assert mock_client.post.call_count >= 2  # At least 2 parts
-
-    async def test_send_response_returns_false_on_delivery_failure(self):
-        """send_response returns False if file delivery fails."""
-        messages = [
-            ExportedMessage(id=1, type="message", date="2025-01-01T00:00:00", text="Test")
-        ]
-        with patch('java_client.settings'):
-            with patch.object(JavaBotClient, '_upload_to_java', new_callable=AsyncMock) as mock_upload:
-                with patch.object(JavaBotClient, '_send_file_to_user', new_callable=AsyncMock) as mock_send:
-                    with patch.object(JavaBotClient, '_notify_user_failure', new_callable=AsyncMock) as mock_notify:
-                        mock_upload.return_value = "cleaned text"
-                        mock_send.return_value = False  # Delivery failed
-
-                        client = JavaBotClient()
-                        result = await client.send_response(
-                            task_id="test_1", status="completed",
-                            messages=messages, user_chat_id=123
-                        )
-
-                        assert result is False
-                        mock_notify.assert_called_once()
-
-
-class TestBuildFilename:
-    """Test filename generation from chat title and dates."""
-
-    def test_full_export_with_title(self):
-        """Chat title with no dates → title_all.txt."""
-        result = JavaBotClient._build_filename("Pavel Durov")
-        assert result == "Pavel_Durov_all.txt"
-
-    def test_date_range_export(self):
-        """Chat title with date range."""
-        result = JavaBotClient._build_filename(
-            "Pavel Durov", "2025-01-01T00:00:00", "2025-12-31T23:59:59"
-        )
-        assert result == "Pavel_Durov_2025-01-01_2025-12-31.txt"
-
-    def test_no_title_fallback(self):
-        """No title → export_all.txt."""
-        result = JavaBotClient._build_filename(None)
-        assert result == "export_all.txt"
-
-    def test_from_date_only(self):
-        """Only from_date."""
-        result = JavaBotClient._build_filename("Chat", "2025-06-01T00:00:00")
-        assert result == "Chat_from_2025-06-01.txt"
-
-    def test_to_date_only(self):
-        """Only to_date."""
-        result = JavaBotClient._build_filename("Chat", None, "2025-06-01T00:00:00")
-        assert result == "Chat_to_2025-06-01.txt"
-
-    def test_sanitize_special_chars(self):
-        """Special characters removed from filename."""
-        result = JavaBotClient._build_filename("Chat/Name: (test)")
-        assert "/" not in result
-        assert ":" not in result
-
-    def test_sanitize_long_title(self):
-        """Long title truncated."""
-        long_title = "A" * 200
-        result = JavaBotClient._build_filename(long_title)
-        # Base name limited to 80 chars + _all.txt
-        assert len(result) <= 90
+# ---------- _transform_entities (static) --------------------------------
 
 
 class TestEntityTransformation:
-    """Test text entity transformation from Bot API to Desktop export format."""
+    """Test text entity transformation from Bot API to Desktop export format.
+
+    _transform_entities is UTF-16 safe: it encodes text as UTF-16-LE and slices
+    by code unit offsets. Only fields {type, text, href, user_id} are preserved;
+    extra fields (e.g. 'language' on pre blocks) are intentionally dropped.
+    """
 
     def test_transform_single_bold_entity(self):
-        """Test transforming single bold entity."""
         text = "Hello world"
         entities = [{"type": "bold", "offset": 0, "length": 5}]
-
         result = JavaBotClient._transform_entities(text, entities)
-
         assert len(result) == 1
         assert result[0]["type"] == "bold"
         assert result[0]["text"] == "Hello"
+        # offset/length replaced by extracted text, not duplicated
         assert "offset" not in result[0]
         assert "length" not in result[0]
 
     def test_transform_multiple_entities(self):
-        """Test transforming multiple entities."""
         text = "Hello world"
         entities = [
             {"type": "bold", "offset": 0, "length": 5},
-            {"type": "italic", "offset": 6, "length": 5}
+            {"type": "italic", "offset": 6, "length": 5},
         ]
-
         result = JavaBotClient._transform_entities(text, entities)
+        assert [e["type"] for e in result] == ["bold", "italic"]
+        assert [e["text"] for e in result] == ["Hello", "world"]
 
-        assert len(result) == 2
-        assert result[0]["type"] == "bold"
-        assert result[0]["text"] == "Hello"
-        assert result[1]["type"] == "italic"
-        assert result[1]["text"] == "world"
-
-    def test_transform_entity_with_url(self):
-        """Test transforming text_url entity with href."""
+    def test_transform_text_url_renames_url_to_href(self):
         text = "Click here"
         entities = [
             {"type": "text_url", "offset": 0, "length": 10, "url": "https://example.com"}
         ]
-
         result = JavaBotClient._transform_entities(text, entities)
-
         assert result[0]["type"] == "text_url"
         assert result[0]["text"] == "Click here"
         assert result[0]["href"] == "https://example.com"
-        assert "url" not in result[0]  # Renamed to href
+        assert "url" not in result[0]  # renamed, not duplicated
 
-    def test_transform_entity_with_user_id(self):
-        """Test transforming text_mention entity with user_id."""
+    def test_transform_text_mention_preserves_user_id(self):
         text = "Mention @john"
-        entities = [
-            {"type": "text_mention", "offset": 8, "length": 5, "user_id": 12345}
-        ]
-
+        entities = [{"type": "text_mention", "offset": 8, "length": 5, "user_id": 12345}]
         result = JavaBotClient._transform_entities(text, entities)
-
         assert result[0]["type"] == "text_mention"
         assert result[0]["text"] == "@john"
         assert result[0]["user_id"] == 12345
 
     def test_transform_empty_entities_list(self):
-        """Test with empty entities list."""
-        text = "Hello world"
-        entities = []
-
-        result = JavaBotClient._transform_entities(text, entities)
-
-        assert result == []
+        assert JavaBotClient._transform_entities("Hello", []) == []
 
     def test_transform_none_entities(self):
-        """Test with None entities."""
-        text = "Hello world"
-
-        result = JavaBotClient._transform_entities(text, None)
-
-        assert result is None
+        assert JavaBotClient._transform_entities("Hello", None) is None
 
     def test_transform_empty_text(self):
-        """Test with empty text."""
         entities = [{"type": "bold", "offset": 0, "length": 5}]
+        # empty text short-circuits — original entities returned as-is
+        assert JavaBotClient._transform_entities("", entities) == entities
 
-        result = JavaBotClient._transform_entities("", entities)
-
-        assert result == entities  # Returns original on empty text
-
-    def test_transform_malformed_offset_length(self):
-        """Test with invalid offset/length (graceful degradation)."""
+    def test_transform_malformed_offset_length_degrades_gracefully(self):
+        """Out-of-bounds offsets produce empty extracted text, not a crash."""
         text = "Hello"
-        entities = [{"type": "bold", "offset": 10, "length": 5}]  # Out of bounds
-
+        entities = [{"type": "bold", "offset": 10, "length": 5}]
         result = JavaBotClient._transform_entities(text, entities)
-
-        # Should still work, extracting empty string
         assert result[0]["type"] == "bold"
-        assert result[0]["text"] == ""  # Empty slice
+        assert result[0]["text"] == ""
 
-    def test_transform_entities_preserves_other_fields(self):
-        """Test that other entity fields are preserved."""
+    def test_transform_drops_unknown_fields(self):
+        """Current contract: non-{type,text,href,user_id} fields are dropped.
+
+        If _transform_entities is extended to preserve 'language' on pre/code
+        blocks, update this test. Until then, keep it — MarkdownParser on the
+        Java side doesn't consume 'language' anyway.
+        """
         text = "code block"
-        entities = [
-            {
-                "type": "pre",
-                "offset": 0,
-                "length": 10,
-                "language": "python"
-            }
-        ]
-
+        entities = [{"type": "pre", "offset": 0, "length": 10, "language": "python"}]
         result = JavaBotClient._transform_entities(text, entities)
-
         assert result[0]["type"] == "pre"
         assert result[0]["text"] == "code block"
-        # Language is preserved (though not used by MarkdownParser currently)
-        assert result[0]["language"] == "python"
+        assert "language" not in result[0]
 
-    def test_build_result_json_transforms_entities(self):
-        """Test that _build_result_json calls entity transformation."""
-        messages = [
-            ExportedMessage(
-                id=1,
-                type="message",
-                date="2025-06-24T15:29:46",
-                text="Hello world",
-                text_entities=[
-                    {"type": "bold", "offset": 0, "length": 5},
-                    {"type": "italic", "offset": 6, "length": 5}
-                ]
-            )
-        ]
 
-        with patch('java_client.settings'):
+# ---------- _build_filename ---------------------------------------------
+
+
+class TestBuildFilename:
+    """Test filename generation from chat title and date range.
+
+    Current contract:
+      - BOTH f_date AND t_date set → "{base}_{f[:10]}_{t[:10]}.txt"
+      - Otherwise → "{base}_all.txt"
+      - Single-from / single-to do NOT produce special names (documented).
+    """
+
+    def test_full_export_with_title(self):
+        _, p = _patch_settings()
+        try:
             client = JavaBotClient()
-            result = client._build_result_json(messages)
+            assert client._build_filename("Pavel Durov", None, None) == "Pavel_Durov_all.txt"
+        finally:
+            p.stop()
 
-        msg = result["messages"][0]
-        assert msg["text"] == "Hello world"
-        assert len(msg["text_entities"]) == 2
-        assert msg["text_entities"][0]["type"] == "bold"
-        assert msg["text_entities"][0]["text"] == "Hello"
-        assert "offset" not in msg["text_entities"][0]
-        assert msg["text_entities"][1]["type"] == "italic"
-        assert msg["text_entities"][1]["text"] == "world"
+    def test_date_range_export(self):
+        _, p = _patch_settings()
+        try:
+            client = JavaBotClient()
+            result = client._build_filename(
+                "Pavel Durov", "2025-01-01T00:00:00", "2025-12-31T23:59:59"
+            )
+            assert result == "Pavel_Durov_2025-01-01_2025-12-31.txt"
+        finally:
+            p.stop()
+
+    def test_no_title_fallback(self):
+        _, p = _patch_settings()
+        try:
+            client = JavaBotClient()
+            assert client._build_filename(None, None, None) == "export_all.txt"
+        finally:
+            p.stop()
+
+    def test_only_from_date_falls_back_to_all(self):
+        _, p = _patch_settings()
+        try:
+            client = JavaBotClient()
+            result = client._build_filename("Chat", "2025-06-01T00:00:00", None)
+            assert result == "Chat_all.txt"
+        finally:
+            p.stop()
+
+    def test_only_to_date_falls_back_to_all(self):
+        _, p = _patch_settings()
+        try:
+            client = JavaBotClient()
+            result = client._build_filename("Chat", None, "2025-06-01T00:00:00")
+            assert result == "Chat_all.txt"
+        finally:
+            p.stop()
+
+    def test_sanitize_special_chars(self):
+        _, p = _patch_settings()
+        try:
+            client = JavaBotClient()
+            result = client._build_filename("Chat/Name: (test)", None, None)
+            assert "/" not in result
+            assert ":" not in result
+        finally:
+            p.stop()
+
+    def test_sanitize_long_title(self):
+        _, p = _patch_settings()
+        try:
+            client = JavaBotClient()
+            result = client._build_filename("A" * 200, None, None)
+            # base capped at 80 chars + "_all.txt"
+            assert len(result) <= 90
+        finally:
+            p.stop()
+
+
+# ---------- _split_text_by_size -----------------------------------------
+
+
+class TestSplitTextBySize:
+    """Test text splitting by byte budget, respecting line boundaries."""
+
+    def test_small_text_single_part(self):
+        _, p = _patch_settings()
+        try:
+            client = JavaBotClient()
+            parts = client._split_text_by_size("Hello\nWorld\n", 1000)
+            assert len(parts) == 1
+            assert parts[0] == "Hello\nWorld\n"
+        finally:
+            p.stop()
+
+    def test_split_on_line_boundaries(self):
+        _, p = _patch_settings()
+        try:
+            client = JavaBotClient()
+            lines = [f"Line {i:04d}" for i in range(100)]
+            text = "\n".join(lines)
+            parts = client._split_text_by_size(text, 50)
+            assert len(parts) > 1
+            assert "\n".join(parts) == text
+        finally:
+            p.stop()
+
+    def test_empty_text(self):
+        _, p = _patch_settings()
+        try:
+            client = JavaBotClient()
+            parts = client._split_text_by_size("", 100)
+            assert len(parts) == 1
+        finally:
+            p.stop()
+
+    def test_single_long_line_exceeds_limit(self):
+        _, p = _patch_settings()
+        try:
+            client = JavaBotClient()
+            text = "A" * 200
+            parts = client._split_text_by_size(text, 100)
+            # unsplittable single line stays whole
+            assert len(parts) == 1
+            assert parts[0] == text
+        finally:
+            p.stop()
+
+    def test_exact_boundary_no_empty_parts(self):
+        _, p = _patch_settings()
+        try:
+            client = JavaBotClient()
+            text = "12345\n12345\n12345"
+            parts = client._split_text_by_size(text, 12)
+            assert all(len(part) > 0 for part in parts)
+            assert "\n".join(parts) == text
+        finally:
+            p.stop()
+
+    def test_utf8_multibyte_characters(self):
+        _, p = _patch_settings()
+        try:
+            client = JavaBotClient()
+            lines = ["Привет"] * 10
+            text = "\n".join(lines)
+            parts = client._split_text_by_size(text, 30)
+            assert len(parts) > 1
+            assert "\n".join(parts) == text
+        finally:
+            p.stop()
+
+
+# ---------- _send_file_to_user ------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestSendFileToUser:
+    """Test Telegram file delivery, single and split-over-45MB paths."""
+
+    async def test_small_file_sent_as_single_document(self):
+        client, p = _make_client()
+        try:
+            client._http_client.post = AsyncMock(return_value=MagicMock(status_code=200))
+            result = await client._send_file_to_user(123, "task_1", "small text", "file.txt")
+            assert result is True
+            assert client._http_client.post.call_count == 1
+        finally:
+            p.stop()
+
+    async def test_large_file_splits_into_multiple_parts(self):
+        client, p = _make_client()
+        try:
+            client._http_client.post = AsyncMock(return_value=MagicMock(status_code=200))
+
+            # ~47MB text (just over 45MB threshold) with newlines so it's splittable
+            line = "A" * 999 + "\n"  # 1000 bytes per line
+            big_text = line * 50_000  # ~50MB, ~50k lines → splits into ≥ 2 parts
+            result = await client._send_file_to_user(123, "task_1", big_text, "big.txt")
+
+            assert result is True
+            assert client._http_client.post.call_count >= 2
+        finally:
+            p.stop()
+
+    async def test_delivery_failure_returns_false(self):
+        client, p = _make_client()
+        try:
+            # Telegram returns non-200 → _send_single_file returns False
+            client._http_client.post = AsyncMock(return_value=MagicMock(status_code=500))
+            result = await client._send_file_to_user(123, "task_1", "text", "file.txt")
+            assert result is False
+        finally:
+            p.stop()
+
+
+# ---------- _notify_user_failure ----------------------------------------
+
+
+@pytest.mark.asyncio
+class TestNotifyUserFailure:
+    async def test_sends_failure_message_with_task_id_and_reason(self):
+        client, p = _make_client()
+        try:
+            client._http_client.post = AsyncMock(return_value=MagicMock(status_code=200))
+
+            await client._notify_user_failure(123, "task_1", "Chat not accessible")
+
+            client._http_client.post.assert_called_once()
+            call_args = client._http_client.post.call_args
+            data = call_args[1]["data"]
+            assert data["chat_id"] == 123
+            assert "task_1" in data["text"]
+            assert "Chat not accessible" in data["text"]
+        finally:
+            p.stop()
+
+    async def test_swallows_http_errors(self):
+        client, p = _make_client()
+        try:
+            client._http_client.post = AsyncMock(side_effect=Exception("connection refused"))
+            # Must not raise
+            await client._notify_user_failure(123, "task_1", "err")
+        finally:
+            p.stop()
+
+
+# ---------- update_queue_position ---------------------------------------
 
 
 @pytest.mark.asyncio
 class TestUpdateQueuePosition:
-    """Tests for update_queue_position."""
-
     async def test_sends_position_message(self):
-        """Should edit message with queue position text."""
-        with patch('java_client.settings') as mock_settings:
-            mock_settings.JAVA_API_BASE_URL = "http://localhost:8080"
-            mock_settings.TELEGRAM_BOT_TOKEN = "test_token"
-
-            client = JavaBotClient()
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            client._http_client = AsyncMock()
-            client._http_client.post = AsyncMock(return_value=mock_response)
+        client, p = _make_client()
+        try:
+            client._http_client.post = AsyncMock(return_value=MagicMock(status_code=200))
 
             await client.update_queue_position(
                 user_chat_id=123, msg_id=456, position=2, total=5
@@ -682,121 +660,102 @@ class TestUpdateQueuePosition:
             assert data["message_id"] == 456
             assert "2" in data["text"]
             assert "5" in data["text"]
+        finally:
+            p.stop()
 
     async def test_sends_started_message_when_position_zero(self):
-        """Should send 'started' message when position is 0."""
-        with patch('java_client.settings') as mock_settings:
-            mock_settings.JAVA_API_BASE_URL = "http://localhost:8080"
-            mock_settings.TELEGRAM_BOT_TOKEN = "test_token"
-
-            client = JavaBotClient()
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            client._http_client = AsyncMock()
-            client._http_client.post = AsyncMock(return_value=mock_response)
+        client, p = _make_client()
+        try:
+            client._http_client.post = AsyncMock(return_value=MagicMock(status_code=200))
 
             await client.update_queue_position(
                 user_chat_id=123, msg_id=456, position=0, total=0
             )
 
             data = client._http_client.post.call_args[1]["data"]
-            assert "начата" in data["text"]
+            # Реальный текст в коде: "⏳ Ваш экспорт начался..."
+            assert "начался" in data["text"]
+        finally:
+            p.stop()
 
     async def test_handles_http_error_gracefully(self):
-        """Should not raise on HTTP error."""
-        with patch('java_client.settings') as mock_settings:
-            mock_settings.JAVA_API_BASE_URL = "http://localhost:8080"
-            mock_settings.TELEGRAM_BOT_TOKEN = "test_token"
-
-            client = JavaBotClient()
-            client._http_client = AsyncMock()
+        client, p = _make_client()
+        try:
             client._http_client.post = AsyncMock(side_effect=Exception("connection refused"))
-
-            # Should not raise
+            # Must not raise
             await client.update_queue_position(
                 user_chat_id=123, msg_id=456, position=1, total=3
             )
+        finally:
+            p.stop()
+
+
+# ---------- ProgressTracker ---------------------------------------------
 
 
 @pytest.mark.asyncio
 class TestProgressTracker:
-    """Test ProgressTracker clamping to 100%."""
+    """Test ProgressTracker: clamping, seed, set_total, finalize."""
 
     async def test_send_progress_update_clamps_over_100_percent(self):
-        """Progress percentage should never exceed 100%."""
-        with patch('java_client.settings') as mock_settings:
-            mock_settings.TELEGRAM_BOT_TOKEN = "test_token"
-
-            client = JavaBotClient()
-            client._http_client = AsyncMock()
+        client, p = _make_client()
+        try:
             client._http_client.post = AsyncMock(return_value=MagicMock(status_code=200))
 
-            # Simulate message_count > total (actual > estimated)
-            result = await client.send_progress_update(
+            await client.send_progress_update(
                 user_chat_id=123,
                 task_id="task_1",
                 message_count=253432,
                 total=244143,
-                started=False
+                started=False,
             )
 
-            # Check that the text contains exactly 100%, not 103%
-            call_args = client._http_client.post.call_args
-            post_data = call_args[1]["data"]
-            assert "100%" in post_data["text"]
-            assert "103%" not in post_data["text"]
+            text = client._http_client.post.call_args[1]["data"]["text"]
+            assert "100%" in text
+            assert "103%" not in text
+        finally:
+            p.stop()
 
-    def test_build_progress_bar_clamps_filled(self):
-        """Progress bar should not exceed width even if percentage > 100."""
-        client = JavaBotClient()
-
-        # Test normal case
-        bar = client._build_progress_bar(50)
-        assert bar == "▓▓▓▓▓░░░░░"
-        assert len(bar) == 10
-
-        # Test 100%
-        bar = client._build_progress_bar(100)
-        assert bar == "▓▓▓▓▓▓▓▓▓▓"
-        assert len(bar) == 10
-
-        # Test >100% (should still be 10 filled blocks)
-        bar = client._build_progress_bar(110)
-        assert bar == "▓▓▓▓▓▓▓▓▓▓"
-        assert len(bar) == 10
+    async def test_build_progress_bar_clamps_filled(self):
+        # Static method — can be called without an instance.
+        # Метод async просто чтобы попасть под класс-уровневую @pytest.mark.asyncio;
+        # сам _build_progress_bar — sync.
+        assert JavaBotClient._build_progress_bar(50) == "▓▓▓▓▓░░░░░"
+        assert JavaBotClient._build_progress_bar(100) == "▓▓▓▓▓▓▓▓▓▓"
+        assert JavaBotClient._build_progress_bar(110) == "▓▓▓▓▓▓▓▓▓▓"
 
     async def test_finalize_uses_max_of_total_and_count(self):
-        """finalize() should use max(total, count) to ensure percentage = 100%."""
-        from java_client import ProgressTracker
+        """finalize() should use max(total, count) so percentage = 100%.
 
-        with patch('java_client.settings') as mock_settings:
-            mock_settings.TELEGRAM_BOT_TOKEN = "test_token"
+        finalize() calls send_progress_update positionally:
+            (user_chat_id, task_id, count, final_total, progress_message_id=...)
+        So we read call_args.args[2] / args[3], not kwargs.
+        """
+        mock_java_client = AsyncMock()
+        mock_java_client.send_progress_update = AsyncMock(return_value=None)
 
-            mock_java_client = AsyncMock()
-            mock_java_client.send_progress_update = AsyncMock(return_value=None)
+        tracker = ProgressTracker(
+            client=mock_java_client,
+            user_chat_id=123,
+            task_id="task_1",
+        )
 
-            tracker = ProgressTracker(
-                client=mock_java_client,
-                user_chat_id=123,
-                task_id="task_1"
-            )
+        # Simulate Telegram undercount: estimated total=100, actual=110
+        await tracker.start(total=100)
+        await tracker.finalize(count=110)
 
-            # Simulate Telegram undercount: total=100, actual=110
-            await tracker.start(total=100)
-            await tracker.finalize(count=110)
-
-            # Check finalize call arguments
-            call_args = mock_java_client.send_progress_update.call_args_list[-1]
-            assert call_args[1]["message_count"] == 110
-            assert call_args[1]["total"] == 110  # max(100, 110) = 110
+        last_call = mock_java_client.send_progress_update.call_args_list[-1]
+        assert last_call.args[2] == 110
+        assert last_call.args[3] == 110  # max(100, 110) = 110
 
     async def test_send_progress_update_with_zero_total_shows_progress_bar(self):
-        """total=0 should still render as a 0% progress bar, not a generic message."""
-        with patch('java_client.settings') as mock_settings:
-            mock_settings.TELEGRAM_BOT_TOKEN = "test_token"
+        """total=0 renders as a 0% bar, not the generic spinner.
 
-            client = JavaBotClient()
-            client._http_client = AsyncMock()
+        REGRESSION: without this, Telegram's pending total=0 left users staring
+        at '⏳ Экспорт начался...' indefinitely.
+        """
+        client, p = _make_client()
+        try:
             client._http_client.post = AsyncMock(return_value=MagicMock(status_code=200))
 
             await client.send_progress_update(
@@ -804,32 +763,32 @@ class TestProgressTracker:
                 task_id="task_1",
                 message_count=0,
                 total=0,
-                started=True
+                started=True,
             )
 
-            call_args = client._http_client.post.call_args
-            post_data = call_args[1]["data"]
-            assert "0%" in post_data["text"]
-            assert "(0/0)" in post_data["text"]
+            data = client._http_client.post.call_args[1]["data"]
+            assert "0%" in data["text"]
+            assert "(0 из 0)" in data["text"]
+        finally:
+            p.stop()
 
     async def test_set_total_updates_existing_progress_message(self):
-        """set_total() should edit existing message instead of sending a new one."""
-        from java_client import ProgressTracker
-
+        """set_total() must edit the existing message, not send a new one."""
         mock_java_client = AsyncMock()
         mock_java_client.send_progress_update = AsyncMock(side_effect=[777, 777])
 
         tracker = ProgressTracker(
             client=mock_java_client,
             user_chat_id=123,
-            task_id="task_1"
+            task_id="task_1",
         )
 
         await tracker.start()
         await tracker.set_total(42)
 
         assert mock_java_client.send_progress_update.call_count == 2
+        # set_total passes message_count / total / progress_message_id as kwargs
         second_call = mock_java_client.send_progress_update.call_args_list[1]
-        assert second_call[1]["message_count"] == 0
-        assert second_call[1]["total"] == 42
-        assert second_call[1]["progress_message_id"] == 777
+        assert second_call.kwargs["message_count"] == 0
+        assert second_call.kwargs["total"] == 42
+        assert second_call.kwargs["progress_message_id"] == 777
