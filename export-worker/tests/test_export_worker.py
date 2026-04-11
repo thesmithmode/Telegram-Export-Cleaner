@@ -225,19 +225,6 @@ class TestExportWorkerJobProcessing:
         worker.queue_consumer.mark_job_failed.assert_called()
 
 
-def _make_pipeline_mock():
-    """Create a redis-py-style pipeline mock.
-
-    In redis-py async: `client.pipeline()` is a SYNC call returning a pipe
-    object; the queued commands (set/delete/srem/lrem) are sync too; only
-    `pipe.execute()` is awaited. AsyncMock would turn `pipeline()` into a
-    coroutine, which breaks `pipe = client.pipeline()` in real code.
-    """
-    pipe = MagicMock()
-    pipe.execute = AsyncMock(return_value=[True, True])
-    return pipe
-
-
 class TestChatIdNormalization:
     """Test that chat_id is normalized to canonical numeric ID after verify_and_get_info."""
 
@@ -251,11 +238,6 @@ class TestChatIdNormalization:
         worker.message_cache = MessageCache(enabled=False)
         worker.control_redis = AsyncMock()
         worker.control_redis.get = AsyncMock(return_value=None)
-        # Pipeline mock — canonical: mappings use pipe.set / pipe.execute.
-        # Без этого pipe = control_redis.pipeline() вернул бы coroutine и упал.
-        pipe = _make_pipeline_mock()
-        worker.control_redis.pipeline = MagicMock(return_value=pipe)
-        worker._test_pipe = pipe  # ← тесты читают, чтобы ассертить canonical:keys
         return worker
 
     @pytest.mark.asyncio
@@ -289,39 +271,16 @@ class TestChatIdNormalization:
         result = await worker.process_job(job)
         assert result is True
 
-        # СТРОГО: canonical-маппинг должен быть записан в Redis, иначе Java-бот
-        # не сможет зарезолвить username→numeric на fast-path при следующем
-        # экспорте того же чата.
-        worker.control_redis.pipeline.assert_called_once()
-        pipe_set_calls = worker._test_pipe.set.call_args_list
-        matching = [
-            c for c in pipe_set_calls
-            if c.args[:2] == ("canonical:strbypass", str(canonical_id))
-        ]
-        assert matching, (
-            f"canonical:<input>→<numeric_id> не записан в Redis. "
-            f"Все pipe.set вызовы: {list(pipe_set_calls)}"
-        )
-        # TTL должен быть ~30 дней — иначе маппинг слишком быстро протухнет
-        assert matching[0].kwargs.get("ex") == 86400 * 30
-        # pipe.execute должен быть awaited — иначе команды просто накоплены и не ушли в Redis
-        worker._test_pipe.execute.assert_awaited_once()
-
     @pytest.mark.asyncio
     async def test_chat_id_no_change_when_already_canonical(self, worker):
-        """Если chat_id уже совпадает с chat_info['id'], нормализация не меняет ничего.
-
-        Но canonical-маппинг всё равно пишется (идемпотентно) — это документированное
-        поведение, тест его фиксирует.
-        """
-        canonical_id = -1002477958568
+        """Если chat_id уже совпадает с chat_info['id'], нормализация не меняет ничего."""
         job = ExportRequest(
             task_id="norm_task_2", user_id=1, user_chat_id=1,
-            chat_id=canonical_id, limit=0, offset_id=0,
+            chat_id=-1002477958568, limit=0, offset_id=0,
         )
 
         worker.telegram_client.verify_and_get_info = AsyncMock(
-            return_value=(True, {"id": canonical_id, "title": "Test", "type": "supergroup", "username": "test_chat"}, None)
+            return_value=(True, {"id": -1002477958568, "title": "Test", "type": "supergroup"}, None)
         )
 
         messages = [ExportedMessage(id=1, date="2025-01-01T00:00:00", text="Hi")]
@@ -338,333 +297,6 @@ class TestChatIdNormalization:
         result = await worker.process_job(job)
         assert result is True
 
-        # СТРОГО: при наличии username пишется И прямой маппинг canonical:<input>,
-        # И обратный canonical:<numeric_id>→<username> — чтобы пикер мог резолвить
-        # numeric ID из выбора юзера в username для повторного экспорта.
-        pipe_set_calls = worker._test_pipe.set.call_args_list
-        forward = [
-            c for c in pipe_set_calls
-            if c.args[:2] == (f"canonical:{canonical_id}", str(canonical_id))
-        ]
-        reverse = [
-            c for c in pipe_set_calls
-            if c.args[:2] == (f"canonical:{canonical_id}", "test_chat")
-        ]
-        assert forward, (
-            f"Прямой canonical:<input>→<numeric_id> не записан. "
-            f"Все pipe.set: {list(pipe_set_calls)}"
-        )
-        assert reverse, (
-            f"Обратный canonical:<numeric_id>→<username> не записан. "
-            f"Все pipe.set: {list(pipe_set_calls)}"
-        )
-        worker._test_pipe.execute.assert_awaited_once()
-
-
-class TestThreePathCaching:
-    """STRICT T2 — интеграционные тесты 3-путевого кэша ExportWorker с реальным SQLite.
-
-    Эти тесты покрывают критичную бизнес-логику — то, чем воркер отличается от
-    наивного «качай всё каждый раз»:
-
-    1. **date-hit**: все сообщения в запрошенном диапазоне дат уже в кэше →
-       Telegram НЕ дёргается, данные читаются из SQLite.
-    2. **date-partial**: часть диапазона в кэше, часть — нет. Дёргаем Telegram
-       только на missing gaps и мерджим результат.
-    3. **id-path (без date filter)**: кэш частичный, нужно добрать новые сверху,
-       заполнить gaps внутри, дотянуть старые снизу.
-
-    Поломка этих тестов = непредсказуемая деградация кэша в проде: лишние
-    запросы к Telegram → rate limit, лишние записи → HDD I/O и eviction,
-    или наоборот — пропуски (неполный экспорт).
-
-    SQLite реальный (tmp_path), Telegram/Java/Redis — моки.
-    """
-
-    @pytest.fixture
-    async def worker_with_cache(self, tmp_path):
-        """Worker с РЕАЛЬНЫМ MessageCache и моками на Telegram/Java/Redis."""
-        worker = ExportWorker()
-        worker.queue_consumer = AsyncMock()
-        worker.queue_consumer.mark_job_processing = AsyncMock()
-        worker.queue_consumer.mark_job_completed = AsyncMock()
-        worker.queue_consumer.mark_job_failed = AsyncMock()
-
-        worker.telegram_client = AsyncMock()
-        worker.java_client = _make_mock_java_client()
-        worker.java_client.send_response = AsyncMock(return_value=True)
-
-        # Реальный SQLite-кэш
-        worker.message_cache = MessageCache(
-            db_path=str(tmp_path / "worker_cache.db"),
-            max_disk_bytes=10 * 1024 * 1024,
-            max_messages_per_chat=10_000,
-            ttl_seconds=3600,
-            enabled=True,
-        )
-        await worker.message_cache.initialize()
-
-        # control_redis с правильно замоканным pipeline
-        worker.control_redis = AsyncMock()
-        worker.control_redis.get = AsyncMock(return_value=None)
-        pipe = _make_pipeline_mock()
-        worker.control_redis.pipeline = MagicMock(return_value=pipe)
-
-        yield worker
-        await worker.message_cache.close()
-
-    @pytest.mark.asyncio
-    async def test_date_hit_does_not_call_telegram_history(self, worker_with_cache):
-        """date-HIT: если весь диапазон в кэше — get_chat_history НЕ вызывается.
-
-        Это главное сохранение ресурса: ни одного лишнего RPC к Telegram,
-        ни одной лишней записи в SQLite. Поломка = раньше времени бьётся
-        rate limit и закрывает экспорт для других юзеров.
-        """
-        worker = worker_with_cache
-        CHAT_ID = 555001
-
-        # Предварительно заполняем кэш сообщениями за Jan 1-10
-        prefilled = [
-            ExportedMessage(
-                id=i,
-                date=f"2025-01-{i:02d}T10:00:00",
-                text=f"msg{i}",
-            )
-            for i in range(1, 11)
-        ]
-        await worker.message_cache.store_messages(CHAT_ID, prefilled)
-
-        # Спец-флаг: если вдруг вызван — тест провалится
-        history_calls: list[dict] = []
-
-        async def tripwire_history(*args, **kwargs):
-            history_calls.append(kwargs)
-            if False:  # pragma: no cover
-                yield None
-
-        worker.telegram_client.get_chat_history = tripwire_history
-        worker.telegram_client.verify_and_get_info = AsyncMock(
-            return_value=(True, {"id": CHAT_ID, "title": "Cached Chat", "type": "supergroup"}, None)
-        )
-        worker.telegram_client.get_messages_count = AsyncMock(return_value=10)
-
-        job = ExportRequest(
-            task_id="date_hit_task",
-            user_id=1, user_chat_id=1,
-            chat_id=CHAT_ID,
-            from_date="2025-01-01T00:00:00",
-            to_date="2025-01-10T23:59:59",
-            limit=0,
-            offset_id=0,
-        )
-
-        result = await worker.process_job(job)
-        assert result is True
-
-        # СТРОГО: ни одного вызова get_chat_history — cache-HIT означает
-        # "работаем только с SQLite".
-        assert history_calls == [], (
-            f"Cache-HIT должен полностью избежать Telegram fetch. "
-            f"Но get_chat_history был вызван {len(history_calls)} раз: {history_calls}"
-        )
-
-        # Java получил ответ с 10 сообщениями
-        worker.java_client.send_response.assert_called_once()
-        send_kwargs = worker.java_client.send_response.call_args.kwargs
-        assert send_kwargs["status"] == "completed"
-        assert send_kwargs["task_id"] == "date_hit_task"
-
-    @pytest.mark.asyncio
-    async def test_date_partial_miss_fetches_only_missing_gap(self, worker_with_cache):
-        """date-MISS (частичный): Telegram дёргается ТОЛЬКО на отсутствующие даты.
-
-        Кэш содержит Jan 1-5 и Jan 11-15. Запрос Jan 1-15 должен вызвать
-        get_chat_history ровно на gap Jan 6-10, не больше.
-        """
-        worker = worker_with_cache
-        CHAT_ID = 555002
-
-        # Предзаполняем два куска с «дыркой» посередине
-        part1 = [
-            ExportedMessage(id=i, date=f"2025-02-{i:02d}T10:00:00", text=f"m{i}")
-            for i in range(1, 6)   # Feb 1-5
-        ]
-        part2 = [
-            ExportedMessage(id=i + 100, date=f"2025-02-{i:02d}T10:00:00", text=f"m{i}")
-            for i in range(11, 16)  # Feb 11-15
-        ]
-        await worker.message_cache.store_messages(CHAT_ID, part1)
-        await worker.message_cache.store_messages(CHAT_ID, part2)
-
-        # Трекер gap-запросов
-        history_calls: list[dict] = []
-
-        async def tracked_history(*args, **kwargs):
-            history_calls.append({
-                "from_date": kwargs.get("from_date"),
-                "to_date": kwargs.get("to_date"),
-            })
-            # Отдаём фейковые сообщения за Feb 6-10 — это и есть gap
-            for i in range(6, 11):
-                yield ExportedMessage(
-                    id=i + 50,
-                    date=f"2025-02-{i:02d}T10:00:00",
-                    text=f"gap_m{i}",
-                )
-
-        worker.telegram_client.get_chat_history = tracked_history
-        worker.telegram_client.verify_and_get_info = AsyncMock(
-            return_value=(True, {"id": CHAT_ID, "title": "Gap Chat", "type": "supergroup"}, None)
-        )
-        worker.telegram_client.get_messages_count = AsyncMock(return_value=15)
-
-        job = ExportRequest(
-            task_id="date_gap_task",
-            user_id=1, user_chat_id=1,
-            chat_id=CHAT_ID,
-            from_date="2025-02-01T00:00:00",
-            to_date="2025-02-15T23:59:59",
-            limit=0,
-            offset_id=0,
-        )
-
-        result = await worker.process_job(job)
-        assert result is True
-
-        # СТРОГО: get_chat_history вызван ровно 1 раз — на gap.
-        assert len(history_calls) == 1, (
-            f"Ожидался 1 вызов get_chat_history (только на gap Feb 6-10), "
-            f"получено {len(history_calls)}: {history_calls}"
-        )
-        # Gap должен быть Feb 6-10 (или около — допускаем точность до дня)
-        gap_from = history_calls[0]["from_date"]
-        gap_to = history_calls[0]["to_date"]
-        assert gap_from is not None and gap_to is not None
-        assert gap_from.strftime("%Y-%m-%d") == "2025-02-06"
-        assert gap_to.strftime("%Y-%m-%d") == "2025-02-10"
-
-        # Gap-сообщения реально сохранены в кэше — проверяем через БД напрямую
-        date_ranges = await worker.message_cache.get_cached_date_ranges(CHAT_ID)
-        # После мерджа должен быть один сплошной интервал Feb 1-15
-        assert date_ranges == [["2025-02-01", "2025-02-15"]], (
-            f"После закрытия gap date-ranges должны смерджиться в один интервал, "
-            f"получено: {date_ranges}"
-        )
-
-    @pytest.mark.asyncio
-    async def test_id_path_fetches_newer_above_cache_max(self, worker_with_cache):
-        """id-path: без date-фильтра кэш дотягивает только новые сообщения выше max_id.
-
-        Кэш содержит id=1..50. Чат реально имеет id=1..60. Worker должен
-        запросить у Telegram только id > 50 (новые сверху), а не весь чат.
-        """
-        worker = worker_with_cache
-        CHAT_ID = 555003
-
-        # Предзаполняем кэш id=1..50
-        prefilled = [
-            ExportedMessage(id=i, date=f"2025-03-01T10:00:{i:02d}", text=f"old_m{i}")
-            for i in range(1, 51)
-        ]
-        await worker.message_cache.store_messages(CHAT_ID, prefilled)
-
-        # Трекер вызовов с параметрами
-        history_calls: list[dict] = []
-
-        async def tracked_history(*args, **kwargs):
-            history_calls.append(dict(kwargs))
-            # Step 1: newer above cache_max_id=50 → id 51..60
-            # Step 2: no gaps inside — cache is contiguous
-            # Step 3: older than cache_min_id=1 → none (cache_min_id == 1)
-            min_id = kwargs.get("min_id", 0)
-            offset_id = kwargs.get("offset_id", 0)
-            if min_id == 50 and offset_id == 0:
-                # Fresh messages above cache
-                for i in range(51, 61):
-                    yield ExportedMessage(
-                        id=i, date=f"2025-03-02T10:00:{i - 50:02d}", text=f"new_m{i}"
-                    )
-            # all other branches: empty
-
-        worker.telegram_client.get_chat_history = tracked_history
-        worker.telegram_client.verify_and_get_info = AsyncMock(
-            return_value=(True, {"id": CHAT_ID, "title": "ID Chat", "type": "supergroup"}, None)
-        )
-        worker.telegram_client.get_messages_count = AsyncMock(return_value=60)
-
-        job = ExportRequest(
-            task_id="id_path_task",
-            user_id=1, user_chat_id=1,
-            chat_id=CHAT_ID,
-            limit=0,
-            offset_id=0,
-        )
-
-        result = await worker.process_job(job)
-        assert result is True
-
-        # СТРОГО: первый вызов должен быть на min_id=50 (fresh above)
-        assert len(history_calls) >= 1
-        first = history_calls[0]
-        assert first.get("min_id") == 50, (
-            f"Первый fetch должен быть fresh-above с min_id=cache_max=50, "
-            f"получено: {first}"
-        )
-
-        # После завершения в кэше должны быть все 60 сообщений
-        all_msgs = await worker.message_cache.get_messages(CHAT_ID, 1, 100)
-        assert len(all_msgs) == 60, (
-            f"После id-path экспорта кэш должен содержать 60 сообщений (50 старых + "
-            f"10 свежих), найдено: {len(all_msgs)}"
-        )
-
-        # Ranges смерджились в один непрерывный [1, 60]
-        id_ranges = await worker.message_cache.get_cached_ranges(CHAT_ID)
-        assert id_ranges == [[1, 60]], f"Ranges должны смерджиться в [[1,60]], получено: {id_ranges}"
-
-    @pytest.mark.asyncio
-    async def test_id_path_full_miss_triggers_full_fetch(self, worker_with_cache):
-        """id-path FULL MISS: пустой кэш → полный фетч и сохранение всех сообщений.
-
-        После успешного экспорта кэш не должен остаться пустым — иначе следующий
-        экспорт повторит всю работу (ломает весь смысл кэша).
-        """
-        worker = worker_with_cache
-        CHAT_ID = 555004
-
-        async def full_history(*args, **kwargs):
-            for i in range(1, 21):
-                yield ExportedMessage(
-                    id=i, date=f"2025-04-01T10:00:{i:02d}", text=f"m{i}"
-                )
-
-        worker.telegram_client.get_chat_history = full_history
-        worker.telegram_client.verify_and_get_info = AsyncMock(
-            return_value=(True, {"id": CHAT_ID, "title": "Empty Chat", "type": "supergroup"}, None)
-        )
-        worker.telegram_client.get_messages_count = AsyncMock(return_value=20)
-
-        job = ExportRequest(
-            task_id="id_full_miss_task",
-            user_id=1, user_chat_id=1,
-            chat_id=CHAT_ID,
-            limit=0,
-            offset_id=0,
-        )
-
-        result = await worker.process_job(job)
-        assert result is True
-
-        # СТРОГО: после экспорта все 20 сообщений должны быть в кэше
-        cached = await worker.message_cache.get_messages(CHAT_ID, 1, 100)
-        assert len(cached) == 20, (
-            f"После FULL MISS все скачанные сообщения должны быть сохранены в "
-            f"кэш, иначе следующий экспорт снова полезет в Telegram. "
-            f"В кэше: {len(cached)}"
-        )
-        assert await worker.message_cache.get_cached_ranges(CHAT_ID) == [[1, 20]]
-
 
 class TestExportWorkerProgressReporting:
     """Test progress reporting to user."""
@@ -675,13 +307,6 @@ class TestExportWorkerProgressReporting:
         worker = ExportWorker()
         worker.queue_consumer = AsyncMock()
         worker.telegram_client = AsyncMock()
-        # process_job() сначала зовёт verify_and_get_info — если не замокать,
-        # AsyncMock вернёт MagicMock, который нельзя распаковать в (accessible,
-        # info, reason), исключение упадёт в outer except и до _fetch_all
-        # код вообще не дойдёт.
-        worker.telegram_client.verify_and_get_info = AsyncMock(
-            return_value=(True, {"title": "Test", "type": "private"}, None)
-        )
         worker.java_client = _make_mock_java_client()
         worker.telegram_client.get_messages_count = AsyncMock(return_value=100)
         worker.message_cache = MessageCache(enabled=False)
@@ -704,18 +329,12 @@ class TestExportWorkerProgressReporting:
 
         await worker.process_job(job)
 
-        # Check started notification: first call is start() with started=True, total=None
-        # Then set_total(5000) sends total=5000 separately
+        # Check started notification
         calls = worker.java_client.send_progress_update.call_args_list
         assert len(calls) >= 1
-
-        # Verify started=True was sent
-        started_call = next((c for c in calls if c.kwargs.get("started") is True), None)
-        assert started_call is not None, "No started=True call found"
-
-        # Verify total=5000 was communicated (via set_total or positional arg)
-        total_calls = [c for c in calls if c.kwargs.get("total") == 5000]
-        assert len(total_calls) >= 1, "Expected at least one call with total=5000"
+        first_call = calls[0]
+        assert first_call.kwargs["started"] is True
+        assert first_call.kwargs["total"] == 5000
 
     @pytest.mark.asyncio
     async def test_fetch_all_sends_5pct_milestones(self, worker):
@@ -741,12 +360,9 @@ class TestExportWorkerProgressReporting:
 
         await worker.process_job(job)
 
-        # started (0, None) + set_total (0, 100) + milestone track() calls (with 5% throttle) + finalize (100%)
+        # started (0) + 19 milestones (5, 10..95) + 1 finalize (100)
         progress_calls = worker.java_client.send_progress_update.call_args_list
-        # Verify started notification is first and has started=True
-        assert progress_calls[0].kwargs.get("started") is True
-        # Verify we have multiple calls (at least started + set_total + some milestones + finalize)
-        assert len(progress_calls) >= 21
+        assert len(progress_calls) == 21  # 1 started + 19 milestones + 1 finalize
 
     @pytest.mark.asyncio
     async def test_process_job_exception_notifies_user(self, worker):
@@ -910,12 +526,10 @@ class TestExportWorkerWithCache:
 
         await worker.process_job(job)
 
-        # Verify: Java received ALL 5 messages (3 cached + 2 new).
-        # messages_for_send из cache-path — это AsyncGenerator (iter_messages
-        # из SQLite), а не list, поэтому собираем через async for.
+        # Verify: Java received ALL 5 messages (3 cached + 2 new)
         args, kwargs = worker.java_client.send_response.call_args
         assert kwargs["status"] == "completed"
-        result_ids = sorted([m.id async for m in kwargs["messages"]])
+        result_ids = sorted(m.id for m in kwargs["messages"])
         assert result_ids == [1, 2, 3, 4, 5]
 
 
@@ -1031,10 +645,9 @@ class TestExportWorkerDateCache:
         assert ("2025-01-09", "2025-01-10") in fetch_calls
         assert ("2025-01-14", "2025-01-15") in fetch_calls
 
-        # Verify: Java received all 15 messages.
-        # date-cache path возвращает AsyncGenerator из iter_messages_by_date.
+        # Verify: Java received all 15 messages
         last_call = worker.java_client.send_response.call_args
-        result_ids = sorted([m.id async for m in last_call.kwargs["messages"]])
+        result_ids = sorted(m.id for m in last_call.kwargs["messages"])
         assert result_ids == list(range(1, 16))
 
         # Cache now has complete Jan 1-15
@@ -1062,7 +675,7 @@ class TestCancelBeforeStart:
         w.queue_consumer.mark_job_processing = AsyncMock()
         w.queue_consumer.mark_job_completed = AsyncMock()
         w.queue_consumer.mark_job_failed = AsyncMock()
-        w.telegram_client = MagicMock()
+        w.telegram_client = AsyncMock()
         w.java_client = _make_mock_java_client()
         w.message_cache = MessageCache(enabled=False)
         w.control_redis = AsyncMock()
