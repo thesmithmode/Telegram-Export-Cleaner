@@ -44,7 +44,7 @@ import java.util.regex.Pattern;
  *
  * <h3>Команды</h3>
  * <ul>
- *   <li>/start, /help — справка, автоматически снимает устаревшую reply-клавиатуру</li>
+ *   <li>/start — справка, автоматически снимает устаревшую reply-клавиатуру</li>
  *   <li>/cancel — отмена активного экспорта</li>
  *   <li>@username, https://t.me/username — запуск диалога</li>
  * </ul>
@@ -109,7 +109,6 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     void registerBotCommands() {
         messenger.setMyCommands(List.of(
                 new BotCommand("/start", "Запустить бота и показать справку"),
-                new BotCommand("/help", "Показать справку"),
                 new BotCommand("/cancel", "Отменить активный экспорт")
         ));
     }
@@ -157,7 +156,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     }
 
     private void handleMessageText(long chatId, long userId, String text) {
-        if (text.startsWith("/start") || text.startsWith("/help")) {
+        if (text.startsWith("/start")) {
             getSession(userId).reset();
             // Снимаем устаревшую reply-клавиатуру (кнопки «Выбрать группу/канал»
             // из прежних версий, закэшированные в Telegram-клиенте пользователя).
