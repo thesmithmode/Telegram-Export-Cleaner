@@ -112,7 +112,13 @@ void answerCallback(String callbackQueryId)
 
 void sendRemoveReplyKeyboard(long chatId, String text)
     // Отправить и убрать клавиатуру
+
+void setMyCommands(List<BotCommand> commands)
+    // Зарегистрировать slash-команды Telegram для подсказок в UI клиента
 ```
+
+`ExportBot` вызывает `setMyCommands(...)` при старте приложения, поэтому у пользователя
+в Telegram сразу появляются подсказки `/start`, `/help`, `/cancel`.
 
 ### UserSession
 
