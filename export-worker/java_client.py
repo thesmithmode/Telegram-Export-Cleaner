@@ -435,8 +435,12 @@ class ProgressTracker:
 
     async def set_total(self, total):
         """Update the known total (when it's learned after start()) and redraw."""
+        # total=0 означает что Telegram не смог подсчитать — трактуем как неизвестный total.
+        # Иначе прогресс-бар навсегда застрянет на "0 из 0" пока воркер качает сообщения.
+        if not total:
+            return
         self._total = total
-        if self._message_id and total is not None:
+        if self._message_id:
             await self._client.send_progress_update(
                 self._user_chat_id,
                 self._task_id,
