@@ -465,7 +465,7 @@ class TestTelegramClientDateFiltering:
         client.is_connected = True
 
         # Create async generator directly (avoid function reference issues)
-        async def mock_generator():
+        async def mock_generator(chat_id=None, limit=None, offset_id=None):
             yield MagicMock(id=3, date=datetime(2025, 1, 3), entities=None, media=None,
                           from_user=None, forward_from=None, forward_sender_name=None,
                           forward_date=None, edit_date=None, reply_to_message_id=None,
@@ -494,7 +494,7 @@ class TestTelegramClientDateFiltering:
         client = TelegramClient()
         client.is_connected = True
 
-        async def mock_generator():
+        async def mock_generator(chat_id=None, limit=None, offset_id=None):
             yield MagicMock(id=3, date=datetime(2025, 1, 3), entities=None, media=None,
                           from_user=None, forward_from=None, forward_sender_name=None,
                           forward_date=None, edit_date=None, reply_to_message_id=None,
@@ -523,7 +523,7 @@ class TestTelegramClientDateFiltering:
         client = TelegramClient()
         client.is_connected = True
 
-        async def mock_generator():
+        async def mock_generator(chat_id=None, limit=None, offset_id=None):
             # aware datetime
             yield MagicMock(id=3, date=datetime(2025, 1, 3, tzinfo=timezone.utc), entities=None, media=None,
                           from_user=None, forward_from=None, forward_sender_name=None,
