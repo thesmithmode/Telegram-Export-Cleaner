@@ -810,7 +810,7 @@ class TestProgressTracker:
             call_args = client._http_client.post.call_args
             post_data = call_args[1]["data"]
             assert "0%" in post_data["text"]
-            assert "(0/0)" in post_data["text"]
+            assert "(0 из 0)" in post_data["text"]
 
     async def test_set_total_updates_existing_progress_message(self):
         """set_total() should edit existing message instead of sending a new one."""
