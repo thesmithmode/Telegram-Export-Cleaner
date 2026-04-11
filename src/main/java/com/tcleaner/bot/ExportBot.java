@@ -366,7 +366,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         String queueInfo;
         if (fromCache) {
             queueInfo = "\n\n⚡ Данные в кэше — результат будет быстро!";
-        } else if (aheadCount == 0) {
+        } else if (aheadCount <= 0) {
             queueInfo = "\n\n⚙️ Задача поставлена в работу, ожидайте...";
         } else {
             queueInfo = String.format("\n\n📋 Вы в очереди: позиция %d\nВпереди %d задач(и)",
