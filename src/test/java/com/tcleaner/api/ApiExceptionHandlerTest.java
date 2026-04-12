@@ -8,24 +8,19 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.mock.web.MockMultipartFile;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest
 @AutoConfigureMockMvc
-@TestPropertySource(properties = "api.key=test-api-key")
 @DisplayName("ApiExceptionHandler")
 class ApiExceptionHandlerTest {
-
-    private static final String API_KEY = "test-api-key";
 
     @Autowired
     private MockMvc mockMvc;
@@ -46,8 +41,7 @@ class ApiExceptionHandlerTest {
         void shouldReturn400OnDateParseError() throws Exception {
             mockMvc.perform(multipart("/api/convert")
                     .file(dummyFile())
-                    .param("startDate", "invalid-date")
-                    .header("X-API-Key", API_KEY))
+                    .param("startDate", "invalid-date"))
                     .andExpect(status().isBadRequest());
         }
 
@@ -57,24 +51,8 @@ class ApiExceptionHandlerTest {
             mockMvc.perform(multipart("/api/convert")
                     .file(dummyFile())
                     .param("startDate", "2024-12-31")
-                    .param("endDate", "2024-01-01")
-                    .header("X-API-Key", API_KEY))
+                    .param("endDate", "2024-01-01"))
                     .andExpect(status().isBadRequest());
-        }
-
-        @Test
-        @DisplayName("должен вернуть 401 при отсутствии API ключа")
-        void shouldReturn401OnMissingApiKey() throws Exception {
-            mockMvc.perform(post("/api/convert"))
-                    .andExpect(status().isUnauthorized());
-        }
-
-        @Test
-        @DisplayName("должен вернуть 401 при неверном API ключе")
-        void shouldReturn401OnInvalidApiKey() throws Exception {
-            mockMvc.perform(post("/api/convert")
-                    .header("X-API-Key", "wrong-key"))
-                    .andExpect(status().isUnauthorized());
         }
 
         @Test
@@ -82,8 +60,7 @@ class ApiExceptionHandlerTest {
         void shouldReturnJsonOnError() throws Exception {
             mockMvc.perform(multipart("/api/convert")
                     .file(dummyFile())
-                    .param("startDate", "invalid")
-                    .header("X-API-Key", API_KEY))
+                    .param("startDate", "invalid"))
                     .andExpect(status().isBadRequest())
                     .andExpect(content().contentType("application/json"));
         }
@@ -99,7 +76,7 @@ class ApiExceptionHandlerTest {
             mockMvc.perform(multipart("/api/convert")
                     .file(dummyFile())
                     .param("startDate", "bad-date")
-                    .header("X-API-Key", API_KEY))
+)
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.message").exists());
         }
@@ -110,7 +87,7 @@ class ApiExceptionHandlerTest {
             mockMvc.perform(multipart("/api/convert")
                     .file(dummyFile())
                     .param("startDate", "bad-date")
-                    .header("X-API-Key", API_KEY))
+)
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.type").exists());
         }
@@ -121,7 +98,7 @@ class ApiExceptionHandlerTest {
             mockMvc.perform(multipart("/api/convert")
                     .file(dummyFile())
                     .param("startDate", "bad-date")
-                    .header("X-API-Key", API_KEY))
+)
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.details").exists());
         }
@@ -144,15 +121,9 @@ class ApiExceptionHandlerTest {
             mockMvc.perform(multipart("/api/convert")
                     .file(dummyFile())
                     .param("startDate", "not-a-date")
-                    .header("X-API-Key", API_KEY))
+)
                     .andExpect(status().isBadRequest());
         }
 
-        @Test
-        @DisplayName("401 при отсутствии аутентификации")
-        void shouldReturn401OnUnauthorized() throws Exception {
-            mockMvc.perform(post("/api/convert"))
-                    .andExpect(status().isUnauthorized());
-        }
     }
 }

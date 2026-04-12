@@ -7,19 +7,16 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.cookie;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest
 @AutoConfigureMockMvc
-@TestPropertySource(properties = "api.key=test-api-key")
 @DisplayName("SecurityConfig")
 class SecurityConfigTest {
 
@@ -48,17 +45,6 @@ class SecurityConfigTest {
         }
     }
 
-    @Nested
-    @DisplayName("Защита от CSRF")
-    class CsrfProtectionTests {
-
-        @Test
-        @DisplayName("CSRF токены не требуются для stateless API")
-        void csrfNotRequiredForApi() throws Exception {
-            mockMvc.perform(post("/api/convert"))
-                    .andExpect(status().isUnauthorized());
-        }
-    }
 
     @Nested
     @DisplayName("Заголовки безопасности")
@@ -105,33 +91,6 @@ class SecurityConfigTest {
         void xContentTypeShouldBeNosniff() throws Exception {
             mockMvc.perform(get("/api/health"))
                     .andExpect(header().string("X-Content-Type-Options", "nosniff"));
-        }
-    }
-
-    @Nested
-    @DisplayName("Аутентификация API")
-    class ApiAuthenticationTests {
-
-        @Test
-        @DisplayName("POST /api/convert требует аутентификации")
-        void convertRequiresAuth() throws Exception {
-            mockMvc.perform(post("/api/convert"))
-                    .andExpect(status().isUnauthorized());
-        }
-
-        @Test
-        @DisplayName("GET /api/health НЕ требует аутентификации")
-        void healthDoesNotRequireAuth() throws Exception {
-            mockMvc.perform(get("/api/health"))
-                    .andExpect(status().isOk());
-        }
-
-        @Test
-        @DisplayName("Неверный API ключ должен вернуть 401")
-        void invalidApiKeyReturns401() throws Exception {
-            mockMvc.perform(post("/api/convert")
-                    .header("X-API-Key", "wrong-key"))
-                    .andExpect(status().isUnauthorized());
         }
     }
 

@@ -130,10 +130,6 @@ class JavaBotClient:
     ) -> Optional[str]:
         url = f"{self.base_url}/api/convert"
         
-        headers = {}
-        if settings.JAVA_API_KEY:
-            headers["X-API-Key"] = settings.JAVA_API_KEY
-
         data = {}
         if from_date: data["startDate"] = from_date[:10]
         if to_date: data["endDate"] = to_date[:10]
@@ -150,7 +146,6 @@ class JavaBotClient:
                         url,
                         files=files,
                         data=data,
-                        headers=headers,
                     )
 
                 if response.status_code == 200:

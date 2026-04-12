@@ -35,7 +35,6 @@
 FIX: исправить ошибку в парсинге JSON
 FEAT: добавить поддержку отмены экспорта
 REFACTOR: упростить логику в TelegramExporter
-TEST: добавить тесты для ApiKeyFilter
 ```
 
 **⚠️ НИКОГДА:**
@@ -262,7 +261,6 @@ src/main/java/com/tcleaner/
 │   └── UserSession.java
 ├── api/                    # REST API + Security
 │   ├── TelegramController.java
-│   ├── ApiKeyFilter.java
 │   └── SecurityConfig.java
 ├── core/                   # Основная логика экспорта
 │   ├── TelegramExporter.java (Tree + Streaming)
