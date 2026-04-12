@@ -283,7 +283,6 @@ CACHE_TTL_DAYS: int = 30
 
 # Java Bot API
 JAVA_API_URL: str = "http://java:8080"
-JAVA_API_KEY: str
 
 # Processing
 MAX_WORKERS: int = 4

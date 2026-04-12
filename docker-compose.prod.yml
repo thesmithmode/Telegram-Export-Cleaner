@@ -22,7 +22,6 @@ services:
       - REDIS_QUEUE_NAME=telegram_export
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_BOT_USERNAME=ExportCleanerBot
-      - JAVA_API_KEY=${JAVA_API_KEY}
     volumes:
       - export-data:/data/export
     depends_on:
@@ -50,7 +49,6 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       # Java Bot API
       - JAVA_API_BASE_URL=http://java-bot:8080
-      - JAVA_API_KEY=${JAVA_API_KEY}
       # Redis
       - REDIS_HOST=redis
       - REDIS_PORT=6379
