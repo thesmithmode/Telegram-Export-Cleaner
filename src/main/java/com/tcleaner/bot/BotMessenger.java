@@ -18,16 +18,6 @@ import org.telegram.telegrambots.meta.generics.TelegramClient;
 
 import java.util.List;
 
-/**
- * Сервис отправки и редактирования сообщений в Telegram.
- *
- * <p>Инкапсулирует отправку обычных текстовых сообщений, сообщений с inline-клавиатурой,
- * редактирование ранее отправленных сообщений и обработку callback-запросов.
- * Все методы синхронные и при ошибках только логируют (не бросают исключения),
- * чтобы обработчики Telegram Long Polling не падали.</p>
- *
- * <p><strong>Потокобезопасен:</strong> может вызываться из разных потоков одновременно.</p>
- */
 @Service
 @ConditionalOnExpression("'${telegram.bot.token:}' != ''")
 public class BotMessenger {
@@ -40,17 +30,14 @@ public class BotMessenger {
         this.telegramClient = telegramClient;
     }
 
-    /**
-     * Отправляет простое текстовое сообщение в чат.
-     *
-     * @param chatId ID Telegram чата
-     * @param text   текст сообщения
-     */
-    public void send(long chatId, String text) {
-        SendMessage message = SendMessage.builder()
+    private SendMessage.SendMessageBuilder<?, ?> buildMessage(long chatId, String text) {
+        return SendMessage.builder()
                 .chatId(String.valueOf(chatId))
-                .text(text)
-                .build();
+                .text(text);
+    }
+
+    public void send(long chatId, String text) {
+        SendMessage message = buildMessage(chatId, text).build();
         try {
             telegramClient.execute(message);
             log.debug("Сообщение отправлено в чат {}: {} символов", chatId, text.length());
@@ -59,17 +46,8 @@ public class BotMessenger {
         }
     }
 
-    /**
-     * Отправляет сообщение с inline-клавиатурой.
-     *
-     * @param chatId   ID Telegram чата
-     * @param text     текст сообщения
-     * @param keyboard inline-клавиатура (может быть {@code null})
-     */
     public void sendWithKeyboard(long chatId, String text, InlineKeyboardMarkup keyboard) {
-        SendMessage message = SendMessage.builder()
-                .chatId(String.valueOf(chatId))
-                .text(text)
+        SendMessage message = buildMessage(chatId, text)
                 .replyMarkup(keyboard)
                 .build();
         try {
@@ -79,21 +57,8 @@ public class BotMessenger {
         }
     }
 
-    /**
-     * Отправляет сообщение с inline-клавиатурой и возвращает ID отправленного сообщения.
-     *
-     * <p>Используется когда нужно позже редактировать это сообщение (например, для
-     * progress-бара или подтверждения экспорта).</p>
-     *
-     * @param chatId   ID Telegram чата
-     * @param text     текст сообщения
-     * @param keyboard inline-клавиатура (может быть {@code null})
-     * @return ID отправленного сообщения, либо {@code 0} при ошибке
-     */
     public int sendWithKeyboardGetId(long chatId, String text, InlineKeyboardMarkup keyboard) {
-        SendMessage message = SendMessage.builder()
-                .chatId(String.valueOf(chatId))
-                .text(text)
+        SendMessage message = buildMessage(chatId, text)
                 .replyMarkup(keyboard)
                 .build();
         try {
@@ -105,14 +70,6 @@ public class BotMessenger {
         }
     }
 
-    /**
-     * Редактирует ранее отправленное сообщение — текст и/или inline-клавиатуру.
-     *
-     * @param chatId    ID Telegram чата
-     * @param messageId ID редактируемого сообщения
-     * @param text      новый текст сообщения
-     * @param keyboard  новая inline-клавиатура (может быть {@code null} — клавиатура останется)
-     */
     public void editMessage(long chatId, int messageId, String text, InlineKeyboardMarkup keyboard) {
         EditMessageText.EditMessageTextBuilder<?, ?> builder = EditMessageText.builder()
                 .chatId(String.valueOf(chatId))
@@ -129,11 +86,6 @@ public class BotMessenger {
         }
     }
 
-    /**
-     * Подтверждает callback query (убирает крутилку у кнопки в Telegram UI).
-     *
-     * @param callbackQueryId ID callback query
-     */
     public void answerCallback(String callbackQueryId) {
         try {
             telegramClient.execute(
@@ -143,20 +95,8 @@ public class BotMessenger {
         }
     }
 
-    /**
-     * Отправляет сообщение и принудительно снимает старую reply-клавиатуру.
-     *
-     * <p>Нужно для пользователей, у которых в кэше Telegram осталась reply-клавиатура
-     * с кнопками вроде «Выбрать группу/канал» от предыдущих версий бота. Без явного
-     * {@link ReplyKeyboardRemove} такая клавиатура остаётся висеть бесконечно.</p>
-     *
-     * @param chatId ID Telegram чата
-     * @param text   текст сообщения
-     */
     public void sendRemoveReplyKeyboard(long chatId, String text) {
-        SendMessage message = SendMessage.builder()
-                .chatId(String.valueOf(chatId))
-                .text(text)
+        SendMessage message = buildMessage(chatId, text)
                 .replyMarkup(ReplyKeyboardRemove.builder().removeKeyboard(true).build())
                 .build();
         try {
@@ -167,9 +107,6 @@ public class BotMessenger {
         }
     }
 
-    /**
-     * Регистрирует список slash-команд бота для подсказок в Telegram-клиентах.
-     */
     public void setMyCommands(List<BotCommand> commands) {
         try {
             telegramClient.execute(

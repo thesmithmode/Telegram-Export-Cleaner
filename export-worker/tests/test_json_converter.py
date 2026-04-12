@@ -1,12 +1,3 @@
-"""
-Unit tests for json_converter.py
-
-Tests:
-- Message conversion (text, media, entities, forwards, edits)
-- Entity type mapping
-- Media type detection
-- User display name formatting
-"""
 
 import pytest
 from datetime import datetime
@@ -15,12 +6,9 @@ from unittest.mock import Mock, MagicMock
 from json_converter import MessageConverter
 from models import ExportedMessage, MessageEntity as MessageEntityModel
 
-
 class TestUserDisplayName:
-    """Tests for get_user_display_name"""
 
     def test_user_with_first_and_last_name(self):
-        """Should return 'FirstName LastName'"""
         user = Mock()
         user.first_name = "John"
         user.last_name = "Doe"
@@ -31,7 +19,6 @@ class TestUserDisplayName:
         assert result == "John Doe"
 
     def test_user_with_only_first_name(self):
-        """Should return just first name"""
         user = Mock()
         user.first_name = "John"
         user.last_name = None
@@ -42,7 +29,6 @@ class TestUserDisplayName:
         assert result == "John"
 
     def test_user_with_only_username(self):
-        """Should return @username"""
         user = Mock()
         user.first_name = None
         user.last_name = None
@@ -53,7 +39,6 @@ class TestUserDisplayName:
         assert result == "@johndoe"
 
     def test_user_with_only_id(self):
-        """Should return ID:xxx"""
         user = Mock()
         user.first_name = None
         user.last_name = None
@@ -64,16 +49,12 @@ class TestUserDisplayName:
         assert result == "ID:123"
 
     def test_none_user(self):
-        """Should return None for None user"""
         result = MessageConverter.get_user_display_name(None)
         assert result is None
 
-
 class TestEntityConversion:
-    """Tests for convert_entities"""
 
     def test_single_bold_entity(self):
-        """Should convert bold entity correctly"""
         entity = Mock()
         entity.type = "bold"
         entity.offset = 0
@@ -87,7 +68,6 @@ class TestEntityConversion:
         assert result[0].length == 4
 
     def test_multiple_entities(self):
-        """Should convert multiple entities"""
         bold = Mock()
         bold.type = "bold"
         bold.offset = 0
@@ -105,7 +85,6 @@ class TestEntityConversion:
         assert result[1].type == "link"
 
     def test_text_link_entity(self):
-        """Should include URL for text_link (Pyrogram TEXT_LINK enum)"""
         entity = Mock()
         entity.type = Mock()
         entity.type.name = "TEXT_LINK"
@@ -120,21 +99,16 @@ class TestEntityConversion:
         assert result[0].url == "https://example.com"
 
     def test_empty_entities_list(self):
-        """Should return None for empty list"""
         result = MessageConverter.convert_entities([])
         assert result is None
 
     def test_none_entities(self):
-        """Should return None for None"""
         result = MessageConverter.convert_entities(None)
         assert result is None
 
-
 class TestMediaTypeDetection:
-    """Tests for get_media_type"""
 
     def test_photo_detection(self):
-        """Should detect photo media type"""
         from pyrogram import types
 
         media = Mock(spec=types.Photo)
@@ -144,7 +118,6 @@ class TestMediaTypeDetection:
         assert result == "photo"
 
     def test_video_detection(self):
-        """Should detect video media type"""
         media = Mock()
         media.__class__.__name__ = "Video"
 
@@ -152,7 +125,6 @@ class TestMediaTypeDetection:
         assert result == "video"
 
     def test_audio_detection(self):
-        """Should detect audio media type"""
         media = Mock()
         media.__class__.__name__ = "Audio"
 
@@ -160,7 +132,6 @@ class TestMediaTypeDetection:
         assert result == "audio"
 
     def test_document_detection(self):
-        """Should detect document media type"""
         media = Mock()
         media.__class__.__name__ = "Document"
 
@@ -168,24 +139,19 @@ class TestMediaTypeDetection:
         assert result == "document"
 
     def test_none_media(self):
-        """Should return None for None media"""
         result = MessageConverter.get_media_type(None)
         assert result is None
 
     def test_unknown_media_type(self):
-        """Should return None for unknown media type"""
         media = Mock()
         media.__class__.__name__ = "UnknownType"
 
         result = MessageConverter.get_media_type(media)
         assert result is None
 
-
 class TestMessageConversion:
-    """Tests for convert_message"""
 
     def test_simple_text_message(self):
-        """Should convert simple text message"""
         message = Mock()
         message.id = 123
         message.date = datetime(2025, 6, 24, 15, 29, 46)
@@ -212,7 +178,6 @@ class TestMessageConversion:
         assert result.from_id == {"peer_type": "user", "peer_id": 456}
 
     def test_message_with_entities(self):
-        """Should convert message with text entities"""
         message = Mock()
         message.id = 124
         message.date = datetime(2025, 6, 24, 15, 30, 0)
@@ -233,7 +198,6 @@ class TestMessageConversion:
         assert result.text_entities[0].type == "bold"
 
     def test_message_with_photo(self):
-        """Should convert message with photo"""
         photo = Mock()
         photo.__class__.__name__ = "Photo"
         photo.file_name = "photo_123.jpg"
@@ -261,7 +225,6 @@ class TestMessageConversion:
         assert result.height == 768
 
     def test_message_with_forward(self):
-        """Should convert forwarded message"""
         forward_user = Mock()
         forward_user.first_name = "Alice"
         forward_user.last_name = None
@@ -286,7 +249,6 @@ class TestMessageConversion:
         assert result.forward_date == "2025-06-24T14:00:00"
 
     def test_message_with_edit(self):
-        """Should convert edited message"""
         message = Mock()
         message.id = 127
         message.date = datetime(2025, 6, 24, 15, 33, 0)
@@ -306,7 +268,6 @@ class TestMessageConversion:
         assert result.edit_date == "2025-06-24T15:34:00"
 
     def test_message_with_reply(self):
-        """Should convert reply to message"""
         message = Mock()
         message.id = 128
         message.date = datetime(2025, 6, 24, 15, 35, 0)
@@ -325,7 +286,6 @@ class TestMessageConversion:
         assert result.reply_to_message_id == 127
 
     def test_message_without_text(self):
-        """Should handle message without text"""
         message = Mock()
         message.id = 129
         message.date = datetime(2025, 6, 24, 15, 36, 0)
@@ -344,7 +304,6 @@ class TestMessageConversion:
         assert result.text == ""
 
     def test_convert_messages_batch(self):
-        """Should convert multiple messages"""
         messages = []
         for i in range(3):
             msg = Mock()
@@ -369,7 +328,6 @@ class TestMessageConversion:
         assert result[2].id == 102
 
     def test_convert_messages_with_error_skips(self):
-        """Should skip messages with conversion errors"""
         good_msg = Mock()
         good_msg.id = 100
         good_msg.date = datetime(2025, 6, 24, 15, 30, 0)
@@ -394,12 +352,9 @@ class TestMessageConversion:
         assert len(result) == 1
         assert result[0].id == 100
 
-
 class TestExportedMessageModel:
-    """Tests for ExportedMessage Pydantic model"""
 
     def test_model_creation(self):
-        """Should create valid ExportedMessage"""
         msg = ExportedMessage(
             id=123,
             type="message",
@@ -413,7 +368,6 @@ class TestExportedMessageModel:
         assert msg.text == "Hello"
 
     def test_model_json_serialization(self):
-        """Should serialize to JSON"""
         msg = ExportedMessage(
             id=123,
             type="message",
@@ -427,7 +381,6 @@ class TestExportedMessageModel:
         assert json_data["text"] == "Hello"
 
     def test_model_optional_fields(self):
-        """Should allow optional fields to be None"""
         msg = ExportedMessage(
             id=123,
             type="message",

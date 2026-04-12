@@ -1,13 +1,3 @@
-"""
-Pyrogram Client: Async Telegram API wrapper with session management.
-
-Handles:
-- Authentication (2FA support)
-- Chat message export
-- Exponential backoff + retry logic for rate limiting (FloodWait)
-- Session persistence in Docker volume
-- Graceful shutdown
-"""
 
 import asyncio
 import logging
@@ -33,55 +23,16 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-
 def ensure_utc(dt: Optional[datetime]) -> Optional[datetime]:
-    """Normalize datetime to UTC-aware timezone.
-
-    Pyrogram 2.x returns timezone-aware UTC datetimes. This function ensures
-    that all datetime values are aware UTC for consistent comparisons.
-
-    Args:
-        dt: Datetime object (may be timezone-naive)
-
-    Returns:
-        UTC-aware datetime object, or None if input is None
-    """
     if dt is None:
         return None
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
 
-
 class TelegramClient:
-    """Async Telegram client for message export using Pyrogram 2.x.
-
-    Handles:
-    - Authentication via session string or file-based session
-    - Async chat message history retrieval
-    - Exponential backoff retry logic for Telegram API rate limits (FloodWait)
-    - Canonical ID resolution (convert username/link to numeric ID)
-    - Message deduplication after retries
-    - Graceful connection management
-
-    Supports both:
-    - Production: Stateless session string from environment
-    - Development: File-based session with phone number
-
-    Example:
-        client = TelegramClient()
-        await client.connect()
-        async for message in client.get_chat_history(123456):
-            print(message)
-        await client.disconnect()
-    """
 
     def __init__(self):
-        """Initialize Telegram client with Pyrogram configuration.
-
-        Creates Pyrogram Client instance with settings from config.py.
-        Supports both session string and file-based authentication modes.
-        """
         self.session_path = Path("session")
         self.session_path.mkdir(exist_ok=True)
 
@@ -113,17 +64,6 @@ class TelegramClient:
         logger.info(f"Pyrogram client initialized (session: {settings.SESSION_NAME})")
 
     async def connect(self) -> bool:
-        """Connect to Telegram API and verify authentication.
-
-        Establishes connection to Telegram using session credentials.
-        Retrieves user info to verify successful authentication.
-
-        Returns:
-            True if connected successfully, False on auth/connection error
-
-        Raises:
-            Unauthorized: If session is invalid or expired
-        """
         try:
             if self.is_connected:
                 logger.debug("Already connected to Telegram")
@@ -149,16 +89,6 @@ class TelegramClient:
             return False
 
     async def disconnect(self) -> None:
-        """Disconnect from Telegram API gracefully.
-
-        Stops Pyrogram client and cleans up resources.
-
-        Returns:
-            None
-
-        Raises:
-            None (exceptions caught and logged)
-        """
         try:
             if self.is_connected and self.client.is_connected:
                 logger.info("Disconnecting from Telegram...")
@@ -178,30 +108,6 @@ class TelegramClient:
         to_date: Optional[datetime] = None,
         on_floodwait: Optional[Any] = None,
     ) -> AsyncGenerator[ExportedMessage, None]:
-        """
-        Get chat message history with exponential backoff for rate limiting.
-
-        DEDUPLICATION NOTE: When FloodWait occurs, we restart the iterator from
-        last_offset_id. Since Pyrogram iterates newest-to-oldest and we update
-        last_offset_id on every message, restarting can re-yield previously seen
-        messages. We track seen_message_ids to deduplicate.
-
-        Args:
-            chat_id: Telegram chat ID
-            limit: Max messages (0 = all)
-            offset_id: Start from message ID (pagination, fetches messages OLDER than this)
-            min_id: Stop when message.id <= min_id (for incremental: fetch only NEW messages)
-            from_date: Filter messages from date
-            to_date: Filter messages to date
-
-        Yields:
-            ExportedMessage objects (no duplicates guaranteed)
-
-        Raises:
-            BadRequest: Invalid chat ID or access denied
-            ChannelPrivate: Private channel
-            ChatAdminRequired: Need admin rights
-        """
         if not self.is_connected:
             raise RuntimeError("Not connected to Telegram")
 
@@ -322,7 +228,6 @@ class TelegramClient:
             raise
 
     async def get_chat_messages_count(self, chat_id: Union[int, str]) -> Optional[int]:
-        """Get total message count in a chat. Returns None on failure."""
         try:
             count = await self.client.get_chat_history_count(chat_id)
             return count if count > 0 else None
@@ -336,19 +241,6 @@ class TelegramClient:
         from_date: datetime,
         to_date: datetime,
     ) -> Optional[int]:
-        """
-        Get message count in a date range using GetHistory with offset_date.
-
-        Strategy: two lightweight GetHistory calls (limit=1) to get the total
-        message count before each boundary date, then subtract.
-
-        count_before_to - count_before_from = messages in [from_date, to_date]
-
-        This is more reliable than messages.Search which may return the total
-        chat count regardless of date filters for certain chat types.
-
-        Returns None on failure.
-        """
         try:
             peer = await self.client.resolve_peer(chat_id)
 
@@ -398,12 +290,6 @@ class TelegramClient:
         from_date: Optional[datetime] = None,
         to_date: Optional[datetime] = None,
     ) -> Optional[int]:
-        """
-        Get message count — universal method.
-
-        Without dates: fast get_chat_history_count (1 API call).
-        With dates: raw MTProto messages.Search with min_date/max_date (1 API call).
-        """
         if from_date or to_date:
             effective_from = ensure_utc(from_date) or datetime(2000, 1, 1, tzinfo=timezone.utc)
             effective_to = ensure_utc(to_date) or datetime.now(timezone.utc)
@@ -412,7 +298,6 @@ class TelegramClient:
 
     @staticmethod
     def _build_chat_info(chat) -> dict:
-        """Extract chat metadata into a dict."""
         return {
             "id": chat.id,
             "title": getattr(chat, "title", "") or "",
@@ -428,18 +313,6 @@ class TelegramClient:
     async def _resolve_numeric_chat_id(
         self, chat_id: int
     ) -> tuple[bool, Optional[dict], Optional[str]]:
-        """
-        Resolve a numeric chat_id that is not in the Pyrogram local peer cache.
-
-        Strategy:
-          1. Sync dialog list (get_dialogs) — works if worker is a member of the chat.
-          2. Raw MTProto channels.GetChannels with access_hash=0 — works for public
-             channels even when the worker is not a member.
-          3. Redis canonical reverse mapping — lookup username by numeric ID,
-             then resolve via contacts.resolveUsername.
-
-        Returns the same (is_accessible, chat_info, error_reason) tuple as verify_and_get_info.
-        """
         # Fallback 1: sync dialog list
         logger.warning(f"Chat {chat_id} not in cache. Syncing dialog list and retrying...")
         try:
@@ -520,12 +393,6 @@ class TelegramClient:
     async def _resolve_via_canonical_mapping(
         self, chat_id: int
     ) -> Optional[tuple[bool, Optional[dict], Optional[str]]]:
-        """
-        Ищет username через Redis canonical mapping и пробует резолвить через Pyrogram.
-
-        Python-воркер сохраняет canonical:<numeric_id> → <username> при каждом
-        успешном резолве. Если маппинг найден — пробуем get_chat(username).
-        """
         if not self.redis_client:
             return None
         try:
@@ -548,15 +415,6 @@ class TelegramClient:
         return None
 
     async def verify_and_get_info(self, chat_id: Union[int, str]) -> tuple[bool, Optional[dict], Optional[str]]:
-        """
-        Check access and get chat info in single API call.
-
-        Args:
-            chat_id: Telegram chat ID or username
-
-        Returns:
-            Tuple of (is_accessible, chat_info_dict_or_None, error_reason_or_None)
-        """
         if not self.is_connected:
             return (False, None, "UNKNOWN")
 
@@ -617,25 +475,13 @@ class TelegramClient:
             return (False, None, "UNKNOWN")
 
     async def __aenter__(self):
-        """Async context manager entry."""
         await self.connect()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Async context manager exit."""
         await self.disconnect()
 
-
 async def create_client() -> TelegramClient:
-    """
-    Factory function to create and verify Telegram client.
-
-    Returns:
-        Connected TelegramClient instance
-
-    Raises:
-        RuntimeError: If connection fails
-    """
     client = TelegramClient()
 
     if not await client.connect():

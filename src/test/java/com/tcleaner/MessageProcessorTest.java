@@ -14,14 +14,6 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * Тесты для MessageProcessor.
- * 
- * Ожидаемое поведение:
- * - processMessage() преобразует message в строку формата "YYYYMMDDtext"
- * - Пропускает service-сообщения
- * - Обрабатывает различные типы сообщений
- */
 @DisplayName("MessageProcessor")
 class MessageProcessorTest {
 

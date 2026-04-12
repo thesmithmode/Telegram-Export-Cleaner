@@ -1,17 +1,3 @@
-"""
-Tests for java_client.py — Java API client integration.
-
-Covers the end-to-end send_response flow and its internal helpers:
-- _stream_to_temp_json: streams messages to disk as result.json (O(1) RAM)
-- _upload_file_to_java: HTTP upload with retry
-- send_response: orchestration (failed / completed / delivery failure)
-- _transform_entities: UTF-16 safe entity extraction
-- _build_filename: filename generation from chat title + date range
-- _split_text_by_size: text splitting on line boundaries
-- _send_file_to_user: Telegram file delivery (single + split for >45MB)
-- update_queue_position: Telegram queue status message
-- ProgressTracker: throttled progress reporting with seed + ETA
-"""
 
 import os
 import json
@@ -19,22 +5,12 @@ import tempfile
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
-from models import ExportedMessage
+from models import ExportedMessage, SendResponsePayload
 from java_client import JavaBotClient, ProgressTracker
-
 
 # ---------- helpers -----------------------------------------------------
 
-
 def _patch_settings(**overrides):
-    """Return a `patch('java_client.settings')` context manager pre-configured
-    with safe concrete primitives.
-
-    JavaBotClient.__init__ reads settings.JAVA_API_BASE_URL and
-    settings.TELEGRAM_BOT_TOKEN at construction time; leaving them as raw
-    MagicMocks causes base_url/bot_token to leak into httpx/f-strings and
-    breaks downstream logic. Always patch with real strings.
-    """
     patcher = patch("java_client.settings")
     mock = patcher.start()
     mock.JAVA_API_BASE_URL = overrides.get("JAVA_API_BASE_URL", "http://localhost:8080")
@@ -44,34 +20,22 @@ def _patch_settings(**overrides):
     mock.RETRY_MAX_DELAY = overrides.get("RETRY_MAX_DELAY", 60.0)
     return patcher, mock
 
-
 def _make_client(**overrides):
-    """Build a JavaBotClient with mocked settings + mocked httpx client.
-
-    Returns (client, patcher). Caller MUST call patcher.stop() in finally to
-    restore settings. Using start/stop rather than `with` lets tests keep the
-    patch active across nested try/finally blocks (e.g. for temp file cleanup).
-    """
     patcher, _ = _patch_settings(**overrides)
     client = JavaBotClient(max_retries=overrides.get("max_retries", 3))
     client._http_client = AsyncMock()
     return client, patcher
 
-
 def _make_temp_json(content: bytes = b'{"test": "data"}') -> str:
-    """Create a temp file on disk and return its path."""
     fd, path = tempfile.mkstemp(suffix=".json")
     with os.fdopen(fd, "wb") as f:
         f.write(content)
     return path
 
-
 # ---------- _stream_to_temp_json ----------------------------------------
-
 
 @pytest.mark.asyncio
 class TestStreamToTempJson:
-    """Test streaming messages to a temp file as valid result.json."""
 
     async def test_writes_valid_json_with_messages(self):
         client, p = _make_client()
@@ -133,18 +97,10 @@ class TestStreamToTempJson:
         finally:
             p.stop()
 
-
 # ---------- _upload_file_to_java ----------------------------------------
-
 
 @pytest.mark.asyncio
 class TestUploadFileToJava:
-    """Test the /api/convert upload with retry logic.
-
-    `_upload_file_to_java` reads a file from disk and POSTs it to Java via
-    httpx multipart. 400 → immediate None (no retry). 5xx → retry until
-    max_retries exhausted. On success returns response.text.
-    """
 
     async def test_success_returns_cleaned_text(self):
         client, p = _make_client()
@@ -215,27 +171,26 @@ class TestUploadFileToJava:
         finally:
             p.stop()
 
-
 # ---------- send_response orchestration ---------------------------------
-
 
 @pytest.mark.asyncio
 class TestSendResponse:
-    """Test send_response high-level orchestration."""
 
     async def test_failed_status_notifies_user_and_returns_true(self):
         client, p = _make_client()
         try:
             with patch.object(
-                client, "_notify_user_failure", new_callable=AsyncMock
+                client, "notify_user_failure", new_callable=AsyncMock
             ) as mock_notify:
                 result = await client.send_response(
-                    task_id="t1",
-                    status="failed",
-                    messages=[],
-                    error="Export failed",
-                    error_code="CHAT_PRIVATE",
-                    user_chat_id=123,
+                    SendResponsePayload(
+                        task_id="t1",
+                        status="failed",
+                        messages=[],
+                        error="Export failed",
+                        error_code="CHAT_PRIVATE",
+                        user_chat_id=123,
+                    )
                 )
             assert result is True
             mock_notify.assert_called_once()
@@ -257,12 +212,14 @@ class TestSendResponse:
                 mock_send.return_value = True
 
                 result = await client.send_response(
-                    task_id="t1",
-                    status="completed",
-                    messages=messages,
-                    actual_count=1,
-                    user_chat_id=123,
-                    chat_title="Test Chat",
+                    SendResponsePayload(
+                        task_id="t1",
+                        status="completed",
+                        messages=messages,
+                        actual_count=1,
+                        user_chat_id=123,
+                        chat_title="Test Chat",
+                    )
                 )
 
             assert result is True
@@ -282,17 +239,19 @@ class TestSendResponse:
             ) as mock_upload, patch.object(
                 client, "_send_file_to_user", new_callable=AsyncMock
             ) as mock_send, patch.object(
-                client, "_notify_user_failure", new_callable=AsyncMock
+                client, "notify_user_failure", new_callable=AsyncMock
             ) as mock_notify:
                 mock_upload.return_value = "cleaned text"
                 mock_send.return_value = False  # delivery failed
 
                 result = await client.send_response(
-                    task_id="t1",
-                    status="completed",
-                    messages=messages,
-                    actual_count=1,
-                    user_chat_id=123,
+                    SendResponsePayload(
+                        task_id="t1",
+                        status="completed",
+                        messages=messages,
+                        actual_count=1,
+                        user_chat_id=123,
+                    )
                 )
 
             assert result is False
@@ -301,7 +260,6 @@ class TestSendResponse:
             p.stop()
 
     async def test_upload_returns_none_triggers_failure_notify(self):
-        """When Java API is down, _upload_file_to_java returns None → user notified."""
         client, p = _make_client()
         try:
             messages = [
@@ -310,16 +268,18 @@ class TestSendResponse:
             with patch.object(
                 client, "_upload_file_to_java", new_callable=AsyncMock
             ) as mock_upload, patch.object(
-                client, "_notify_user_failure", new_callable=AsyncMock
+                client, "notify_user_failure", new_callable=AsyncMock
             ) as mock_notify:
                 mock_upload.return_value = None  # simulate Java API outage
 
                 result = await client.send_response(
-                    task_id="t1",
-                    status="completed",
-                    messages=messages,
-                    actual_count=1,
-                    user_chat_id=123,
+                    SendResponsePayload(
+                        task_id="t1",
+                        status="completed",
+                        messages=messages,
+                        actual_count=1,
+                        user_chat_id=123,
+                    )
                 )
 
             assert result is False
@@ -327,17 +287,9 @@ class TestSendResponse:
         finally:
             p.stop()
 
-
 # ---------- _transform_entities (static) --------------------------------
 
-
 class TestEntityTransformation:
-    """Test text entity transformation from Bot API to Desktop export format.
-
-    _transform_entities is UTF-16 safe: it encodes text as UTF-16-LE and slices
-    by code unit offsets. Only fields {type, text, href, user_id} are preserved;
-    extra fields (e.g. 'language' on pre blocks) are intentionally dropped.
-    """
 
     def test_transform_single_bold_entity(self):
         text = "Hello world"
@@ -391,7 +343,6 @@ class TestEntityTransformation:
         assert JavaBotClient._transform_entities("", entities) == entities
 
     def test_transform_malformed_offset_length_degrades_gracefully(self):
-        """Out-of-bounds offsets produce empty extracted text, not a crash."""
         text = "Hello"
         entities = [{"type": "bold", "offset": 10, "length": 5}]
         result = JavaBotClient._transform_entities(text, entities)
@@ -399,12 +350,6 @@ class TestEntityTransformation:
         assert result[0]["text"] == ""
 
     def test_transform_drops_unknown_fields(self):
-        """Current contract: non-{type,text,href,user_id} fields are dropped.
-
-        If _transform_entities is extended to preserve 'language' on pre/code
-        blocks, update this test. Until then, keep it — MarkdownParser on the
-        Java side doesn't consume 'language' anyway.
-        """
         text = "code block"
         entities = [{"type": "pre", "offset": 0, "length": 10, "language": "python"}]
         result = JavaBotClient._transform_entities(text, entities)
@@ -412,18 +357,9 @@ class TestEntityTransformation:
         assert result[0]["text"] == "code block"
         assert "language" not in result[0]
 
-
 # ---------- _build_filename ---------------------------------------------
 
-
 class TestBuildFilename:
-    """Test filename generation from chat title and date range.
-
-    Current contract:
-      - BOTH f_date AND t_date set → "{base}_{f[:10]}_{t[:10]}.txt"
-      - Otherwise → "{base}_all.txt"
-      - Single-from / single-to do NOT produce special names (documented).
-    """
 
     def test_full_export_with_title(self):
         _, p = _patch_settings()
@@ -490,12 +426,9 @@ class TestBuildFilename:
         finally:
             p.stop()
 
-
 # ---------- _split_text_by_size -----------------------------------------
 
-
 class TestSplitTextBySize:
-    """Test text splitting by byte budget, respecting line boundaries."""
 
     def test_small_text_single_part(self):
         _, p = _patch_settings()
@@ -563,13 +496,10 @@ class TestSplitTextBySize:
         finally:
             p.stop()
 
-
 # ---------- _send_file_to_user ------------------------------------------
-
 
 @pytest.mark.asyncio
 class TestSendFileToUser:
-    """Test Telegram file delivery, single and split-over-45MB paths."""
 
     async def test_small_file_sent_as_single_document(self):
         client, p = _make_client()
@@ -606,9 +536,7 @@ class TestSendFileToUser:
         finally:
             p.stop()
 
-
 # ---------- _notify_user_failure ----------------------------------------
-
 
 @pytest.mark.asyncio
 class TestNotifyUserFailure:
@@ -617,7 +545,7 @@ class TestNotifyUserFailure:
         try:
             client._http_client.post = AsyncMock(return_value=MagicMock(status_code=200))
 
-            await client._notify_user_failure(123, "task_1", "Chat not accessible")
+            await client.notify_user_failure(123, "task_1", "Chat not accessible")
 
             client._http_client.post.assert_called_once()
             call_args = client._http_client.post.call_args
@@ -633,13 +561,11 @@ class TestNotifyUserFailure:
         try:
             client._http_client.post = AsyncMock(side_effect=Exception("connection refused"))
             # Must not raise
-            await client._notify_user_failure(123, "task_1", "err")
+            await client.notify_user_failure(123, "task_1", "err")
         finally:
             p.stop()
 
-
 # ---------- update_queue_position ---------------------------------------
-
 
 @pytest.mark.asyncio
 class TestUpdateQueuePosition:
@@ -689,13 +615,10 @@ class TestUpdateQueuePosition:
         finally:
             p.stop()
 
-
 # ---------- ProgressTracker ---------------------------------------------
-
 
 @pytest.mark.asyncio
 class TestProgressTracker:
-    """Test ProgressTracker: clamping, seed, set_total, finalize."""
 
     async def test_send_progress_update_clamps_over_100_percent(self):
         client, p = _make_client()
@@ -725,12 +648,6 @@ class TestProgressTracker:
         assert JavaBotClient._build_progress_bar(110) == "▓▓▓▓▓▓▓▓▓▓"
 
     async def test_finalize_uses_max_of_total_and_count(self):
-        """finalize() should use max(total, count) so percentage = 100%.
-
-        finalize() calls send_progress_update positionally:
-            (user_chat_id, task_id, count, final_total, progress_message_id=...)
-        So we read call_args.args[2] / args[3], not kwargs.
-        """
         mock_java_client = AsyncMock()
         mock_java_client.send_progress_update = AsyncMock(return_value=None)
 
@@ -749,11 +666,6 @@ class TestProgressTracker:
         assert last_call.args[3] == 110  # max(100, 110) = 110
 
     async def test_send_progress_update_with_zero_total_shows_progress_bar(self):
-        """total=0 renders as a 0% bar, not the generic spinner.
-
-        REGRESSION: without this, Telegram's pending total=0 left users staring
-        at '⏳ Экспорт начался...' indefinitely.
-        """
         client, p = _make_client()
         try:
             client._http_client.post = AsyncMock(return_value=MagicMock(status_code=200))
@@ -773,7 +685,6 @@ class TestProgressTracker:
             p.stop()
 
     async def test_set_total_updates_existing_progress_message(self):
-        """set_total() must edit the existing message, not send a new one."""
         mock_java_client = AsyncMock()
         mock_java_client.send_progress_update = AsyncMock(side_effect=[777, 777])
 
