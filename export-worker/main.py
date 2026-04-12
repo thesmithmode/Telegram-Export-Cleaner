@@ -32,7 +32,7 @@ from pyrogram_client import TelegramClient, create_client as create_telegram_cli
 from queue_consumer import QueueConsumer, create_queue_consumer
 from java_client import JavaBotClient, ProgressTracker, create_java_client
 from message_cache import MessageCache
-from models import ExportRequest, ExportedMessage
+from models import ExportRequest, ExportedMessage, SendResponsePayload
 
 # Setup logging
 logging.basicConfig(
@@ -389,12 +389,14 @@ class ExportWorker:
                 error_code = error_reason or "CHAT_NOT_ACCESSIBLE"
                 logger.error(f"❌ {error} (reason: {error_reason})")
                 await self.java_client.send_response(
-                    task_id=job.task_id,
-                    status="failed",
-                    messages=[],
-                    error=error,
-                    error_code=error_code,
-                    user_chat_id=job.user_chat_id,
+                    SendResponsePayload(
+                        task_id=job.task_id,
+                        status="failed",
+                        messages=[],
+                        error=error,
+                        error_code=error_code,
+                        user_chat_id=job.user_chat_id,
+                    )
                 )
                 await self.queue_consumer.mark_job_failed(job.task_id, error)
                 await self._cleanup_job(job)
@@ -492,16 +494,18 @@ class ExportWorker:
             # Send results to Java API, deliver cleaned text to user
             chat_title = chat_info.get('title') or chat_info.get('username') if chat_info else None
             success = await self.java_client.send_response(
-                task_id=job.task_id,
-                status="completed",
-                messages=messages_for_send,
-                actual_count=msg_count,
-                user_chat_id=job.user_chat_id,
-                chat_title=chat_title,
-                from_date=job.from_date,
-                to_date=job.to_date,
-                keywords=job.keywords,
-                exclude_keywords=job.exclude_keywords,
+                SendResponsePayload(
+                    task_id=job.task_id,
+                    status="completed",
+                    messages=messages_for_send,
+                    actual_count=msg_count,
+                    user_chat_id=job.user_chat_id,
+                    chat_title=chat_title,
+                    from_date=job.from_date,
+                    to_date=job.to_date,
+                    keywords=job.keywords,
+                    exclude_keywords=job.exclude_keywords,
+                )
             )
 
             if success:
@@ -536,11 +540,13 @@ class ExportWorker:
             if self.java_client:
                 try:
                     await self.java_client.send_response(
-                        task_id=job.task_id,
-                        status="failed",
-                        messages=[],
-                        error=error_text,
-                        user_chat_id=job.user_chat_id,
+                        SendResponsePayload(
+                            task_id=job.task_id,
+                            status="failed",
+                            messages=[],
+                            error=error_text,
+                            user_chat_id=job.user_chat_id,
+                        )
                     )
                     notified_via_send_response = True
                 except Exception as notify_err:

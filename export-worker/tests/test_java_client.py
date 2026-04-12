@@ -19,7 +19,7 @@ import tempfile
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
-from models import ExportedMessage
+from models import ExportedMessage, SendResponsePayload
 from java_client import JavaBotClient, ProgressTracker
 
 
@@ -230,12 +230,14 @@ class TestSendResponse:
                 client, "_notify_user_failure", new_callable=AsyncMock
             ) as mock_notify:
                 result = await client.send_response(
-                    task_id="t1",
-                    status="failed",
-                    messages=[],
-                    error="Export failed",
-                    error_code="CHAT_PRIVATE",
-                    user_chat_id=123,
+                    SendResponsePayload(
+                        task_id="t1",
+                        status="failed",
+                        messages=[],
+                        error="Export failed",
+                        error_code="CHAT_PRIVATE",
+                        user_chat_id=123,
+                    )
                 )
             assert result is True
             mock_notify.assert_called_once()
@@ -257,12 +259,14 @@ class TestSendResponse:
                 mock_send.return_value = True
 
                 result = await client.send_response(
-                    task_id="t1",
-                    status="completed",
-                    messages=messages,
-                    actual_count=1,
-                    user_chat_id=123,
-                    chat_title="Test Chat",
+                    SendResponsePayload(
+                        task_id="t1",
+                        status="completed",
+                        messages=messages,
+                        actual_count=1,
+                        user_chat_id=123,
+                        chat_title="Test Chat",
+                    )
                 )
 
             assert result is True
@@ -288,11 +292,13 @@ class TestSendResponse:
                 mock_send.return_value = False  # delivery failed
 
                 result = await client.send_response(
-                    task_id="t1",
-                    status="completed",
-                    messages=messages,
-                    actual_count=1,
-                    user_chat_id=123,
+                    SendResponsePayload(
+                        task_id="t1",
+                        status="completed",
+                        messages=messages,
+                        actual_count=1,
+                        user_chat_id=123,
+                    )
                 )
 
             assert result is False
@@ -315,11 +321,13 @@ class TestSendResponse:
                 mock_upload.return_value = None  # simulate Java API outage
 
                 result = await client.send_response(
-                    task_id="t1",
-                    status="completed",
-                    messages=messages,
-                    actual_count=1,
-                    user_chat_id=123,
+                    SendResponsePayload(
+                        task_id="t1",
+                        status="completed",
+                        messages=messages,
+                        actual_count=1,
+                        user_chat_id=123,
+                    )
                 )
 
             assert result is False

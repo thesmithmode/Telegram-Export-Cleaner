@@ -15,7 +15,7 @@ from typing import Optional, Union, AsyncIterator
 import httpx
 
 from config import settings
-from models import ExportedMessage
+from models import ExportedMessage, SendResponsePayload
 
 logger = logging.getLogger(__name__)
 
@@ -41,68 +41,62 @@ class JavaBotClient:
         self._http_client = httpx.AsyncClient(timeout=custom_timeout)
         logger.info(f"Java API Client initialized (O(1) Memory, Timeout: {self.timeout}s)")
 
-    async def send_response(
-        self,
-        task_id: str,
-        status: str,
-        messages: Union[list[ExportedMessage], AsyncIterator[ExportedMessage]],
-        actual_count: int = 0,
-        error: Optional[str] = None,
-        error_code: Optional[str] = None,
-        user_chat_id: Optional[int] = None,
-        chat_title: Optional[str] = None,
-        from_date: Optional[str] = None,
-        to_date: Optional[str] = None,
-        keywords: Optional[str] = None,
-        exclude_keywords: Optional[str] = None,
-    ) -> bool:
+    async def send_response(self, payload: SendResponsePayload) -> bool:
         """
         Processes export results by streaming to Java and back to Telegram.
+
+        Args:
+            payload: Consolidated response payload with all export result metadata
         """
-        if status == "failed":
-            if error and user_chat_id and self.bot_token:
-                await self._notify_user_failure(user_chat_id, task_id, error)
+        if payload.status == "failed":
+            if payload.error and payload.user_chat_id and self.bot_token:
+                await self._notify_user_failure(
+                    payload.user_chat_id, payload.task_id, payload.error
+                )
             return True
 
         # 1. Stream messages directly to a temporary file on disk (Memory O(1))
-        tmp_path = await self._stream_to_temp_json(messages, actual_count)
-        
+        tmp_path = await self._stream_to_temp_json(payload.messages, payload.actual_count)
+
         try:
             file_size_mb = os.path.getsize(tmp_path) / (1024 * 1024)
-            logger.info(f"📤 Streaming {file_size_mb:.2f} MB from disk (task {task_id})")
+            logger.info(f"📤 Streaming {file_size_mb:.2f} MB from disk (task {payload.task_id})")
 
             # 2. Upload using httpx streaming capabilities
             cleaned_text = await self._upload_file_to_java(
                 tmp_path,
-                from_date=from_date,
-                to_date=to_date,
-                keywords=keywords,
-                exclude_keywords=exclude_keywords
+                from_date=payload.from_date,
+                to_date=payload.to_date,
+                keywords=payload.keywords,
+                exclude_keywords=payload.exclude_keywords
             )
         finally:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
         if cleaned_text is None:
-            logger.error(f"❌ Java API processing failed for task {task_id}")
-            if user_chat_id and self.bot_token:
+            logger.error(f"❌ Java API processing failed for task {payload.task_id}")
+            if payload.user_chat_id and self.bot_token:
                 await self._notify_user_failure(
-                    user_chat_id, task_id, "Processing service unavailable"
+                    payload.user_chat_id, payload.task_id, "Processing service unavailable"
                 )
             return False
 
         # 3. Deliver cleaned text to user
-        if user_chat_id and self.bot_token:
-            filename = self._build_filename(chat_title, from_date, to_date)
+        if payload.user_chat_id and self.bot_token:
+            filename = self._build_filename(
+                payload.chat_title, payload.from_date, payload.to_date
+            )
             sent = await self._send_file_to_user(
-                user_chat_id, task_id, cleaned_text, filename=filename
+                payload.user_chat_id, payload.task_id, cleaned_text, filename=filename
             )
             if not sent:
                 await self._notify_user_failure(
-                    user_chat_id, task_id, "Не удалось отправить файл. Попробуйте снова."
+                    payload.user_chat_id, payload.task_id,
+                    "Не удалось отправить файл. Попробуйте снова."
                 )
                 return False
-        
+
         return True
 
     async def _stream_to_temp_json(

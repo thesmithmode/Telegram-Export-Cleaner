@@ -199,6 +199,33 @@ class ExportedMessage(BaseModel):
     duration: Optional[int] = Field(None, description="Media duration (seconds)")
 
 
+class SendResponsePayload(BaseModel):
+    """
+    Payload for JavaBotClient.send_response().
+    Consolidates 12+ parameters into a single structured object.
+    """
+
+    task_id: str = Field(..., description="Unique task ID")
+    status: str = Field(
+        ...,
+        description="completed or failed",
+        pattern="^(completed|failed)$"
+    )
+    messages: Union[List[ExportedMessage], Any] = Field(
+        ...,
+        description="Exported messages (list or AsyncIterator)"
+    )
+    actual_count: int = Field(default=0, description="Number of messages actually exported")
+    error: Optional[str] = Field(None, description="Error message if status=failed")
+    error_code: Optional[str] = Field(None, description="Error code for retries")
+    user_chat_id: Optional[int] = Field(None, description="User chat ID to send result")
+    chat_title: Optional[str] = Field(None, description="Chat title for filename")
+    from_date: Optional[str] = Field(None, description="Date range filter start")
+    to_date: Optional[str] = Field(None, description="Date range filter end")
+    keywords: Optional[str] = Field(None, description="Keywords filter")
+    exclude_keywords: Optional[str] = Field(None, description="Exclude keywords filter")
+
+
 class ExportResponse(BaseModel):
     """
     Response from export worker to Java API.
