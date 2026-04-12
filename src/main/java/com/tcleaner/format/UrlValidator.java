@@ -4,12 +4,6 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.Set;
 
-/**
- * Валидатор URL для защиты от XSS атак.
- *
- * Разрешает только безопасные схемы (http, https, ftp, mailto, tg).
- * Блокирует опасные схемы (javascript, data, vbscript и т.д.).
- */
 public class UrlValidator {
 
     private static final Set<String> SAFE_SCHEMES = Set.of(
@@ -36,12 +30,7 @@ public class UrlValidator {
     private UrlValidator() {
     }
 
-    /**
-     * Проверяет, является ли URL безопасным для использования в markdown ссылках.
-     *
-     * @param url URL для проверки
-     * @return true если URL безопасен, false если опасен или невалиден
-     */
+    
     public static boolean isSafeUrl(String url) {
         if (url == null || url.isBlank()) {
             return false;
@@ -87,13 +76,7 @@ public class UrlValidator {
         }
     }
 
-    /**
-     * Возвращает безопасный URL или дефолтный якорь если URL опасен.
-     *
-     * @param url проверяемый URL
-     * @param defaultUrl дефолтный URL при невалидности
-     * @return безопасный URL
-     */
+    
     public static String sanitizeUrl(String url, String defaultUrl) {
         return isSafeUrl(url) ? url : defaultUrl;
     }

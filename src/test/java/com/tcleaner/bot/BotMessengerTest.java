@@ -27,11 +27,6 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/**
- * Тесты для BotMessenger.
- *
- * Проверяет корректность отправки сообщений, редактирования и callback ответов.
- */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("BotMessenger")
 class BotMessengerTest {

@@ -67,8 +67,9 @@ README.md                     Быстрый старт
 4. **НИКОГДА не добавлять Co-Authored-By** в коммиты
 5. **Автор коммитов:** всегда `thesmithmode <117716736+thesmithmode@users.noreply.github.com>` — задан в `git config` репозитория, не менять
 6. **Merge dev→main: ALWAYS --squash** (один коммит на main)
-7. **Пушить только в dev/Review**, main только явно
-8. **При конфликте локального и удалённого репо — ВСЕГДА приоритет у origin** (reset к remote, не rebase локального)
+7. **Пушить только в dev/Review**, никогда в main без явной прямой команды
+8. **НИКОГДА не предлагать пуш в main** — ждать прямого приказа пользователя
+9. **При конфликте локального и удалённого репо — ВСЕГДА приоритет у origin** (reset к remote, не rebase локального)
 
 ## Java пакеты
 
@@ -89,5 +90,5 @@ README.md                     Быстрый старт
 
 - **Java** — `src/test/java/com/tcleaner/`: JUnit 5 + AssertJ, 80% JaCoCo, Embedded Redis (ТОЛЬКО в CI)
 - **Python** — `export-worker/tests/`: pytest + conftest.py, AsyncMock, SQLite tmp_path (ТОЛЬКО в CI)
-- Все публичные классы: JavaDoc (Java) + docstrings (Python)
+- **Документация:** только README.md и файлы в `docs/`. JavaDoc и docstrings в исходниках — только если логика нетривиальна и требует пояснения
 - Code style: checkstyle.xml (Java), PEP 8 (Python)

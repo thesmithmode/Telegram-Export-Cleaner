@@ -28,17 +28,6 @@ import java.util.concurrent.Future;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/**
- * Тесты для {@link TelegramExporter#processFileStreaming} — Jackson Streaming API.
- *
- * <p>Проверяет:</p>
- * <ul>
- *   <li>результат идентичен {@link TelegramExporter#processFile} (Tree Model)</li>
- *   <li>корректную обработку граничных случаев (нет файла, невалидный JSON, нет messages)</li>
- *   <li>работу фильтрации</li>
- *   <li>конкурентную запись нескольких потоков</li>
- * </ul>
- */
 @DisplayName("TelegramExporter - Streaming API")
 class TelegramExporterStreamingTest {
 

@@ -2,28 +2,12 @@ package com.tcleaner.bot;
 
 import java.time.Instant;
 
-/**
- * Состояние диалога пользователя с ботом.
- *
- * <p>Хранится in-memory в {@code ConcurrentHashMap<Long, UserSession>} внутри {@link ExportBot}.
- * Сбрасывается при рестарте — допустимо, пользователь просто начнёт заново.</p>
- *
- * <p>Все методы синхронизированы для обеспечения потокобезопасности при параллельной обработке
- * нескольких обновлений от одного и того же пользователя.</p>
- */
 public class UserSession {
 
-    /**
-     * Этапы диалога.
-     */
     public enum State {
-        /** Начальное состояние — ожидание идентификатора чата. */
         IDLE,
-        /** Чат идентифицирован — ожидание выбора варианта диапазона (весь чат / указать даты). */
         AWAITING_DATE_CHOICE,
-        /** Пользователь выбрал «указать даты» — ожидание ввода начальной даты. */
         AWAITING_FROM_DATE,
-        /** Ожидание ввода конечной даты. */
         AWAITING_TO_DATE
     }
 
@@ -83,14 +67,10 @@ public class UserSession {
         return lastAccess;
     }
 
-    /** Обновляет метку последнего обращения до текущего момента. */
     public synchronized void touch() {
         this.lastAccess = Instant.now();
     }
 
-    /**
-     * Сбрасывает сессию в начальное состояние.
-     */
     public synchronized void reset() {
         this.state = State.IDLE;
         this.chatId = null;

@@ -1,6 +1,3 @@
-"""
-Pytest configuration and fixtures for export-worker tests
-"""
 
 import pytest
 from datetime import datetime
@@ -8,10 +5,8 @@ from unittest.mock import Mock
 
 from models import ExportRequest, ExportedMessage, MessageEntity
 
-
 @pytest.fixture
 def sample_export_request():
-    """Fixture: Sample ExportRequest"""
     return ExportRequest(
         task_id="export_test_12345",
         user_id=123456789,
@@ -22,10 +17,8 @@ def sample_export_request():
         to_date="2025-12-31T23:59:59"
     )
 
-
 @pytest.fixture
 def simple_message():
-    """Fixture: Simple Pyrogram-like message mock"""
     message = Mock()
     message.id = 123
     message.date = datetime(2025, 6, 24, 15, 29, 46)
@@ -44,10 +37,8 @@ def simple_message():
     message.reply_to_message_id = None
     return message
 
-
 @pytest.fixture
 def message_with_entities():
-    """Fixture: Message with text entities (formatting)"""
     message = Mock()
     message.id = 124
     message.date = datetime(2025, 6, 24, 15, 30, 0)
@@ -79,10 +70,8 @@ def message_with_entities():
     message.reply_to_message_id = None
     return message
 
-
 @pytest.fixture
 def message_with_media():
-    """Fixture: Message with photo"""
     photo = Mock()
     photo.__class__.__name__ = "Photo"
     photo.file_name = "photo_123.jpg"
@@ -107,10 +96,8 @@ def message_with_media():
     message.reply_to_message_id = None
     return message
 
-
 @pytest.fixture
 def forwarded_message():
-    """Fixture: Forwarded message"""
     forward_user = Mock()
     forward_user.first_name = "Bob"
     forward_user.last_name = None
@@ -135,10 +122,8 @@ def forwarded_message():
     message.reply_to_message_id = None
     return message
 
-
 @pytest.fixture
 def edited_message():
-    """Fixture: Edited message"""
     message = Mock()
     message.id = 127
     message.date = datetime(2025, 6, 24, 15, 33, 0)
@@ -157,10 +142,8 @@ def edited_message():
     message.reply_to_message_id = None
     return message
 
-
 @pytest.fixture
 def sample_exported_message():
-    """Fixture: Sample ExportedMessage"""
     return ExportedMessage(
         id=123,
         type="message",
@@ -170,20 +153,16 @@ def sample_exported_message():
         from_id={"peer_type": "user", "peer_id": 456}
     )
 
-
 @pytest.fixture
 def sample_message_entity():
-    """Fixture: Sample MessageEntity"""
     return MessageEntity(
         type="bold",
         offset=0,
         length=5
     )
 
-
 @pytest.fixture
 def url_message_entity():
-    """Fixture: URL MessageEntity"""
     return MessageEntity(
         type="text_link",
         offset=0,
@@ -191,10 +170,8 @@ def url_message_entity():
         url="https://example.com"
     )
 
-
 @pytest.fixture
 def mention_message_entity():
-    """Fixture: Mention MessageEntity"""
     return MessageEntity(
         type="text_mention",
         offset=0,

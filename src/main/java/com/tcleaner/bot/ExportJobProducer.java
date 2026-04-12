@@ -16,38 +16,6 @@ import java.util.concurrent.TimeUnit;
 import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.SessionCallback;
 
-/**
- * Кладёт задачи на экспорт в Redis-очередь.
- *
- * <p>Python-воркер читает очередь через BLPOP и обрабатывает задачи по одной.</p>
- *
- * <h3>Защита от параллельных экспортов</h3>
- * <p>Каждый вызов {@code enqueue()} атомарно резервирует слот через Redis SET NX EX
- * (ключ {@code active_export:<userId>}). Если ключ уже существует —
- * метод бросает {@link IllegalStateException} вместо добавления дублирующей задачи.
- * Это устраняет race condition между {@link #getActiveExport(long)} и {@code enqueue()}.</p>
- *
- * <h3>Двойная очередь</h3>
- * <p>Если данные чата уже в кэше ({@link #isLikelyCached(Object)} возвращает true),
- * задача помещается в приоритетную очередь ({@code <queueName>_express}).
- * Иначе — в основную очередь ({@code <queueName>}).</p>
- *
- * <p>Формат JSON-задачи:</p>
- * <pre>
- * {
- *   "task_id":       "uuid",
- *   "user_id":       12345,
- *   "user_chat_id":  12345,
- *   "chat_id":       -100123456789 или "username",
- *   "limit":         0,
- *   "offset_id":     0,
- *   "from_date":     "2024-01-01T00:00:00",  // опционально
- *   "to_date":       "2024-12-31T23:59:59",  // опционально
- *   "keywords":      "java,spring",          // опционально
- *   "exclude_keywords": "test,debug"         // опционально
- * }
- * </pre>
- */
 @Service
 public class ExportJobProducer {
 
@@ -57,13 +25,6 @@ public class ExportJobProducer {
     private final ObjectMapper objectMapper;
     private final String queueName;
 
-    /**
-     * Конструктор.
-     *
-     * @param redis        клиент Redis
-     * @param objectMapper Jackson ObjectMapper
-     * @param queueName    имя очереди (из application.properties)
-     */
     public ExportJobProducer(
             StringRedisTemplate redis,
             ObjectMapper objectMapper,
@@ -74,78 +35,18 @@ public class ExportJobProducer {
         this.queueName = queueName;
     }
 
-    /**
-     * Добавляет задачу на экспорт в Redis-очередь (без фильтрации по датам).
-     *
-     * <p>Атомарно резервирует слот через Redis SET NX перед добавлением в очередь.
-     * Если у пользователя уже есть активный экспорт — бросает {@link IllegalStateException}.</p>
-     *
-     * @param userId     Telegram user ID пользователя, сделавшего запрос
-     * @param userChatId Telegram chat ID — куда вернуть результат (обычно равен userId)
-     * @param chatId     ID чата, историю которого нужно экспортировать (числовой)
-     * @return task_id созданной задачи
-     * @throws IllegalStateException если у пользователя уже есть активный экспорт
-     * @throws RuntimeException      если не удалось сериализовать задачу или записать в Redis
-     */
     public String enqueue(long userId, long userChatId, long chatId) {
         return enqueue(userId, userChatId, (Object) chatId, null, null, null, null);
     }
 
-    /**
-     * Добавляет задачу на экспорт с фильтрацией по датам.
-     *
-     * @param userId     Telegram user ID
-     * @param userChatId Telegram chat ID — куда вернуть результат
-     * @param chatId     ID чата для экспорта
-     * @param fromDate   начальная дата (ISO, nullable)
-     * @param toDate     конечная дата (ISO, nullable)
-     * @return task_id созданной задачи
-     */
     public String enqueue(long userId, long userChatId, long chatId, String fromDate, String toDate) {
         return enqueue(userId, userChatId, (Object) chatId, fromDate, toDate, null, null);
     }
 
-    /**
-     * Добавляет задачу на экспорт с фильтрацией по датам и ключевым словам.
-     *
-     * @param userId          Telegram user ID
-     * @param userChatId      Telegram chat ID — куда вернуть результат
-     * @param chatId          ID чата для экспорта
-     * @param fromDate        начальная дата (ISO, nullable)
-     * @param toDate          конечная дата (ISO, nullable)
-     * @param keywords        ключевые слова для включения (nullable)
-     * @param excludeKeywords ключевые слова для исключения (nullable)
-     * @return task_id созданной задачи
-     */
-    public String enqueue(long userId, long userChatId, long chatId,
-                          String fromDate, String toDate,
-                          String keywords, String excludeKeywords) {
-        return enqueue(userId, userChatId, (Object) chatId, fromDate, toDate, keywords, excludeKeywords);
-    }
-
-    /**
-     * Добавляет задачу на экспорт по username чата.
-     *
-     * @param userId         Telegram user ID пользователя, сделавшего запрос
-     * @param userChatId     Telegram chat ID — куда вернуть результат
-     * @param chatIdentifier username чата (без @)
-     * @return task_id созданной задачи
-     * @throws RuntimeException если не удалось сериализовать задачу или записать в Redis
-     */
     public String enqueue(long userId, long userChatId, String chatIdentifier) {
         return enqueue(userId, userChatId, (Object) chatIdentifier, null, null, null, null);
     }
 
-    /**
-     * Добавляет задачу на экспорт по username с фильтрацией по датам.
-     *
-     * @param userId         Telegram user ID
-     * @param userChatId     Telegram chat ID — куда вернуть результат
-     * @param chatIdentifier username чата (без @)
-     * @param fromDate       начальная дата (ISO, nullable)
-     * @param toDate         конечная дата (ISO, nullable)
-     * @return task_id созданной задачи
-     */
     public String enqueue(long userId, long userChatId, String chatIdentifier,
                           String fromDate, String toDate) {
         return enqueue(userId, userChatId, (Object) chatIdentifier, fromDate, toDate, null, null);
@@ -223,14 +124,6 @@ public class ExportJobProducer {
         }
     }
 
-    /**
-     * Проверяет, есть ли данные этого чата в кэше воркера.
-     * Использует canonical-маппинг, который Python-воркер записывает после каждой нормализации.
-     * Если кэш доступен, задачу можно ставить в приоритетную очередь.
-     *
-     * @param chatId идентификатор чата (username, числовой ID, строка)
-     * @return true если данные чата закэшированы
-     */
     public boolean isLikelyCached(Object chatId) {
         try {
             String input = String.valueOf(chatId);
@@ -248,34 +141,16 @@ public class ExportJobProducer {
         }
     }
 
-    /**
-     * Возвращает текущую длину очереди (основная + express).
-     *
-     * @return количество задач в очереди
-     */
     public long getQueueLength() {
         Long main = redis.opsForList().size(queueName);
         Long express = redis.opsForList().size(queueName + EXPRESS_QUEUE_SUFFIX);
         return (main != null ? main : 0L) + (express != null ? express : 0L);
     }
 
-    /**
-     * Проверяет, обрабатывает ли воркер задачу прямо сейчас.
-     * Python-воркер устанавливает ключ active_processing_job при старте задачи и удаляет при завершении.
-     *
-     * @return true если воркер занят
-     */
     public boolean hasActiveProcessingJob() {
         return Boolean.TRUE.equals(redis.hasKey(ACTIVE_PROCESSING_JOB_KEY));
     }
 
-    /**
-     * Сохраняет message_id сообщения о позиции в очереди для последующего редактирования воркером.
-     *
-     * @param taskId     ID задачи
-     * @param userChatId Telegram chat ID пользователя
-     * @param msgId      ID отправленного сообщения с позицией
-     */
     public void storeQueueMsgId(String taskId, long userChatId, int msgId) {
         redis.opsForValue().set(
                 "queue_msg:" + taskId,
@@ -284,14 +159,6 @@ public class ExportJobProducer {
         );
     }
 
-    /**
-     * Проверяет, есть ли у пользователя активный экспорт.
-     * Автоматически очищает протухшие ключи: если задача уже completed/failed
-     * или отсутствует в очереди и не в processing — считается завершённой.
-     *
-     * @param userId Telegram user ID пользователя
-     * @return task_id активного экспорта или null
-     */
     public String getActiveExport(long userId) {
         String taskId = redis.opsForValue().get(ACTIVE_EXPORT_PREFIX + userId);
         if (taskId == null) {
@@ -340,13 +207,6 @@ public class ExportJobProducer {
         return null;
     }
 
-    /**
-     * Отправляет сигнал отмены экспорта.
-     * Если задача ещё в очереди (не взята воркером) — удаляет её через LREM.
-     * Если задача уже обрабатывается — устанавливает флаг cancel_export для воркера.
-     *
-     * @param userId Telegram user ID пользователя
-     */
     public void cancelExport(long userId) {
         String taskId = redis.opsForValue().get(ACTIVE_EXPORT_PREFIX + userId);
         if (taskId == null) {

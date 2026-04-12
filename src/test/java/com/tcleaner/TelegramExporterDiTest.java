@@ -14,9 +14,6 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * Тесты для TelegramExporter - проверка DI-конструктора.
- */
 @DisplayName("TelegramExporter - DI Constructor")
 class TelegramExporterDiTest {
 
