@@ -19,11 +19,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/**
- * Тесты для ApiExceptionHandler.
- *
- * Проверяет корректность обработки исключений и возврата HTTP кодов.
- */
 @SpringBootTest
 @AutoConfigureMockMvc
 @TestPropertySource(properties = "api.key=test-api-key")

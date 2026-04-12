@@ -1,8 +1,3 @@
-"""
-Tests for Pyrogram TelegramClient.
-
-Covers connection, authentication, message export, and error handling.
-"""
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,13 +7,10 @@ from pyrogram.errors import Unauthorized, BadRequest, PeerIdInvalid
 from pyrogram_client import TelegramClient
 from models import ExportedMessage
 
-
 class TestTelegramClientConnection:
-    """Test connection management."""
 
     @pytest.mark.asyncio
     async def test_connect_success(self):
-        """Test successful connection."""
         client = TelegramClient()
 
         # Mock Pyrogram client
@@ -38,7 +30,6 @@ class TestTelegramClientConnection:
 
     @pytest.mark.asyncio
     async def test_connect_already_connected(self):
-        """Test that connect returns True if already connected."""
         client = TelegramClient()
         client.is_connected = True
         mock_pyrogram = AsyncMock()
@@ -51,7 +42,6 @@ class TestTelegramClientConnection:
 
     @pytest.mark.asyncio
     async def test_connect_unauthorized(self):
-        """Test connection failure due to authorization."""
         client = TelegramClient()
         mock_pyrogram = AsyncMock()
         mock_pyrogram.start = AsyncMock(side_effect=Unauthorized("Auth failed"))
@@ -64,7 +54,6 @@ class TestTelegramClientConnection:
 
     @pytest.mark.asyncio
     async def test_connect_other_error(self):
-        """Test connection failure due to other errors."""
         client = TelegramClient()
         mock_pyrogram = AsyncMock()
         mock_pyrogram.start = AsyncMock(side_effect=Exception("Connection error"))
@@ -77,7 +66,6 @@ class TestTelegramClientConnection:
 
     @pytest.mark.asyncio
     async def test_disconnect(self):
-        """Test disconnect."""
         client = TelegramClient()
         client.is_connected = True
         mock_pyrogram = AsyncMock()
@@ -92,7 +80,6 @@ class TestTelegramClientConnection:
 
     @pytest.mark.asyncio
     async def test_disconnect_not_connected(self):
-        """Test disconnect when not connected."""
         client = TelegramClient()
         client.is_connected = False
         mock_pyrogram = AsyncMock()
@@ -102,13 +89,10 @@ class TestTelegramClientConnection:
 
         mock_pyrogram.stop.assert_not_called()
 
-
 class TestTelegramClientVerifyAccess:
-    """Test access verification."""
 
     @pytest.mark.asyncio
     async def test_verify_and_get_info_success(self):
-        """Test successful chat verification."""
         client = TelegramClient()
         client.is_connected = True  # верификация требует активного соединения
         mock_pyrogram = AsyncMock()
@@ -131,7 +115,6 @@ class TestTelegramClientVerifyAccess:
 
     @pytest.mark.asyncio
     async def test_verify_and_get_info_chat_not_found(self):
-        """Test chat not found."""
         client = TelegramClient()
         mock_pyrogram = AsyncMock()
         mock_pyrogram.get_chat = AsyncMock(side_effect=BadRequest("Chat not found"))
@@ -145,7 +128,6 @@ class TestTelegramClientVerifyAccess:
 
     @pytest.mark.asyncio
     async def test_verify_and_get_info_no_access(self):
-        """Test no access to chat."""
         client = TelegramClient()
         mock_pyrogram = AsyncMock()
         mock_pyrogram.get_chat = AsyncMock(
@@ -160,7 +142,6 @@ class TestTelegramClientVerifyAccess:
 
     @pytest.mark.asyncio
     async def test_verify_and_get_info_channel_without_is_bot(self):
-        """Test that Chat objects without is_bot (channels/groups) don't raise AttributeError."""
         client = TelegramClient()
         client.is_connected = True  # верификация требует активного соединения
         mock_pyrogram = AsyncMock()
@@ -190,8 +171,6 @@ class TestTelegramClientVerifyAccess:
 
     @pytest.mark.asyncio
     async def test_verify_and_get_info_public_channel_by_numeric_id_via_raw_mtproto(self):
-        """Числовой ID публичного канала из picker: get_dialogs() не помогает,
-        fallback через raw MTProto channels.GetChannels(access_hash=0) должен разрезолвить."""
         client = TelegramClient()
         mock_pyrogram = AsyncMock()
 
@@ -233,12 +212,8 @@ class TestTelegramClientVerifyAccess:
         assert error_reason is None
         mock_pyrogram.invoke.assert_called_once()
 
-
     @pytest.mark.asyncio
     async def test_verify_and_get_info_value_error_peer_id_triggers_fallback(self):
-        """ValueError 'Peer id invalid' от Pyrogram (peer не в локальном кэше сессии)
-        должен активировать тот же fallback, что и PeerIdInvalid из BadRequest:
-        синхронизация диалогов → raw MTProto channels.GetChannels(access_hash=0)."""
         client = TelegramClient()
         mock_pyrogram = AsyncMock()
 
@@ -283,7 +258,6 @@ class TestTelegramClientVerifyAccess:
 
     @pytest.mark.asyncio
     async def test_verify_and_get_info_value_error_non_peer_propagates(self):
-        """ValueError с другим сообщением (не 'Peer id invalid') должен возвращать UNKNOWN."""
         client = TelegramClient()
         mock_pyrogram = AsyncMock()
         mock_pyrogram.get_chat = AsyncMock(
@@ -297,12 +271,9 @@ class TestTelegramClientVerifyAccess:
         assert accessible is False
         assert error_reason == "UNKNOWN"
 
-
 class TestTelegramClientHistoryExport:
-    """Test message history export."""
 
     def _make_msg(self, msg_id: int, text: str = ""):
-        """Create a minimal valid Pyrogram-like message mock."""
         return MagicMock(
             id=msg_id,
             text=text or f"Message {msg_id}",
@@ -319,7 +290,6 @@ class TestTelegramClientHistoryExport:
 
     @pytest.mark.asyncio
     async def test_get_chat_history_success(self):
-        """Test successful message export."""
         client = TelegramClient()
         client.is_connected = True
         mock_pyrogram = AsyncMock()
@@ -343,7 +313,6 @@ class TestTelegramClientHistoryExport:
 
     @pytest.mark.asyncio
     async def test_get_chat_history_with_limit(self):
-        """Test message export with limit."""
         client = TelegramClient()
         client.is_connected = True
         mock_pyrogram = AsyncMock()
@@ -364,7 +333,6 @@ class TestTelegramClientHistoryExport:
 
     @pytest.mark.asyncio
     async def test_get_chat_history_error(self):
-        """Test error handling during export."""
         client = TelegramClient()
         client.is_connected = True
         mock_pyrogram = AsyncMock()
@@ -384,13 +352,10 @@ class TestTelegramClientHistoryExport:
         # Should have exported one message before error
         assert len(messages) == 1
 
-
 class TestTelegramClientIncrementalExport:
-    """Test incremental export via min_id."""
 
     @pytest.mark.asyncio
     async def test_get_chat_history_stops_at_min_id(self):
-        """min_id causes iteration to stop when message.id <= min_id."""
         client = TelegramClient()
         client.is_connected = True
         mock_pyrogram = AsyncMock()
@@ -425,7 +390,6 @@ class TestTelegramClientIncrementalExport:
 
     @pytest.mark.asyncio
     async def test_get_chat_history_min_id_zero_returns_all(self):
-        """min_id=0 (default) returns all messages without stopping early."""
         client = TelegramClient()
         client.is_connected = True
         mock_pyrogram = AsyncMock()
@@ -452,13 +416,10 @@ class TestTelegramClientIncrementalExport:
 
         assert collected_ids == [3, 1]
 
-
 class TestTelegramClientDateFiltering:
-    """Test date filtering in get_chat_history."""
 
     @pytest.mark.asyncio
     async def test_from_date_stops_iteration_early(self):
-        """from_date should stop iteration (not just skip) since messages are newest→oldest."""
         from pyrogram_client import MessageConverter
 
         client = TelegramClient()
@@ -490,7 +451,6 @@ class TestTelegramClientDateFiltering:
 
     @pytest.mark.asyncio
     async def test_to_date_skips_newer_messages(self):
-        """to_date should skip newer messages but continue iterating."""
         client = TelegramClient()
         client.is_connected = True
 
@@ -519,7 +479,6 @@ class TestTelegramClientDateFiltering:
 
     @pytest.mark.asyncio
     async def test_mixed_naive_aware_datetimes_are_handled(self):
-        """Should not crash when message.date tz-awareness differs from filter tz-awareness."""
         client = TelegramClient()
         client.is_connected = True
 
@@ -549,9 +508,7 @@ class TestTelegramClientDateFiltering:
 
         assert collected == [3, 2]
 
-
 class TestTelegramClientFloodWait:
-    """Test FloodWait retry logic."""
 
     def _make_msg(self, msg_id: int):
         return MagicMock(
@@ -570,7 +527,6 @@ class TestTelegramClientFloodWait:
 
     @pytest.mark.asyncio
     async def test_flood_wait_retries_and_resumes(self):
-        """FloodWait triggers retry from last_offset_id, deduplicates messages."""
         from pyrogram.errors import FloodWait
 
         client = TelegramClient()
@@ -603,7 +559,6 @@ class TestTelegramClientFloodWait:
 
     @pytest.mark.asyncio
     async def test_flood_wait_max_retries_exceeded_raises(self):
-        """FloodWait raises after MAX_RETRIES exceeded."""
         from pyrogram.errors import FloodWait
         from config import settings
 
@@ -623,6 +578,69 @@ class TestTelegramClientFloodWait:
                 async for _ in client.get_chat_history(123):
                     pass
 
+    @pytest.mark.asyncio
+    async def test_on_floodwait_callback_called_with_wait_time(self):
+        from pyrogram.errors import FloodWait
+
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+
+        call_count = 0
+
+        async def mock_get_chat_history(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                yield self._make_msg(1)
+                raise FloodWait(value=30)
+            else:
+                yield self._make_msg(1)  # duplicate
+
+        mock_pyrogram.get_chat_history = mock_get_chat_history
+        client.client = mock_pyrogram
+
+        floodwait_calls = []
+
+        async def on_floodwait(wait_seconds):
+            floodwait_calls.append(wait_seconds)
+
+        with patch("pyrogram_client.asyncio.sleep", new_callable=AsyncMock):
+            messages = []
+            async for msg in client.get_chat_history(123, on_floodwait=on_floodwait):
+                messages.append(msg.id)
+
+        assert len(floodwait_calls) == 1, "on_floodwait должен быть вызван ровно один раз"
+        assert floodwait_calls[0] >= 30, "wait_time должен быть >= значению FloodWait"
+
+    @pytest.mark.asyncio
+    async def test_no_on_floodwait_does_not_crash(self):
+        from pyrogram.errors import FloodWait
+
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+
+        call_count = 0
+
+        async def mock_get_chat_history(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise FloodWait(value=1)
+                yield  # make it async generator
+            else:
+                yield self._make_msg(1)
+
+        mock_pyrogram.get_chat_history = mock_get_chat_history
+        client.client = mock_pyrogram
+
+        with patch("pyrogram_client.asyncio.sleep", new_callable=AsyncMock):
+            messages = []
+            async for msg in client.get_chat_history(123, on_floodwait=None):
+                messages.append(msg.id)
+
+        assert messages == [1]
 
     @pytest.mark.asyncio
     async def test_on_floodwait_callback_called_with_wait_time(self):
@@ -692,11 +710,9 @@ class TestTelegramClientFloodWait:
 
 
 class TestTelegramClientMessageCount:
-    """Test message count methods."""
 
     @pytest.mark.asyncio
     async def test_get_chat_messages_count_success(self):
-        """Test total count for full chat."""
         client = TelegramClient()
         client.is_connected = True
         mock_pyrogram = AsyncMock()
@@ -709,7 +725,6 @@ class TestTelegramClientMessageCount:
 
     @pytest.mark.asyncio
     async def test_get_chat_messages_count_zero_returns_none(self):
-        """Test that zero count returns None."""
         client = TelegramClient()
         mock_pyrogram = AsyncMock()
         mock_pyrogram.get_chat_history_count = AsyncMock(return_value=0)
@@ -721,7 +736,6 @@ class TestTelegramClientMessageCount:
 
     @pytest.mark.asyncio
     async def test_get_chat_messages_count_error_returns_none(self):
-        """Test that API error returns None."""
         client = TelegramClient()
         mock_pyrogram = AsyncMock()
         mock_pyrogram.get_chat_history_count = AsyncMock(side_effect=Exception("API error"))
@@ -733,9 +747,6 @@ class TestTelegramClientMessageCount:
 
     @pytest.mark.asyncio
     async def test_get_date_range_count_success(self):
-        """
-        Два вызова GetHistory (before to_date и before from_date), разность — счётчик диапазона.
-        """
         client = TelegramClient()
         client.is_connected = True
         mock_pyrogram = AsyncMock()
@@ -760,7 +771,6 @@ class TestTelegramClientMessageCount:
 
     @pytest.mark.asyncio
     async def test_get_date_range_count_no_count_attr_returns_none(self):
-        """Если GetHistory не вернул count — возвращаем None."""
         client = TelegramClient()
         client.is_connected = True
         mock_pyrogram = AsyncMock()
@@ -778,7 +788,6 @@ class TestTelegramClientMessageCount:
 
     @pytest.mark.asyncio
     async def test_get_date_range_count_error_returns_none(self):
-        """Test that error returns None."""
         client = TelegramClient()
         client.is_connected = True
         mock_pyrogram = AsyncMock()
@@ -793,7 +802,6 @@ class TestTelegramClientMessageCount:
 
     @pytest.mark.asyncio
     async def test_get_messages_count_without_dates_uses_fast_path(self):
-        """Without dates, uses get_chat_history_count (fast path)."""
         client = TelegramClient()
         mock_pyrogram = AsyncMock()
         mock_pyrogram.get_chat_history_count = AsyncMock(return_value=10000)
@@ -806,13 +814,6 @@ class TestTelegramClientMessageCount:
 
     @pytest.mark.asyncio
     async def test_get_messages_count_with_dates_uses_raw_api(self):
-        """With dates, uses raw MTProto GetHistory.
-
-        get_date_range_count делает ДВА вызова GetHistory (count_to и count_from),
-        чтобы вычислить количество в диапазоне как (count_to - count_from).
-        Тест моделирует это: count_to=500 (всего до to_date),
-        count_from=0 (нет сообщений до from_date) → result = 500.
-        """
         client = TelegramClient()
         client.is_connected = True
         mock_pyrogram = AsyncMock()
@@ -834,13 +835,10 @@ class TestTelegramClientMessageCount:
         assert mock_pyrogram.invoke.call_count == 2
         mock_pyrogram.get_chat_history_count.assert_not_called()
 
-
 class TestTelegramClientContextManager:
-    """Test context manager protocol."""
 
     @pytest.mark.asyncio
     async def test_async_context_manager(self):
-        """Test async context manager protocol."""
         client = TelegramClient()
         mock_pyrogram = AsyncMock()
         mock_pyrogram.start = AsyncMock()
@@ -857,13 +855,10 @@ class TestTelegramClientContextManager:
         assert client.is_connected is False
         mock_pyrogram.stop.assert_called_once()
 
-
 @pytest.mark.asyncio
 class TestResolveNumericChatIdWithCanonicalMapping:
-    """Test that _resolve_numeric_chat_id saves canonical mapping after successful resolve."""
 
     async def test_fallback_1_saves_canonical_mapping_with_username(self):
-        """After dialog sync resolve (fallback 1), save canonical:{id}→username to Redis."""
         client = TelegramClient()
         mock_pyrogram = AsyncMock()
         mock_redis = AsyncMock()
@@ -903,7 +898,6 @@ class TestResolveNumericChatIdWithCanonicalMapping:
         assert call_args[1]["ex"] == 86400 * 30
 
     async def test_fallback_2_saves_canonical_mapping_with_username(self):
-        """After raw MTProto resolve (fallback 2), save canonical:{id}→username to Redis."""
         from pyrogram import types
         from pyrogram.errors import ChannelPrivate
         from unittest.mock import AsyncMock
@@ -950,7 +944,6 @@ class TestResolveNumericChatIdWithCanonicalMapping:
         assert call_args[0][1] == "publicchannel"
 
     async def test_fallback_1_no_redis_client_does_not_crash(self):
-        """If redis_client is None, should not crash (graceful degradation)."""
         client = TelegramClient()
         mock_pyrogram = AsyncMock()
 
