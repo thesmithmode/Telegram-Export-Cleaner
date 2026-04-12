@@ -13,7 +13,6 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -129,7 +128,8 @@ class ApiExceptionHandlerTest {
         @Test
         @DisplayName("400 при пустом файле")
         void shouldReturn400OnEmptyFile() throws Exception {
-            mockMvc.perform(post("/api/convert"))
+            mockMvc.perform(multipart("/api/convert")
+                    .file(dummyFile()))
                     .andExpect(status().isBadRequest());
         }
     }
