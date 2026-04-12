@@ -247,10 +247,8 @@ class JavaBotClient:
     async def notify_user_failure(self, chat_id, task_id, error):
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
         text = f"❌ Export failed (task {task_id})\n\nReason: {error}"
-        try:
-            await self._http_client.post(url, data={"chat_id": chat_id, "text": text})
-        except Exception as e:
-            logger.debug(f"Failed to notify user {chat_id} about export failure: {e}")
+        try: await self._http_client.post(url, data={"chat_id": chat_id, "text": text})
+        except: pass
 
     def create_progress_tracker(self, user_chat_id: int, task_id: str):
         return ProgressTracker(self, user_chat_id, task_id)
