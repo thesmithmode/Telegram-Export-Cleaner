@@ -6,7 +6,6 @@ import signal
 import sys
 import psutil
 from datetime import date as date_cls, datetime, timedelta, timezone
-from pathlib import Path
 from typing import AsyncGenerator, Optional
 
 import redis.asyncio as aioredis
