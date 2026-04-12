@@ -1,8 +1,3 @@
-"""
-Performance and concurrency tests for Export Worker.
-
-Tests performance characteristics and concurrent behavior.
-"""
 
 import pytest
 import asyncio
@@ -13,12 +8,9 @@ from models import ExportedMessage, ExportRequest, ExportResponse
 from json_converter import MessageConverter
 from unittest.mock import Mock
 
-
 class TestMessageConversionPerformance:
-    """Performance tests for message conversion."""
 
     def test_single_message_conversion_speed(self):
-        """Test conversion speed for single message."""
         # Create mock message
         message = Mock()
         message.id = 1
@@ -46,7 +38,6 @@ class TestMessageConversionPerformance:
         assert isinstance(result, ExportedMessage)
 
     def test_batch_message_conversion_speed(self):
-        """Test conversion speed for batch of messages."""
         messages = []
         for i in range(100):
             msg = Mock()
@@ -78,7 +69,6 @@ class TestMessageConversionPerformance:
         assert per_message < 0.001
 
     def test_large_batch_conversion(self):
-        """Test conversion of large batch (1000 messages)."""
         messages = []
         for i in range(1000):
             msg = Mock()
@@ -106,12 +96,9 @@ class TestMessageConversionPerformance:
         # 1000 messages should take < 1 second
         assert elapsed < 1.0
 
-
 class TestDataModelPerformance:
-    """Performance tests for data models."""
 
     def test_export_request_serialization(self):
-        """Test ExportRequest serialization speed."""
         request = ExportRequest(
             task_id="test_123",
             user_id=456789,
@@ -128,7 +115,6 @@ class TestDataModelPerformance:
         assert json_data['task_id'] == "test_123"
 
     def test_large_response_serialization(self):
-        """Test ExportResponse serialization with many messages."""
         messages = [
             ExportedMessage(
                 id=i,
@@ -154,13 +140,10 @@ class TestDataModelPerformance:
         assert elapsed < 0.1
         assert len(response_json['messages']) == 1000
 
-
 @pytest.mark.asyncio
 class TestConcurrency:
-    """Concurrency tests."""
 
     async def test_multiple_concurrent_operations(self):
-        """Test multiple concurrent message conversions."""
         # Create mock messages
         messages = []
         for i in range(10):
@@ -195,7 +178,6 @@ class TestConcurrency:
         assert elapsed < 0.1
 
     async def test_concurrent_response_building(self):
-        """Test building multiple responses concurrently."""
         async def build_response(task_id, message_count):
             messages = [
                 ExportedMessage(
@@ -226,7 +208,6 @@ class TestConcurrency:
             assert response.message_count == 100
 
     async def test_concurrent_json_serialization(self):
-        """Test concurrent JSON serialization."""
         async def serialize_response(task_id):
             messages = [
                 ExportedMessage(
@@ -258,12 +239,9 @@ class TestConcurrency:
         # All serializations should complete quickly
         assert elapsed < 0.5
 
-
 class TestMemoryUsage:
-    """Memory usage characteristics."""
 
     def test_large_message_list_memory(self):
-        """Test memory usage with large message list."""
         import sys
         import tracemalloc
 
@@ -296,12 +274,9 @@ class TestMemoryUsage:
         assert avg_per_message < 10000  # < 10KB per message
         assert total_size < 10_000_000  # < 10MB for 1000 messages
 
-
 class TestExportRateBenchmark:
-    """Benchmark export rates."""
 
     def test_message_export_rate(self):
-        """Test export rate: messages per second."""
         # Simulate exporting 100 messages
         messages = []
         for i in range(100):
@@ -333,7 +308,6 @@ class TestExportRateBenchmark:
         assert rate > 1000
 
     def test_response_building_rate(self):
-        """Test response building rate."""
         start = time.time()
         response = ExportResponse(
             task_id="test",

@@ -11,43 +11,20 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Обработчик сообщений Telegram export.
- *
- * <p>Извлекает дату и текст из JSON-узла сообщения.
- * Форматирование итоговой строки делегируется {@link MessageFormatter}.</p>
- */
 @Component
 public class MessageProcessor {
 
     private static final Logger log = LoggerFactory.getLogger(MessageProcessor.class);
 
-    /** Значение по умолчанию для поля type если оно отсутствует в JSON. */
     public static final String DEFAULT_MESSAGE_TYPE = "message";
 
-    /**
-     * Создаёт экземпляр процессора. Активируется Spring как {@code @Component},
-     * а также напрямую в CLI-режиме из {@link TelegramExporter#TelegramExporter()}.
-     */
     public MessageProcessor() {
     }
 
-    /**
-     * Возвращает тип сообщения из JSON-узла.
-     *
-     * @param message JSON-узел сообщения
-     * @return значение поля "type" или DEFAULT_MESSAGE_TYPE если поле отсутствует
-     */
     public static String getMessageType(JsonNode message) {
         return message.has("type") ? message.get("type").asText() : DEFAULT_MESSAGE_TYPE;
     }
 
-    /**
-     * Обрабатывает одно сообщение.
-     *
-     * @param message JSON-узел сообщения
-     * @return строка формата "YYYYMMDD текст" или null для service/пустых/невалидных сообщений
-     */
     public String processMessage(JsonNode message) {
         if (message == null) {
             return null;
@@ -59,7 +36,7 @@ public class MessageProcessor {
             return null;
         }
 
-        String dateStr = message.has("date") ? message.get("date").asText() : "";
+        String dateStr = JsonUtils.getText(message, "date");
         String date = DateFormatter.parseDate(dateStr);
 
         if (date.isEmpty()) {
@@ -77,12 +54,6 @@ public class MessageProcessor {
         return MessageFormatter.format(date, text);
     }
 
-    /**
-     * Обрабатывает список сообщений.
-     *
-     * @param messages список JSON-узлов сообщений
-     * @return список обработанных строк
-     */
     public List<String> processMessages(List<JsonNode> messages) {
         List<String> result = new ArrayList<>();
 

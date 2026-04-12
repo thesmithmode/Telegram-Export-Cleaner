@@ -1,8 +1,3 @@
-"""
-Tests for MessageCache — SQLite-backed message caching on disk.
-
-All tests use a temporary SQLite database (tmp_path fixture) instead of Redis.
-"""
 
 import time
 import pytest
@@ -11,20 +6,14 @@ import asyncio
 from models import ExportedMessage
 from message_cache import MessageCache
 
-
 def _make_msg(msg_id: int, text: str = "", date: str = "2025-01-01T00:00:00") -> ExportedMessage:
-    """Helper: create ExportedMessage with given id."""
     return ExportedMessage(id=msg_id, type="message", date=date, text=text or f"msg_{msg_id}")
 
-
 def _make_messages(ids) -> list[ExportedMessage]:
-    """Helper: create list of ExportedMessage with given ids."""
     return [_make_msg(i) for i in ids]
-
 
 @pytest.fixture
 async def cache(tmp_path):
-    """MessageCache backed by a temp SQLite DB."""
     c = MessageCache(
         db_path=str(tmp_path / "test_cache.db"),
         max_disk_bytes=10 * 1024 * 1024,  # 10 MB — won't evict during normal tests
@@ -35,13 +24,10 @@ async def cache(tmp_path):
     yield c
     await c.close()
 
-
 class TestStoreAndRetrieve:
-    """Basic round-trip: store messages, retrieve them."""
 
     @pytest.mark.asyncio
     async def test_store_and_retrieve_messages(self, cache):
-        """Store messages, then retrieve by range — should get same data back."""
         messages = _make_messages([1, 2, 3, 4, 5])
         stored = await cache.store_messages(123, messages)
         assert stored == 5
@@ -53,20 +39,17 @@ class TestStoreAndRetrieve:
 
     @pytest.mark.asyncio
     async def test_retrieve_partial_range(self, cache):
-        """Retrieve a subset of cached messages."""
         await cache.store_messages(123, _make_messages([1, 2, 3, 4, 5]))
         retrieved = await cache.get_messages(123, 2, 4)
         assert [m.id for m in retrieved] == [2, 3, 4]
 
     @pytest.mark.asyncio
     async def test_retrieve_empty_chat(self, cache):
-        """Retrieve from non-existent chat returns empty list."""
         retrieved = await cache.get_messages(999, 1, 100)
         assert retrieved == []
 
     @pytest.mark.asyncio
     async def test_store_overwrites_duplicates(self, cache):
-        """Storing same msg_id twice overwrites (INSERT OR REPLACE)."""
         msg_v1 = _make_msg(1, text="version 1")
         msg_v2 = _make_msg(1, text="version 2")
         await cache.store_messages(123, [msg_v1])
@@ -76,26 +59,21 @@ class TestStoreAndRetrieve:
         assert len(retrieved) == 1
         assert retrieved[0].text == "version 2"
 
-
 class TestCachedRanges:
-    """Range tracking metadata."""
 
     @pytest.mark.asyncio
     async def test_get_cached_ranges_empty(self, cache):
-        """No cache → empty ranges."""
         ranges = await cache.get_cached_ranges(999)
         assert ranges == []
 
     @pytest.mark.asyncio
     async def test_get_cached_ranges_after_store(self, cache):
-        """After storing [1-5], ranges should be [[1,5]]."""
         await cache.store_messages(123, _make_messages([1, 2, 3, 4, 5]))
         ranges = await cache.get_cached_ranges(123)
         assert ranges == [[1, 5]]
 
     @pytest.mark.asyncio
     async def test_get_cached_ranges_disjoint(self, cache):
-        """Store two disjoint batches → two separate ranges."""
         await cache.store_messages(123, _make_messages([1, 2, 3]))
         await cache.store_messages(123, _make_messages([10, 11, 12]))
         ranges = await cache.get_cached_ranges(123)
@@ -103,7 +81,6 @@ class TestCachedRanges:
 
     @pytest.mark.asyncio
     async def test_ranges_merge_adjacent(self, cache):
-        """Store [1-3] then [4-6] → should merge to [[1,6]]."""
         await cache.store_messages(123, _make_messages([1, 2, 3]))
         await cache.store_messages(123, _make_messages([4, 5, 6]))
         ranges = await cache.get_cached_ranges(123)
@@ -111,51 +88,41 @@ class TestCachedRanges:
 
     @pytest.mark.asyncio
     async def test_ranges_merge_overlapping(self, cache):
-        """Store [1-5] then [3-8] → should merge to [[1,8]]."""
         await cache.store_messages(123, _make_messages([1, 2, 3, 4, 5]))
         await cache.store_messages(123, _make_messages([3, 4, 5, 6, 7, 8]))
         ranges = await cache.get_cached_ranges(123)
         assert ranges == [[1, 8]]
 
-
 class TestMissingRanges:
-    """Gap detection: what ranges are NOT in cache."""
 
     @pytest.mark.asyncio
     async def test_get_missing_ranges_no_cache(self, cache):
-        """No cache → entire requested range is missing."""
         missing = await cache.get_missing_ranges(999, 1, 1000)
         assert missing == [(1, 1000)]
 
     @pytest.mark.asyncio
     async def test_get_missing_ranges_partial(self, cache):
-        """[1-1000] requested, [300-500] cached → gaps at [1-299] and [501-1000]."""
         await cache.store_messages(123, _make_messages(range(300, 501)))
         missing = await cache.get_missing_ranges(123, 1, 1000)
         assert missing == [(1, 299), (501, 1000)]
 
     @pytest.mark.asyncio
     async def test_get_missing_ranges_full_cache(self, cache):
-        """Everything cached → no missing ranges."""
         await cache.store_messages(123, _make_messages(range(1, 101)))
         missing = await cache.get_missing_ranges(123, 1, 100)
         assert missing == []
 
     @pytest.mark.asyncio
     async def test_get_missing_ranges_multiple_gaps(self, cache):
-        """Cached [10-20] and [50-60] → gaps at start, middle, end."""
         await cache.store_messages(123, _make_messages(range(10, 21)))
         await cache.store_messages(123, _make_messages(range(50, 61)))
         missing = await cache.get_missing_ranges(123, 1, 100)
         assert missing == [(1, 9), (21, 49), (61, 100)]
 
-
 class TestMergeAndSort:
-    """Merging cached and fresh messages."""
 
     @pytest.mark.asyncio
     async def test_merge_and_sort_dedup(self, cache):
-        """Merge two lists with overlapping IDs — dedup by id, sort ascending."""
         cached = _make_messages([1, 3, 5])
         fresh = _make_messages([2, 3, 4])  # id=3 is duplicate
         merged = cache.merge_and_sort(cached, fresh)
@@ -163,23 +130,18 @@ class TestMergeAndSort:
 
     @pytest.mark.asyncio
     async def test_merge_empty_cached(self, cache):
-        """Merge with empty cache — just sort fresh."""
         merged = cache.merge_and_sort([], _make_messages([5, 3, 1]))
         assert [m.id for m in merged] == [1, 3, 5]
 
     @pytest.mark.asyncio
     async def test_merge_empty_fresh(self, cache):
-        """Merge with no fresh messages — return cached sorted."""
         merged = cache.merge_and_sort(_make_messages([3, 1, 2]), [])
         assert [m.id for m in merged] == [1, 2, 3]
 
-
 class TestMsgpackSerialization:
-    """msgpack round-trip for ExportedMessage."""
 
     @pytest.mark.asyncio
     async def test_msgpack_roundtrip(self, cache):
-        """ExportedMessage survives msgpack serialize/deserialize via store+retrieve."""
         msg = ExportedMessage(
             id=42,
             type="message",
@@ -201,19 +163,15 @@ class TestMsgpackSerialization:
 
     @pytest.mark.asyncio
     async def test_msgpack_roundtrip_unicode(self, cache):
-        """Unicode and emoji survive msgpack round-trip."""
         msg = _make_msg(1, text="Привет мир 🎉🔥")
         await cache.store_messages(123, [msg])
         retrieved = await cache.get_messages(123, 1, 1)
         assert retrieved[0].text == "Привет мир 🎉🔥"
 
-
 class TestLRUTracking:
-    """last_accessed updated on store and read — basis for LRU eviction."""
 
     @pytest.mark.asyncio
     async def test_last_accessed_set_on_store(self, cache):
-        """Storing messages sets last_accessed in chat_meta."""
         before = time.time()
         await cache.store_messages(123, _make_messages([1, 2, 3]))
 
@@ -226,7 +184,6 @@ class TestLRUTracking:
 
     @pytest.mark.asyncio
     async def test_last_accessed_refresh_on_read(self, cache):
-        """Reading messages updates last_accessed (LRU touch)."""
         await cache.store_messages(123, _make_messages([1, 2, 3]))
 
         async with cache._db.execute(
@@ -246,13 +203,10 @@ class TestLRUTracking:
             row = await cur.fetchone()
         assert row[0] > initial_ts
 
-
 class TestEviction:
-    """LRU eviction removes oldest chats when over disk budget."""
 
     @pytest.mark.asyncio
     async def test_eviction_oldest_chat(self, tmp_path):
-        """Oldest-accessed chat evicted first when over budget."""
         cache = MessageCache(
             db_path=str(tmp_path / "evict.db"),
             max_disk_bytes=10 * 1024 * 1024,  # large enough to store both
@@ -278,18 +232,14 @@ class TestEviction:
 
     @pytest.mark.asyncio
     async def test_count_messages(self, cache):
-        """count_messages returns correct count for ID range."""
         await cache.store_messages(123, _make_messages(range(1, 16)))
         assert await cache.count_messages(123, 1, 15) == 15
         assert await cache.count_messages(123, 5, 10) == 6
 
-
 class TestCacheDisabled:
-    """Cache with enabled=False should be a no-op pass-through."""
 
     @pytest.mark.asyncio
     async def test_disabled_cache_returns_empty(self):
-        """Disabled cache returns empty/default for all queries."""
         cache = MessageCache(enabled=False)
         # No initialize() needed — disabled cache never opens SQLite
 
@@ -301,13 +251,10 @@ class TestCacheDisabled:
         assert await cache.get_cached_date_ranges(123) == []
         assert await cache.get_messages_by_date(123, "2025-01-01", "2025-01-31") == []
 
-
 class TestDateIndex:
-    """Date-based indexing and retrieval."""
 
     @pytest.mark.asyncio
     async def test_store_populates_date_index(self, cache):
-        """Storing messages creates date range metadata."""
         msgs = [
             _make_msg(1, date="2025-01-05T10:00:00"),
             _make_msg(2, date="2025-01-05T12:00:00"),
@@ -321,7 +268,6 @@ class TestDateIndex:
 
     @pytest.mark.asyncio
     async def test_get_messages_by_date_range(self, cache):
-        """Retrieve messages by date range."""
         msgs = [
             _make_msg(1, date="2025-01-01T10:00:00"),
             _make_msg(2, date="2025-01-03T10:00:00"),
@@ -337,7 +283,6 @@ class TestDateIndex:
 
     @pytest.mark.asyncio
     async def test_get_messages_by_date_empty(self, cache):
-        """Date range with no cached messages returns empty."""
         msgs = [_make_msg(1, date="2025-01-01T10:00:00")]
         await cache.store_messages(123, msgs)
 
@@ -346,7 +291,6 @@ class TestDateIndex:
 
     @pytest.mark.asyncio
     async def test_count_messages_by_date(self, cache):
-        """count_messages_by_date returns correct count without loading messages."""
         msgs = [
             _make_msg(1, date="2025-01-01T10:00:00"),
             _make_msg(2, date="2025-01-03T10:00:00"),
@@ -360,7 +304,6 @@ class TestDateIndex:
 
     @pytest.mark.asyncio
     async def test_count_messages_by_date_empty(self, cache):
-        """count_messages_by_date returns 0 for empty range."""
         msgs = [_make_msg(1, date="2025-01-01T10:00:00")]
         await cache.store_messages(123, msgs)
 
@@ -369,7 +312,6 @@ class TestDateIndex:
 
     @pytest.mark.asyncio
     async def test_iter_messages_by_date(self, cache):
-        """iter_messages_by_date streams only messages in the date range."""
         msgs = [
             _make_msg(1, date="2025-01-01T10:00:00"),
             _make_msg(2, date="2025-01-03T10:00:00"),
@@ -387,7 +329,6 @@ class TestDateIndex:
 
     @pytest.mark.asyncio
     async def test_iter_messages_by_date_empty(self, cache):
-        """iter_messages_by_date yields nothing for out-of-range dates."""
         msgs = [_make_msg(1, date="2025-01-01T10:00:00")]
         await cache.store_messages(123, msgs)
 
@@ -397,19 +338,15 @@ class TestDateIndex:
 
         assert result == []
 
-
 class TestDateRanges:
-    """Date range tracking for gap detection."""
 
     @pytest.mark.asyncio
     async def test_get_cached_date_ranges_empty(self, cache):
-        """No cache → empty date ranges."""
         ranges = await cache.get_cached_date_ranges(999)
         assert ranges == []
 
     @pytest.mark.asyncio
     async def test_get_cached_date_ranges_after_store(self, cache):
-        """After storing messages spanning Jan 5-6, date ranges reflect that."""
         msgs = [
             _make_msg(1, date="2025-01-05T10:00:00"),
             _make_msg(2, date="2025-01-06T15:00:00"),
@@ -420,7 +357,6 @@ class TestDateRanges:
 
     @pytest.mark.asyncio
     async def test_date_ranges_merge_adjacent(self, cache):
-        """Store Jan 5-6 then Jan 7-8 → merge to [Jan 5, Jan 8]."""
         await cache.store_messages(123, [
             _make_msg(1, date="2025-01-05T10:00:00"),
             _make_msg(2, date="2025-01-06T10:00:00"),
@@ -434,7 +370,6 @@ class TestDateRanges:
 
     @pytest.mark.asyncio
     async def test_date_ranges_disjoint(self, cache):
-        """Store Jan 1-3 and Jan 10-12 → two separate date ranges."""
         await cache.store_messages(123, [
             _make_msg(1, date="2025-01-01T10:00:00"),
             _make_msg(2, date="2025-01-03T10:00:00"),
@@ -448,7 +383,6 @@ class TestDateRanges:
 
     @pytest.mark.asyncio
     async def test_date_ranges_overlapping(self, cache):
-        """Store Jan 1-8 then Jan 5-12 → merge to [Jan 1, Jan 12]."""
         await cache.store_messages(123, [
             _make_msg(1, date="2025-01-01T10:00:00"),
             _make_msg(2, date="2025-01-08T10:00:00"),
@@ -460,19 +394,15 @@ class TestDateRanges:
         ranges = await cache.get_cached_date_ranges(123)
         assert ranges == [["2025-01-01", "2025-01-12"]]
 
-
 class TestMissingDateRanges:
-    """Gap detection by dates."""
 
     @pytest.mark.asyncio
     async def test_get_missing_date_ranges_no_cache(self, cache):
-        """No cache → entire date range missing."""
         missing = await cache.get_missing_date_ranges(999, "2025-01-01", "2025-01-15")
         assert missing == [("2025-01-01", "2025-01-15")]
 
     @pytest.mark.asyncio
     async def test_get_missing_date_ranges_partial(self, cache):
-        """Cached Jan 1-8, request Jan 1-15 → missing Jan 9-15."""
         await cache.store_messages(123, [
             _make_msg(1, date="2025-01-01T10:00:00"),
             _make_msg(2, date="2025-01-08T10:00:00"),
@@ -482,7 +412,6 @@ class TestMissingDateRanges:
 
     @pytest.mark.asyncio
     async def test_get_missing_date_ranges_full_cache(self, cache):
-        """Cached Jan 1-15, request Jan 1-15 → nothing missing."""
         await cache.store_messages(123, [
             _make_msg(1, date="2025-01-01T10:00:00"),
             _make_msg(2, date="2025-01-15T10:00:00"),
@@ -492,7 +421,6 @@ class TestMissingDateRanges:
 
     @pytest.mark.asyncio
     async def test_get_missing_date_ranges_multiple_gaps(self, cache):
-        """Cached Jan 1-8 and Jan 11-13 → gaps at Jan 9-10 and Jan 14-15."""
         await cache.store_messages(123, [
             _make_msg(1, date="2025-01-01T10:00:00"),
             _make_msg(2, date="2025-01-08T10:00:00"),
@@ -504,15 +432,7 @@ class TestMissingDateRanges:
         missing = await cache.get_missing_date_ranges(123, "2025-01-01", "2025-01-15")
         assert missing == [("2025-01-09", "2025-01-10"), ("2025-01-14", "2025-01-15")]
 
-
 class TestVasyaPetyaKolyaScenario:
-    """Full E2E scenario.
-
-    1. Vasya exports chat A for Jan 11-13 → cached
-    2. Petya exports chat A for Jan 1-8 → cached
-    3. Kolya exports chat A for Jan 1-15 → uses cache for 1-8 and 11-13,
-       fetches only 9-10 and 14-15, returns complete file
-    """
 
     @pytest.mark.asyncio
     async def test_kolya_gets_full_range_from_partial_caches(self, cache):
@@ -569,30 +489,12 @@ class TestVasyaPetyaKolyaScenario:
         missing = await cache.get_missing_date_ranges(CHAT_A, "2025-01-01", "2025-01-20")
         assert missing == [("2025-01-16", "2025-01-20")]
 
-
 class TestStoreMessagesAtomicity:
-    """REGRESSION S3 — store_messages должен быть атомарным.
-
-    До фикса store_messages делал 3+ независимых commit'а: messages, id_ranges,
-    date_ranges, chat_meta. Crash между ними оставлял БД в несогласованном
-    состоянии: сообщения есть, но ranges/meta нет. Следующий запрос шёл в
-    fallback-miss, перезаписывая те же сообщения, а LRU-эвиктор ошибался в
-    размере чата. Теперь — ОДИН commit в конце, rollback при любой ошибке.
-
-    Эти тесты обязаны падать, если кто-то откатит фикс и вернёт промежуточные
-    commit'ы в store_messages / _add_range / _add_date_range.
-    """
 
     @pytest.mark.asyncio
     async def test_failure_after_insert_rolls_back_messages(
         self, cache, monkeypatch
     ):
-        """Если _add_range падает после INSERT сообщений — ВСЁ откатывается.
-
-        Сценарий: executemany INSERT messages выполнен, но _add_range бросает
-        ошибку. В старом коде commit() был ДО _add_range → сообщения уже в БД.
-        В новом коде commit() в самом конце → rollback откатывает сообщения.
-        """
         CHAT = 777
         messages = _make_messages([1, 2, 3])
 
@@ -629,7 +531,6 @@ class TestStoreMessagesAtomicity:
     async def test_failure_after_date_range_rolls_back_everything(
         self, cache, monkeypatch
     ):
-        """Если _add_date_range падает — rollback откатывает messages И id_ranges."""
         CHAT = 888
         messages = _make_messages([10, 11, 12])
 
@@ -650,7 +551,6 @@ class TestStoreMessagesAtomicity:
     async def test_successful_store_commits_everything_in_one_transaction(
         self, cache
     ):
-        """Happy path: все 4 группы записей видны после успешного store_messages."""
         CHAT = 999
         messages = [
             _make_msg(1, date="2025-03-01T10:00:00"),
@@ -679,11 +579,6 @@ class TestStoreMessagesAtomicity:
     async def test_rollback_leaves_previously_stored_data_intact(
         self, cache, monkeypatch
     ):
-        """Откат неудачного store_messages НЕ должен трогать уже сохранённые данные.
-
-        Это критично: если первый батч прошёл, а второй упал — первый должен
-        остаться нетронутым.
-        """
         CHAT = 1111
         # Первый успешный батч
         first = _make_messages([1, 2, 3])
@@ -712,20 +607,16 @@ class TestStoreMessagesAtomicity:
         )
         assert await cache.get_cached_ranges(CHAT) == [[1, 3]]
 
-
 class TestMarkDateRangeChecked:
-    """mark_date_range_checked — явная регистрация проверенного диапазона без сообщений."""
 
     @pytest.mark.asyncio
     async def test_marks_empty_range_as_covered(self, cache):
-        """Диапазон без сообщений помечается покрытым — повторный get_missing_date_ranges его не возвращает."""
         await cache.mark_date_range_checked(123, "2025-04-05", "2025-04-08")
         missing = await cache.get_missing_date_ranges(123, "2025-04-05", "2025-04-08")
         assert missing == []
 
     @pytest.mark.asyncio
     async def test_merges_with_existing_date_ranges(self, cache):
-        """mark_date_range_checked корректно мержит с уже существующими диапазонами."""
         msgs = [
             _make_msg(1, date="2025-01-01T10:00:00"),
             _make_msg(2, date="2025-01-03T10:00:00"),
@@ -742,7 +633,6 @@ class TestMarkDateRangeChecked:
 
     @pytest.mark.asyncio
     async def test_noop_when_disabled(self):
-        """Отключённый кэш — mark_date_range_checked не падает."""
         cache = MessageCache(enabled=False)
         await cache.mark_date_range_checked(123, "2025-01-01", "2025-01-07")
         # Нет исключения — тест пройден

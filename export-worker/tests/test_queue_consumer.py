@@ -1,13 +1,3 @@
-"""
-Unit tests for queue_consumer.py
-
-Tests:
-- QueueConsumer initialization
-- Job serialization/deserialization
-- Model validation
-
-Note: Integration tests with actual Redis should be in separate file
-"""
 
 import json
 import pytest
@@ -16,12 +6,9 @@ from unittest.mock import Mock, MagicMock, AsyncMock, patch
 from models import ExportRequest
 from queue_consumer import QueueConsumer
 
-
 class TestQueueConsumer:
-    """Tests for QueueConsumer"""
 
     def test_init(self):
-        """Should initialize consumer"""
         with patch('queue_consumer.settings') as mock_settings:
             mock_settings.REDIS_HOST = "redis"
             mock_settings.REDIS_PORT = 6379
@@ -35,7 +22,6 @@ class TestQueueConsumer:
             assert consumer.redis_client is None
 
     def test_redis_url_without_password(self):
-        """Should generate correct Redis URL without password"""
         with patch('queue_consumer.settings') as mock_settings:
             mock_settings.REDIS_HOST = "redis"
             mock_settings.REDIS_PORT = 6379
@@ -48,7 +34,6 @@ class TestQueueConsumer:
             assert consumer.redis_url == "redis://redis:6379/0"
 
     def test_redis_url_with_password(self):
-        """Should generate correct Redis URL with password"""
         with patch('queue_consumer.settings') as mock_settings:
             mock_settings.REDIS_HOST = "redis"
             mock_settings.REDIS_PORT = 6379
@@ -61,7 +46,6 @@ class TestQueueConsumer:
             assert consumer.redis_url == "redis://:secret123@redis:6379/0"
 
     def test_job_serialization(self):
-        """Should correctly serialize job to JSON"""
         job = ExportRequest(
             task_id="export_12345",
             user_id=123456789,
@@ -78,7 +62,6 @@ class TestQueueConsumer:
         assert restored.chat_id == job.chat_id
 
     def test_job_deserialization_invalid_json(self):
-        """Should handle invalid JSON gracefully"""
         invalid_json = "not valid json {"
 
         try:
@@ -89,7 +72,6 @@ class TestQueueConsumer:
             pass
 
     def test_job_deserialization_missing_field(self):
-        """Should fail validation if required field missing"""
         incomplete_job = {
             "task_id": "export_12345",
             # Missing user_id and chat_id
@@ -103,7 +85,6 @@ class TestQueueConsumer:
             pass
 
     def test_job_with_optional_fields(self):
-        """Should handle optional fields correctly"""
         job_data = {
             "task_id": "export_12345",
             "user_id": 123456789,
@@ -117,13 +98,10 @@ class TestQueueConsumer:
         assert job.from_date == "2025-01-01T00:00:00"
         assert job.to_date == "2025-12-31T23:59:59"
 
-
 @pytest.mark.asyncio
 class TestQueueConsumerJobManagement:
-    """Test job management methods (push, mark processing, etc)."""
 
     async def test_push_job_serializes_and_rpush(self):
-        """Test push_job serializes and pushes to Redis."""
         with patch('queue_consumer.settings') as mock_settings:
             mock_settings.REDIS_HOST = "redis"
             mock_settings.REDIS_PORT = 6379
@@ -158,7 +136,6 @@ class TestQueueConsumerJobManagement:
                 assert json_data['task_id'] == "test_123"
 
     async def test_mark_job_processing_sets_key_with_ttl(self):
-        """Test mark_job_processing sets Redis key with TTL."""
         with patch('queue_consumer.settings') as mock_settings:
             mock_settings.REDIS_HOST = "redis"
             mock_settings.REDIS_PORT = 6379
@@ -185,11 +162,6 @@ class TestQueueConsumerJobManagement:
                 assert call_args[0][1] == 3600  # TTL
 
     async def test_mark_job_completed_deletes_and_sets(self):
-        """Test mark_job_completed removes processing key and sets completed.
-
-        Real code uses pipeline(transaction=True): pipeline() is sync, queued
-        commands (delete/setex/srem/lrem) are sync too, only execute() is async.
-        """
         with patch('queue_consumer.settings') as mock_settings:
             mock_settings.REDIS_HOST = "redis"
             mock_settings.REDIS_PORT = 6379
@@ -228,7 +200,6 @@ class TestQueueConsumerJobManagement:
                 mock_pipe.execute.assert_awaited_once()
 
     async def test_mark_job_failed_stores_error_json(self):
-        """Test mark_job_failed stores error information."""
         with patch('queue_consumer.settings') as mock_settings:
             mock_settings.REDIS_HOST = "redis"
             mock_settings.REDIS_PORT = 6379
@@ -257,7 +228,6 @@ class TestQueueConsumerJobManagement:
                 assert 'timestamp' in json_value
 
     async def test_get_queue_stats_returns_count(self):
-        """Test get_queue_stats returns queue information."""
         with patch('queue_consumer.settings') as mock_settings:
             mock_settings.REDIS_HOST = "redis"
             mock_settings.REDIS_PORT = 6379
@@ -281,13 +251,10 @@ class TestQueueConsumerJobManagement:
                 assert 'timestamp' in result
                 mock_client.llen.assert_called_once_with("telegram_export")
 
-
 @pytest.mark.asyncio
 class TestQueueConsumerAsync:
-    """Async tests for QueueConsumer (mocked Redis)"""
 
     async def test_context_manager(self):
-        """Should work as async context manager"""
         with patch('queue_consumer.settings') as mock_settings:
             mock_settings.REDIS_HOST = "redis"
             mock_settings.REDIS_PORT = 6379
@@ -305,7 +272,6 @@ class TestQueueConsumerAsync:
                     assert consumer.redis_client == mock_client
 
     async def test_connect_success(self):
-        """Should connect successfully"""
         with patch('queue_consumer.settings') as mock_settings:
             mock_settings.REDIS_HOST = "redis"
             mock_settings.REDIS_PORT = 6379
@@ -325,7 +291,6 @@ class TestQueueConsumerAsync:
                 assert consumer.is_connected is True
 
     async def test_disconnect(self):
-        """Should disconnect properly"""
         with patch('queue_consumer.settings') as mock_settings:
             mock_settings.REDIS_HOST = "redis"
             mock_settings.REDIS_PORT = 6379
@@ -345,12 +310,9 @@ class TestQueueConsumerAsync:
 
                 mock_client.close.assert_called_once()
 
-
 class TestExportRequestIntegration:
-    """Integration tests with ExportRequest validation"""
 
     def test_complete_job_message(self):
-        """Should validate complete job message"""
         job_msg = {
             "task_id": "export_12345",
             "user_id": 123456789,
@@ -368,7 +330,6 @@ class TestExportRequestIntegration:
         assert job.limit == 1000
 
     def test_minimal_job_message(self):
-        """Should validate minimal job message"""
         job_msg = {
             "task_id": "export_12345",
             "user_id": 123456789,
@@ -382,7 +343,6 @@ class TestExportRequestIntegration:
         assert job.limit == 0  # Default
 
     def test_job_with_zero_limit(self):
-        """Should handle zero limit (means unlimited)"""
         job = ExportRequest(
             task_id="export_12345",
             user_id=123456789,
@@ -393,7 +353,6 @@ class TestExportRequestIntegration:
         assert job.limit == 0
 
     def test_job_with_negative_chat_id(self):
-        """Should accept negative chat ID (for groups)"""
         job = ExportRequest(
             task_id="export_12345",
             user_id=123456789,
@@ -403,7 +362,6 @@ class TestExportRequestIntegration:
         assert job.chat_id == -1001234567890
 
     def test_job_type_coercion(self):
-        """Should coerce string integers to int"""
         job_msg = {
             "task_id": "export_12345",
             "user_id": "123456789",  # String
@@ -419,10 +377,8 @@ class TestExportRequestIntegration:
 
 @pytest.mark.asyncio
 class TestGetPendingJobs:
-    """Tests for get_pending_jobs."""
 
     async def test_returns_parsed_jobs(self):
-        """Should return dict with jobs list and total_count from queue without removing them."""
         job1 = ExportRequest(task_id="t1", user_id=1, chat_id=100)
         job2 = ExportRequest(task_id="t2", user_id=2, chat_id=200)
 
@@ -451,7 +407,6 @@ class TestGetPendingJobs:
             mock_client.lrange.assert_called()
 
     async def test_returns_empty_on_no_client(self):
-        """Should return empty dict if not connected."""
         with patch('queue_consumer.settings') as mock_settings:
             mock_settings.REDIS_HOST = "redis"
             mock_settings.REDIS_PORT = 6379
@@ -465,7 +420,6 @@ class TestGetPendingJobs:
             assert result == {"jobs": [], "total_count": 0}
 
     async def test_skips_invalid_json(self):
-        """Should skip items that fail to parse."""
         valid_job = ExportRequest(task_id="t1", user_id=1, chat_id=100)
 
         with patch('queue_consumer.settings') as mock_settings:
@@ -489,10 +443,8 @@ class TestGetPendingJobs:
             assert len(result["jobs"]) == 1
             assert result["jobs"][0].task_id == "t1"
 
-
 @pytest.mark.asyncio
 class TestDeadLetterQueue:
-    """Tests for Dead Letter Queue — невалидные задачи перекладываются в DLQ."""
 
     def _make_consumer(self, mock_client):
         with patch('queue_consumer.settings') as mock_settings:
@@ -507,22 +459,12 @@ class TestDeadLetterQueue:
 
     @staticmethod
     def _dlq_calls(mock_client):
-        """Возвращает только rpush-вызовы, ушедшие в DLQ-очередь.
-
-        Реальный flow get_job() делает несколько rpush:
-          1. RPUSH telegram_export_processing — staging для durability (всегда)
-          2. RPUSH telegram_export_dead       — DLQ (только при ошибке)
-        Фильтруем по имени очереди вместо assert_called_once(), потому что
-        проверять надо именно DLQ-аспект, не staging-механику (она тестируется
-        в TestStagingDurability).
-        """
         return [
             c for c in mock_client.rpush.call_args_list
             if c.args and "_dead" in c.args[0]
         ]
 
     async def test_invalid_json_moves_to_dlq(self):
-        """Невалидный JSON из очереди должен уходить в DLQ, а не теряться."""
         mock_client = AsyncMock()
         mock_client.blpop = AsyncMock(return_value=("telegram_export", "not valid json {"))
         mock_client.rpush = AsyncMock(return_value=1)
@@ -545,7 +487,6 @@ class TestDeadLetterQueue:
         )
 
     async def test_validation_error_moves_to_dlq(self):
-        """ExportRequest с невалидными данными должен уходить в DLQ."""
         invalid_job = json.dumps({"task_id": "t1"})  # Missing user_id, chat_id
         mock_client = AsyncMock()
         mock_client.blpop = AsyncMock(return_value=("telegram_export", invalid_job))
@@ -567,7 +508,6 @@ class TestDeadLetterQueue:
         )
 
     async def test_valid_job_does_not_go_to_dlq(self):
-        """Валидная задача не должна попадать в DLQ (но идёт в staging — это OK)."""
         valid_job = json.dumps({
             "task_id": "export_ok",
             "user_id": 123,
@@ -585,12 +525,9 @@ class TestDeadLetterQueue:
         # В DLQ не уходит — но в staging RPUSH делается (см. TestStagingDurability)
         assert self._dlq_calls(mock_client) == []
 
-
 class TestStagingDurability:
-    """Tests for queue durability via staging mechanism."""
 
     def _make_consumer(self, mock_redis_client):
-        """Create consumer with pre-connected mock Redis."""
         with patch('queue_consumer.settings') as mock_settings:
             mock_settings.REDIS_HOST = "redis"
             mock_settings.REDIS_PORT = 6379
@@ -604,7 +541,6 @@ class TestStagingDurability:
 
     @pytest.mark.asyncio
     async def test_get_job_pushes_to_staging(self):
-        """get_job should push job to staging via RPUSH after BLPOP and persist payload."""
         valid_job = json.dumps({
             "task_id": "task_123",
             "user_id": 456,
@@ -634,7 +570,6 @@ class TestStagingDurability:
 
     @pytest.mark.asyncio
     async def test_express_job_pushes_to_express_staging(self):
-        """Express queue jobs should go to express staging."""
         valid_job = json.dumps({
             "task_id": "express_task",
             "user_id": 456,
@@ -656,12 +591,6 @@ class TestStagingDurability:
 
     @pytest.mark.asyncio
     async def test_invalid_json_goes_to_dlq_and_removed_from_staging(self):
-        """Invalid JSON should be removed from staging (via LREM) and moved to DLQ.
-
-        LREM (а не LPOP) — потому что LPOP удалил бы любой первый элемент очереди,
-        что может быть НЕ нашим payload (например, при гонке с recover_staging_jobs
-        или при горизонтальном масштабировании). LREM удаляет именно наш payload.
-        """
         invalid_json = "not valid json"
         mock_client = AsyncMock()
         mock_client.blpop = AsyncMock(return_value=("telegram_export", invalid_json))
@@ -682,7 +611,6 @@ class TestStagingDurability:
 
     @pytest.mark.asyncio
     async def test_recover_staging_jobs(self):
-        """recover_staging_jobs should move staging items back to queues."""
         mock_client = AsyncMock()
         # First call moves item, second returns None (empty)
         mock_client.lmove = AsyncMock(side_effect=[b'{"task_id":"t1"}', None, b'{"task_id":"t2"}', None])
@@ -697,13 +625,6 @@ class TestStagingDurability:
 
     @pytest.mark.asyncio
     async def test_mark_job_completed_untracks_and_removes_staging(self):
-        """mark_job_completed should untrack from set and LREM from staging list.
-
-        Все 5 операций (delete processing, setex completed, srem staging:jobs,
-        lrem staging_queue, delete staging:meta) должны быть заказаны в pipeline
-        и выполнены одним execute() — атомарно, чтобы не оставлять частичное
-        состояние при падении Redis в середине.
-        """
         import json as _json
         staging_meta = _json.dumps({
             "payload": '{"task_id":"task_123"}',
@@ -743,16 +664,6 @@ class TestStagingDurability:
 
     @pytest.mark.asyncio
     async def test_mark_job_completed_pipeline_failure_reports_false(self):
-        """REGRESSION S2: если execute() падает — mark_job_completed возвращает False.
-
-        Без transaction=True частичный fail оставил бы worker в неконсистентном
-        состоянии и ещё сообщал True в Java → Java считал бы job завершённым,
-        но staging:jobs всё ещё содержал бы task_id и recover_staging_jobs на
-        рестарте перезапустил бы уже «завершённую» работу.
-
-        С transaction=True MULTI/EXEC откатит ВСЕ команды атомарно, и наружу
-        уйдёт False — Java пометит job как failed и повторит позже.
-        """
         import json as _json
         staging_meta = _json.dumps({
             "payload": '{"task_id":"task_123"}',
@@ -776,7 +687,6 @@ class TestStagingDurability:
 
     @pytest.mark.asyncio
     async def test_mark_job_failed_untracks_and_removes_staging(self):
-        """mark_job_failed should untrack from set and LREM from staging list."""
         import json as _json
         staging_meta = _json.dumps({
             "payload": '{"task_id":"task_123"}',

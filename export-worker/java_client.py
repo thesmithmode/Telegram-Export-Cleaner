@@ -1,7 +1,3 @@
-"""
-Java API Client: Optimized for massive exports (250k+ messages).
-Memory Strategy: O(1) Streaming.
-"""
 
 import json
 import logging
@@ -15,13 +11,11 @@ from typing import Optional, Union, AsyncIterator
 import httpx
 
 from config import settings
-from models import ExportedMessage
+from models import ExportedMessage, SendResponsePayload
 
 logger = logging.getLogger(__name__)
 
-
 class JavaBotClient:
-    """Uploads exported messages to Java API using disk-based streaming."""
 
     def __init__(self, timeout: int = 3600, max_retries: int = 3):
         self.base_url = settings.JAVA_API_BASE_URL.rstrip("/")
@@ -41,68 +35,56 @@ class JavaBotClient:
         self._http_client = httpx.AsyncClient(timeout=custom_timeout)
         logger.info(f"Java API Client initialized (O(1) Memory, Timeout: {self.timeout}s)")
 
-    async def send_response(
-        self,
-        task_id: str,
-        status: str,
-        messages: Union[list[ExportedMessage], AsyncIterator[ExportedMessage]],
-        actual_count: int = 0,
-        error: Optional[str] = None,
-        error_code: Optional[str] = None,
-        user_chat_id: Optional[int] = None,
-        chat_title: Optional[str] = None,
-        from_date: Optional[str] = None,
-        to_date: Optional[str] = None,
-        keywords: Optional[str] = None,
-        exclude_keywords: Optional[str] = None,
-    ) -> bool:
-        """
-        Processes export results by streaming to Java and back to Telegram.
-        """
-        if status == "failed":
-            if error and user_chat_id and self.bot_token:
-                await self._notify_user_failure(user_chat_id, task_id, error)
+    async def send_response(self, payload: SendResponsePayload) -> bool:
+        if payload.status == "failed":
+            if payload.error and payload.user_chat_id and self.bot_token:
+                await self.notify_user_failure(
+                    payload.user_chat_id, payload.task_id, payload.error
+                )
             return True
 
         # 1. Stream messages directly to a temporary file on disk (Memory O(1))
-        tmp_path = await self._stream_to_temp_json(messages, actual_count)
-        
+        tmp_path = await self._stream_to_temp_json(payload.messages, payload.actual_count)
+
         try:
             file_size_mb = os.path.getsize(tmp_path) / (1024 * 1024)
-            logger.info(f"📤 Streaming {file_size_mb:.2f} MB from disk (task {task_id})")
+            logger.info(f"📤 Streaming {file_size_mb:.2f} MB from disk (task {payload.task_id})")
 
             # 2. Upload using httpx streaming capabilities
             cleaned_text = await self._upload_file_to_java(
                 tmp_path,
-                from_date=from_date,
-                to_date=to_date,
-                keywords=keywords,
-                exclude_keywords=exclude_keywords
+                from_date=payload.from_date,
+                to_date=payload.to_date,
+                keywords=payload.keywords,
+                exclude_keywords=payload.exclude_keywords
             )
         finally:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
         if cleaned_text is None:
-            logger.error(f"❌ Java API processing failed for task {task_id}")
-            if user_chat_id and self.bot_token:
-                await self._notify_user_failure(
-                    user_chat_id, task_id, "Processing service unavailable"
+            logger.error(f"❌ Java API processing failed for task {payload.task_id}")
+            if payload.user_chat_id and self.bot_token:
+                await self.notify_user_failure(
+                    payload.user_chat_id, payload.task_id, "Processing service unavailable"
                 )
             return False
 
         # 3. Deliver cleaned text to user
-        if user_chat_id and self.bot_token:
-            filename = self._build_filename(chat_title, from_date, to_date)
+        if payload.user_chat_id and self.bot_token:
+            filename = self._build_filename(
+                payload.chat_title, payload.from_date, payload.to_date
+            )
             sent = await self._send_file_to_user(
-                user_chat_id, task_id, cleaned_text, filename=filename
+                payload.user_chat_id, payload.task_id, cleaned_text, filename=filename
             )
             if not sent:
-                await self._notify_user_failure(
-                    user_chat_id, task_id, "Не удалось отправить файл. Попробуйте снова."
+                await self.notify_user_failure(
+                    payload.user_chat_id, payload.task_id,
+                    "Не удалось отправить файл. Попробуйте снова."
                 )
                 return False
-        
+
         return True
 
     async def _stream_to_temp_json(
@@ -110,7 +92,6 @@ class JavaBotClient:
         messages: Union[list[ExportedMessage], AsyncIterator[ExportedMessage]],
         count: int
     ) -> str:
-        """Writes messages to result.json format on disk, one by one."""
         fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="tg_stream_")
         try:
             with os.fdopen(fd, "wb") as f:
@@ -145,7 +126,6 @@ class JavaBotClient:
         keywords: Optional[str] = None,
         exclude_keywords: Optional[str] = None,
     ) -> Optional[str]:
-        """POSTs a file from disk using Multipart streaming."""
         url = f"{self.base_url}/api/convert"
         
         headers = {}
@@ -189,7 +169,6 @@ class JavaBotClient:
 
     @staticmethod
     def _transform_entities(text: str, entities: list[dict]) -> list[dict]:
-        """UTF-16 safe extraction for Telegram entities."""
         if not entities or not text: return entities
         res = []
         try:
@@ -261,15 +240,9 @@ class JavaBotClient:
             return resp.status_code == 200
         except: return False
 
-    async def _notify_user_failure(self, chat_id, task_id, error):
+    async def notify_user_failure(self, chat_id, task_id, error):
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
         text = f"❌ Export failed (task {task_id})\n\nReason: {error}"
-        try: await self._http_client.post(url, data={"chat_id": chat_id, "text": text})
-        except: pass
-
-    async def _notify_user_empty(self, chat_id, task_id):
-        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-        text = f"ℹ️ Экспорт завершён ({task_id})\n\nСообщений не найдено."
         try: await self._http_client.post(url, data={"chat_id": chat_id, "text": text})
         except: pass
 
@@ -283,7 +256,6 @@ class JavaBotClient:
         position: int,
         total: int,
     ) -> None:
-        """Update queue status message in Telegram."""
         if not self.bot_token:
             return
 
@@ -306,12 +278,10 @@ class JavaBotClient:
             pass
 
     async def aclose(self) -> None:
-        """Close internal httpx client."""
         await self._http_client.aclose()
 
     @staticmethod
     def _build_progress_bar(pct: int, width: int = 10) -> str:
-        """Render a 10-block unicode progress bar. Clamps pct to [0, 100]."""
         clamped = max(0, min(pct, 100))
         filled = (clamped * width) // 100
         return "▓" * filled + "░" * (width - filled)
@@ -326,12 +296,6 @@ class JavaBotClient:
         progress_message_id=None,
         eta_text: Optional[str] = None,
     ):
-        """Send/edit the progress bar message in Telegram.
-
-        When total is known, renders a 10-block bar + pct + counts. If eta_text
-        is provided, appends "   ~<eta_text>". Network/parse errors are
-        swallowed — progress messages are best-effort.
-        """
         if total is not None:
             # Safe against total == 0 (chat count unknown yet) — we still show a
             # 0%/(0 из 0) bar so users don't see the generic "начался..." spinner
@@ -371,16 +335,13 @@ class JavaBotClient:
         except Exception:
             return None
 
-
 # Progress-tracker tuning constants
 _PROGRESS_STEP_PCT = 5            # notify whenever pct grows by at least this much
 _PROGRESS_MIN_INTERVAL_SEC = 3.0  # hard anti-spam: never faster than this between edits
 _ETA_MIN_ELAPSED_SEC = 5.0        # skip ETA while rate estimate is still noisy
 _ETA_MIN_FRESH_COUNT = 100        # same: require some headcount before trusting rate
 
-
 def _format_eta(seconds: float) -> Optional[str]:
-    """Render seconds as a compact RU string (~42 сек / ~7 мин / ~1 ч 20 мин)."""
     if seconds <= 0:
         return None
     sec = int(seconds)
@@ -392,21 +353,7 @@ def _format_eta(seconds: float) -> Optional[str]:
     mins = (sec % 3600) // 60
     return f"{hours} ч {mins} мин" if mins else f"{hours} ч"
 
-
 class ProgressTracker:
-    """Throttled progress reporter for long exports.
-
-    Features:
-      - Starting offset via seed(cached_count): when the cache already contains
-        part of the requested range, the bar starts at (cached/total)% instead
-        of 0%, and the timing baseline is reset so ETA reflects only fresh work.
-      - ETA: computed from fresh messages/sec rate, shown once the rate estimate
-        is stable (>= _ETA_MIN_ELAPSED_SEC elapsed AND >= _ETA_MIN_FRESH_COUNT).
-      - Throttling: updates are emitted when EITHER pct grew by _PROGRESS_STEP_PCT
-        OR _PROGRESS_MIN_INTERVAL_SEC elapsed since the previous edit. Large pct
-        jumps (e.g. 20% → 45%) are reported as a single edit, not a chain of 5%
-        steps — cheaper and matches user expectation on fast exports.
-    """
 
     def __init__(self, client, user_chat_id, task_id):
         self._client = client
@@ -421,7 +368,6 @@ class ProgressTracker:
         self._last_count: int = 0
 
     async def start(self, total=None):
-        """Send the initial 0%/spinner message and start the timing baseline."""
         self._total = total
         self._start_time = time.time()
         # Инициализируем в now, а не в 0 — иначе первый track() всегда emit
@@ -435,7 +381,6 @@ class ProgressTracker:
         )
 
     async def set_total(self, total):
-        """Update the known total (when it's learned after start()) and redraw."""
         # total=0 означает что Telegram не смог подсчитать — трактуем как неизвестный total.
         # Иначе прогресс-бар навсегда застрянет на "0 из 0" пока воркер качает сообщения.
         if not total:
@@ -451,12 +396,6 @@ class ProgressTracker:
             )
 
     async def seed(self, cached_count: int) -> None:
-        """Seed the bar with already-cached messages and reset the ETA baseline.
-
-        Call this right after set_total() when cache already holds part of the
-        requested window. The bar jumps to (cached_count/total)% and timing is
-        restarted so ETA reflects only the fresh fetch work.
-        """
         if not self._total or cached_count <= 0:
             return
         self._baseline_count = cached_count
@@ -474,7 +413,6 @@ class ProgressTracker:
             self._message_id = mid
 
     async def track(self, count):
-        """Report progress — throttled by pct step and wall-clock interval."""
         self._last_count = count
         if not self._total:
             return
@@ -523,11 +461,6 @@ class ProgressTracker:
             self._message_id = mid
 
     async def on_floodwait(self, wait_seconds: int) -> None:
-        """Heartbeat во время Telegram FloodWait — обновляет прогресс-сообщение.
-
-        Вызывается из pyrogram_client.get_chat_history() перед asyncio.sleep().
-        Показывает пользователю что экспорт жив и ожидает снятия rate limit.
-        """
         if not self._message_id:
             return
         await self._client.send_progress_update(
@@ -540,11 +473,6 @@ class ProgressTracker:
         )
 
     async def finalize(self, count):
-        """Emit the final 100% edit (bypasses throttling).
-
-        Uses max(total, count) as the denominator so Telegram undercounts
-        (estimate 100 vs actual 110) still render as 100% instead of 110%.
-        """
         final_total = max(self._total or count, count)
         await self._client.send_progress_update(
             self._user_chat_id,
@@ -553,7 +481,6 @@ class ProgressTracker:
             final_total,
             progress_message_id=self._message_id,
         )
-
 
 async def create_java_client() -> JavaBotClient:
     client = JavaBotClient()

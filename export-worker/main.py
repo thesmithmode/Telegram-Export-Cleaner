@@ -1,25 +1,9 @@
 #!/usr/bin/env python3
-"""
-Export Worker: Main entry point.
-
-Architecture:
-1. Connect to Redis queue
-2. Connect to Telegram API (Pyrogram)
-3. Connect to Java Bot API
-4. Loop: Get job → Export → Send response
-5. Graceful shutdown on SIGTERM/SIGINT
-
-Error handling:
-- Temp errors (network, rate limit): Retry with exponential backoff
-- Perm errors (invalid chat, no access): Mark as failed, continue
-- Critical errors (auth, config): Exit with error
-"""
 
 import logging
 import asyncio
 import signal
 import sys
-import shutil
 import psutil
 from datetime import date as date_cls, datetime, timedelta, timezone
 from pathlib import Path
@@ -28,11 +12,11 @@ from typing import AsyncGenerator, Optional
 import redis.asyncio as aioredis
 
 from config import settings
-from pyrogram_client import TelegramClient, create_client as create_telegram_client
+from pyrogram_client import TelegramClient, create_client as create_telegram_client, ensure_utc
 from queue_consumer import QueueConsumer, create_queue_consumer
 from java_client import JavaBotClient, ProgressTracker, create_java_client
 from message_cache import MessageCache
-from models import ExportRequest, ExportedMessage
+from models import ExportRequest, ExportedMessage, SendResponsePayload
 
 # Setup logging
 logging.basicConfig(
@@ -42,27 +26,9 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-
 class ExportWorker:
-    """Main worker that processes export jobs from Redis queue.
-
-    Handles:
-    - Redis queue consumption (BLPOP pattern)
-    - Telegram API communication (Pyrogram async client)
-    - Export processing with 3-path caching strategy (date/id/fallback)
-    - Message caching in Redis sorted sets
-    - Job cancellation support
-    - Progress tracking via Java Bot API
-    - Graceful shutdown on SIGTERM/SIGINT
-
-    Example:
-        worker = ExportWorker()
-        await worker.initialize()
-        await worker.run()
-    """
 
     def __init__(self):
-        """Initialize worker instance with empty client references."""
         self.telegram_client: Optional[TelegramClient] = None
         self.queue_consumer: Optional[QueueConsumer] = None
         self.java_client: Optional[JavaBotClient] = None
@@ -78,18 +44,6 @@ class ExportWorker:
         job: ExportRequest,
         batch: list[ExportedMessage],
     ) -> bool:
-        """Flush current batch to cache, then check if job was cancelled.
-
-        Called every _CACHE_BATCH_SIZE messages during fetch loops.
-        By flushing before checking, we ensure partial progress is always saved.
-
-        Args:
-            job:   Current export job.
-            batch: Messages accumulated since last flush (will be cleared on flush).
-
-        Returns:
-            True if job was cancelled (batch is already stored), False otherwise.
-        """
         if self.message_cache and self.message_cache.enabled and batch:
             await self.message_cache.store_messages(job.chat_id, batch)
             batch.clear()
@@ -106,17 +60,6 @@ class ExportWorker:
     _CACHE_BATCH_SIZE: int = 1_000
 
     async def is_cancelled(self, task_id: str) -> bool:
-        """Check if export was cancelled by user via Redis flag.
-
-        Args:
-            task_id: Task identifier to check cancellation status
-
-        Returns:
-            True if cancel_export:{task_id} flag exists in Redis
-
-        Raises:
-            None (exceptions caught and return False)
-        """
         if not self.control_redis:
             return False
         try:
@@ -126,17 +69,6 @@ class ExportWorker:
             return False
 
     async def clear_active_export(self, user_id: int) -> None:
-        """Clear active export marker for user from Redis.
-
-        Args:
-            user_id: Telegram user ID
-
-        Returns:
-            None
-
-        Raises:
-            None (exceptions caught and logged internally)
-        """
         if self.control_redis:
             try:
                 await self.control_redis.delete(f"active_export:{user_id}")
@@ -144,17 +76,6 @@ class ExportWorker:
                 pass
 
     async def set_active_processing_job(self, task_id: str) -> None:
-        """Mark worker as actively processing a specific job in Redis.
-
-        Args:
-            task_id: Task identifier being processed
-
-        Returns:
-            None
-
-        Raises:
-            None (exceptions caught and logged internally)
-        """
         if self.control_redis:
             try:
                 await self.control_redis.set("active_processing_job", task_id, ex=3600)
@@ -162,14 +83,6 @@ class ExportWorker:
                 pass
 
     async def clear_active_processing_job(self) -> None:
-        """Clear active processing job flag from Redis.
-
-        Returns:
-            None
-
-        Raises:
-            None (exceptions caught and logged internally)
-        """
         if self.control_redis:
             try:
                 await self.control_redis.delete("active_processing_job")
@@ -177,14 +90,6 @@ class ExportWorker:
                 pass
 
     def _create_tracker(self, job: ExportRequest) -> Optional[ProgressTracker]:
-        """Create a ProgressTracker for user notifications if possible.
-
-        Args:
-            job: Export job containing user_chat_id and task_id
-
-        Returns:
-            ProgressTracker instance or None if cannot create
-        """
         if job.user_chat_id and self.java_client:
             return self.java_client.create_progress_tracker(
                 job.user_chat_id, job.task_id
@@ -192,17 +97,6 @@ class ExportWorker:
         return None
 
     def log_memory_usage(self, stage: str) -> None:
-        """Log current memory and CPU usage for resource monitoring.
-
-        Args:
-            stage: Description of current processing stage
-
-        Returns:
-            None
-
-        Raises:
-            None (exceptions caught and logged)
-        """
         try:
             mem = psutil.virtual_memory()
             cpu_percent = psutil.cpu_percent(interval=None)
@@ -214,54 +108,11 @@ class ExportWorker:
         except Exception as e:
             logger.warning(f"Could not get resource stats: {e}")
 
-    async def cleanup_temp_files(self, task_id: str) -> None:
-        """Delete temporary files for a task to prevent disk fill.
-
-        Args:
-            task_id: Task identifier for temp file cleanup
-
-        Returns:
-            None
-
-        Raises:
-            None (exceptions caught and logged)
-        """
-        try:
-            temp_dir = Path(f"/tmp/export_{task_id}")
-            if temp_dir.exists():
-                shutil.rmtree(temp_dir)
-                logger.debug(f"Cleaned up temp files for task {task_id}")
-        except Exception as e:
-            logger.warning(f"Failed to cleanup temp files for {task_id}: {e}")
-
     async def _cleanup_job(self, job: ExportRequest) -> None:
-        """Cleanup after job completion (success, error, or cancellation).
-
-        Args:
-            job: Completed export job
-
-        Returns:
-            None
-        """
-        await self.cleanup_temp_files(job.task_id)
         await self.clear_active_export(job.user_id)
         await self.clear_active_processing_job()
 
     async def initialize(self) -> bool:
-        """Initialize all components (Redis, Telegram, Java API, message cache).
-
-        Connects to:
-        1. Redis queue for job consumption
-        2. Telegram API via Pyrogram
-        3. Java Bot API for responses
-        4. Message cache layer
-
-        Returns:
-            True if all components initialized successfully, False otherwise
-
-        Raises:
-            None (exceptions logged as ERROR and return False)
-        """
         try:
             logger.info("🚀 Initializing Export Worker...")
 
@@ -325,15 +176,6 @@ class ExportWorker:
             return False
 
     async def process_job(self, job: ExportRequest) -> bool:
-        """
-        Process single export job.
-
-        Args:
-            job: Export request from queue
-
-        Returns:
-            True if processed successfully (even if no messages)
-        """
         try:
             logger.info(f"📝 Processing job {job.task_id} (chat {job.chat_id})")
             self.log_memory_usage("JOB_START")
@@ -389,12 +231,14 @@ class ExportWorker:
                 error_code = error_reason or "CHAT_NOT_ACCESSIBLE"
                 logger.error(f"❌ {error} (reason: {error_reason})")
                 await self.java_client.send_response(
-                    task_id=job.task_id,
-                    status="failed",
-                    messages=[],
-                    error=error,
-                    error_code=error_code,
-                    user_chat_id=job.user_chat_id,
+                    SendResponsePayload(
+                        task_id=job.task_id,
+                        status="failed",
+                        messages=[],
+                        error=error,
+                        error_code=error_code,
+                        user_chat_id=job.user_chat_id,
+                    )
                 )
                 await self.queue_consumer.mark_job_failed(job.task_id, error)
                 await self._cleanup_job(job)
@@ -492,16 +336,18 @@ class ExportWorker:
             # Send results to Java API, deliver cleaned text to user
             chat_title = chat_info.get('title') or chat_info.get('username') if chat_info else None
             success = await self.java_client.send_response(
-                task_id=job.task_id,
-                status="completed",
-                messages=messages_for_send,
-                actual_count=msg_count,
-                user_chat_id=job.user_chat_id,
-                chat_title=chat_title,
-                from_date=job.from_date,
-                to_date=job.to_date,
-                keywords=job.keywords,
-                exclude_keywords=job.exclude_keywords,
+                SendResponsePayload(
+                    task_id=job.task_id,
+                    status="completed",
+                    messages=messages_for_send,
+                    actual_count=msg_count,
+                    user_chat_id=job.user_chat_id,
+                    chat_title=chat_title,
+                    from_date=job.from_date,
+                    to_date=job.to_date,
+                    keywords=job.keywords,
+                    exclude_keywords=job.exclude_keywords,
+                )
             )
 
             if success:
@@ -536,11 +382,13 @@ class ExportWorker:
             if self.java_client:
                 try:
                     await self.java_client.send_response(
-                        task_id=job.task_id,
-                        status="failed",
-                        messages=[],
-                        error=error_text,
-                        user_chat_id=job.user_chat_id,
+                        SendResponsePayload(
+                            task_id=job.task_id,
+                            status="failed",
+                            messages=[],
+                            error=error_text,
+                            user_chat_id=job.user_chat_id,
+                        )
                     )
                     notified_via_send_response = True
                 except Exception as notify_err:
@@ -557,12 +405,12 @@ class ExportWorker:
                 and job.user_chat_id
             ):
                 try:
-                    await self.java_client._notify_user_failure(
+                    await self.java_client.notify_user_failure(
                         job.user_chat_id, job.task_id, error_text
                     )
                 except Exception as fallback_err:
                     logger.error(
-                        f"Direct _notify_user_failure also failed for "
+                        f"Direct notify_user_failure also failed for "
                         f"{job.task_id}: {fallback_err}"
                     )
 
@@ -587,7 +435,6 @@ class ExportWorker:
     def _compute_cached_ranges(
         from_date: str, to_date: str, missing: list[tuple[str, str]]
     ) -> list[tuple[str, str]]:
-        """Compute cached date ranges = [from_date, to_date] minus missing gaps."""
         if not missing:
             return [(from_date, to_date)]
 
@@ -610,14 +457,6 @@ class ExportWorker:
     async def _export_with_date_cache(
         self, job: ExportRequest
     ) -> Optional[tuple[int, AsyncGenerator]]:
-        """
-        Date-range export with cache support. Returns (count, AsyncGenerator) or None.
-
-        1. Check which date sub-ranges are already cached
-        2. Fetch only missing date ranges from Telegram (accumulate in memory - small gaps only)
-        3. Store fresh messages in cache
-        4. Count via ZCOUNT (O(1)), stream via iter_messages_by_date (O(chunk) memory)
-        """
         from_date_str = job.from_date[:10] if job.from_date else None
         to_date_str = job.to_date[:10] if job.to_date else None
 
@@ -761,13 +600,6 @@ class ExportWorker:
     async def _export_with_id_cache(
         self, job: ExportRequest
     ) -> Optional[tuple[int, AsyncGenerator]]:
-        """
-        Full export (no date filter) with cache by message ID.
-
-        1. Check which ID ranges are cached
-        2. Fetch newer messages + fill ID gaps
-        3. Store in cache, merge, return (count, generator)
-        """
         cached_ranges = await self.message_cache.get_cached_ranges(job.chat_id)
 
         if not cached_ranges:
@@ -935,24 +767,19 @@ class ExportWorker:
     async def _fetch_all_messages(
         self, job: ExportRequest
     ) -> Optional[tuple[int, object]]:
-        """Fetch all messages from Telegram, writing to cache in batches.
-
-        Returns (count, messages_iterable) or None if cancelled/failed.
-        Messages are stored in SQLite during fetch (O(_CACHE_BATCH_SIZE) RAM peak).
-        """
         # Parse date filters
         from_date = None
         to_date = None
         if job.from_date:
             try:
                 dt = datetime.fromisoformat(job.from_date)
-                from_date = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+                from_date = ensure_utc(dt)
             except ValueError:
                 pass
         if job.to_date:
             try:
                 dt = datetime.fromisoformat(job.to_date)
-                to_date = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+                to_date = ensure_utc(dt)
             except ValueError:
                 pass
 
@@ -1034,12 +861,6 @@ class ExportWorker:
         return count, nocache_messages
 
     async def _update_all_queue_positions(self, current_task_id: str) -> None:
-        """
-        Notify each queued user of their updated position.
-
-        Called right before processing a job: the job being processed gets
-        position=0 ("started"), the rest get their 1-based queue position.
-        """
         if not self.control_redis or not self.java_client or not self.queue_consumer:
             return
         try:
@@ -1061,7 +882,6 @@ class ExportWorker:
     async def _notify_queue_position(
         self, task_id: str, position: int, total: int
     ) -> None:
-        """Notify one queued user of queue position if queue message metadata exists."""
         if not self.control_redis or not self.java_client:
             return
 
@@ -1080,11 +900,6 @@ class ExportWorker:
         await self.java_client.update_queue_position(user_chat_id, msg_id, position, total)
 
     async def run(self):
-        """
-        Main worker loop.
-
-        Process jobs from queue until shutdown signal received.
-        """
         if not await self.initialize():
             sys.exit(1)
 
@@ -1120,7 +935,6 @@ class ExportWorker:
             await self.cleanup()
 
     async def cleanup(self):
-        """Clean shutdown."""
         logger.info("🛑 Shutting down worker...")
 
         self.running = False
@@ -1144,13 +958,10 @@ class ExportWorker:
         logger.info("✅ Worker stopped")
 
     def handle_signal(self, signum, frame):
-        """Handle SIGTERM/SIGINT."""
         logger.info(f"Received signal {signum}")
         self.running = False
 
-
 async def main():
-    """Main entry point."""
     worker = ExportWorker()
 
     # Setup asyncio-compatible signal handlers
@@ -1178,7 +989,6 @@ async def main():
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
         sys.exit(1)
-
 
 if __name__ == "__main__":
     asyncio.run(main())

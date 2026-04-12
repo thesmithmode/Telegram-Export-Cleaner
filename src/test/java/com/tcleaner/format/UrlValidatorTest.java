@@ -117,11 +117,7 @@ class UrlValidatorTest {
         }
     }
 
-    /**
-     * Protocol-relative URL (//evil.com) в markdown-рендерерах превращается в
-     * https://evil.com. До фикса startsWith("/") ошибочно относил их к «относительным»
-     * и пропускал. Эти тесты защищают фикс от отката.
-     */
+    
     @Nested
     @DisplayName("Protocol-relative URL — блокировка (regression)")
     class BlocksProtocolRelative {

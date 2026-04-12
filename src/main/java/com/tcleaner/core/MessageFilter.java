@@ -12,9 +12,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.Predicate;
 
-/**
- * Фильтр сообщений Telegram export.
- */
 public class MessageFilter {
 
     private LocalDate startDate;
@@ -25,9 +22,7 @@ public class MessageFilter {
     private final Set<String> excludeTypes;
     private final List<Predicate<JsonNode>> customPredicates;
 
-    /**
-     * Создаёт пустой фильтр без условий (все сообщения проходят).
-     */
+    
     public MessageFilter() {
         this.keywords = new ArrayList<>();
         this.excludeKeywords = new ArrayList<>();
@@ -36,19 +31,11 @@ public class MessageFilter {
         this.customPredicates = new ArrayList<>();
     }
 
-    /**
-     * Создаёт {@link MessageFilter} из строковых параметров.
-     *
-     * @param startDate       начальная дата в формате YYYY-MM-DD, или {@code null}
-     * @param endDate         конечная дата в формате YYYY-MM-DD, или {@code null}
-     * @param keywords        ключевые слова для включения, через запятую, или {@code null}
-     * @param excludeKeywords ключевые слова для исключения, через запятую, или {@code null}
-     * @return настроенный {@link MessageFilter}, или {@code null} если ни один параметр не задан
-     */
-    public static MessageFilter fromParameters(String startDate, String endDate,
+    
+    public static MessageFilter fromParameters(LocalDate startDate, LocalDate endDate,
                                              String keywords, String excludeKeywords) {
-        boolean hasFilters = isPresent(startDate)
-                || isPresent(endDate)
+        boolean hasFilters = startDate != null
+                || endDate != null
                 || isPresent(keywords)
                 || isPresent(excludeKeywords);
 
@@ -56,22 +43,19 @@ public class MessageFilter {
             return null;
         }
 
-        MessageFilter filter = new MessageFilter();
-
-        LocalDate parsedStart = isPresent(startDate) ? LocalDate.parse(startDate) : null;
-        LocalDate parsedEnd = isPresent(endDate) ? LocalDate.parse(endDate) : null;
-
-        if (parsedStart != null && parsedEnd != null && parsedStart.isAfter(parsedEnd)) {
+        if (startDate != null && endDate != null && startDate.isAfter(endDate)) {
             throw new IllegalArgumentException(
                     "startDate не может быть позже endDate: " + startDate + " > " + endDate);
         }
 
-        if (parsedStart != null) {
-            filter.withStartDate(parsedStart);
+        MessageFilter filter = new MessageFilter();
+
+        if (startDate != null) {
+            filter.withStartDate(startDate);
         }
 
-        if (parsedEnd != null) {
-            filter.withEndDate(parsedEnd);
+        if (endDate != null) {
+            filter.withEndDate(endDate);
         }
 
         if (isPresent(keywords)) {
@@ -87,6 +71,14 @@ public class MessageFilter {
         }
 
         return filter;
+    }
+
+    
+    public static MessageFilter fromParameters(String startDate, String endDate,
+                                             String keywords, String excludeKeywords) {
+        LocalDate parsedStart = isPresent(startDate) ? LocalDate.parse(startDate) : null;
+        LocalDate parsedEnd = isPresent(endDate) ? LocalDate.parse(endDate) : null;
+        return fromParameters(parsedStart, parsedEnd, keywords, excludeKeywords);
     }
 
     private static boolean isPresent(String value) {
@@ -146,7 +138,7 @@ public class MessageFilter {
         }
 
         if (startDate != null || endDate != null) {
-            String dateStr = message.has("date") ? message.get("date").asText() : "";
+            String dateStr = JsonUtils.getText(message, "date");
             LocalDate messageDate = DateFormatter.parseDateToLocalDate(dateStr);
 
             if (messageDate == null) {
