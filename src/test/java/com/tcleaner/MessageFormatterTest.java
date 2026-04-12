@@ -6,9 +6,6 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * Тесты для MessageFormatter.
- */
 @DisplayName("MessageFormatter")
 class MessageFormatterTest {
 

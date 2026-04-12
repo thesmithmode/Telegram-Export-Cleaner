@@ -1,13 +1,3 @@
-"""
-Redis Queue Consumer: Process export jobs from Java Bot.
-
-Handles:
-- Connection to Redis queue
-- Job deserialization from JSON
-- Error handling and job failure tracking
-- Job result storage
-- Graceful shutdown
-"""
 
 import logging
 import json
@@ -22,16 +12,12 @@ from models import ExportRequest
 
 logger = logging.getLogger(__name__)
 
-
 JOB_MARKER_TTL = 3600  # 1 hour — TTL for completed/failed job markers in Redis
 MAX_PENDING_RETURN = 100  # Max number of pending jobs to deserialize (prevents OOM)
 
-
 class QueueConsumer:
-    """Consumer for Redis-backed job queue."""
 
     def __init__(self):
-        """Initialize queue consumer."""
         self.redis_url = (
             f"redis://:"
             f"{settings.REDIS_PASSWORD}@"
@@ -56,12 +42,6 @@ class QueueConsumer:
         )
 
     async def connect(self) -> bool:
-        """
-        Connect to Redis.
-
-        Returns:
-            True if successful, False otherwise
-        """
         try:
             self.redis_client = await redis.from_url(
                 self.redis_url,
@@ -80,15 +60,6 @@ class QueueConsumer:
             return False
 
     async def _reconnect(self, max_retries: int = 3) -> bool:
-        """
-        Reconnect to Redis with exponential backoff.
-
-        Args:
-            max_retries: Max reconnection attempts
-
-        Returns:
-            True if reconnected successfully, False otherwise
-        """
         for attempt in range(max_retries):
             try:
                 if self.redis_client:
@@ -113,11 +84,9 @@ class QueueConsumer:
 
     @property
     def is_connected(self) -> bool:
-        """Check if client is connected to Redis."""
         return self.redis_client is not None
 
     async def disconnect(self):
-        """Disconnect from Redis."""
         try:
             if self.redis_client:
                 await self.redis_client.close()
@@ -127,24 +96,9 @@ class QueueConsumer:
 
     @property
     def express_queue_name(self) -> str:
-        """Express (priority) queue for cache-hit jobs — checked before main queue."""
         return self.queue_name + "_express"
 
     async def get_job(self) -> Optional[ExportRequest]:
-        """
-        Get next job from queue (blocking) with durability guarantee.
-
-        BLPOP removes the job from the working queue. The same job is then
-        pushed to a staging queue via RPUSH so that if the worker crashes
-        mid-processing, the job can be recovered on restart via
-        :meth:`recover_staging_jobs`.
-
-        Checks express queue first (cache-hit jobs), then main queue.
-        Uses BLPOP to block until job available.
-
-        Returns:
-            ExportRequest object or None if timeout
-        """
         if not self.redis_client:
             raise RuntimeError("Not connected to Redis")
 
@@ -207,17 +161,10 @@ class QueueConsumer:
             return None
 
     async def _move_to_dlq(self, job_json: str, reason: str) -> None:
-        """
-        Перекладывает невалидную задачу в Dead Letter Queue.
-
-        Отравленные сообщения (невалидный JSON, ошибка валидации Pydantic)
-        не теряются и могут быть проверены вручную в Redis-ключе <queue>_dead.
-        """
         if not self.redis_client:
             return
         try:
-            import json as _json
-            dlq_entry = _json.dumps({
+            dlq_entry = json.dumps({
                 "raw": job_json,
                 "reason": reason,
                 "timestamp": datetime.now().isoformat(),
@@ -228,19 +175,7 @@ class QueueConsumer:
         except Exception as e:
             logger.error(f"Failed to move job to DLQ: {e}")
 
-    async def ack_job_completed(self, task_id: str) -> bool:
-        """Mark job as removed from staging after successful completion."""
-        if not self.redis_client:
-            return False
-        try:
-            await self.redis_client.srem("staging:acked", task_id)
-            return True
-        except Exception as e:
-            logger.error(f"Failed to ack completed job {task_id}: {e}")
-            return False
-
     async def _track_staging_job(self, task_id: str) -> None:
-        """Track that a job is in staging (called after RPUSH to staging)."""
         if self.redis_client:
             try:
                 await self.redis_client.sadd("staging:jobs", task_id)
@@ -248,7 +183,6 @@ class QueueConsumer:
                 pass
 
     async def _untrack_staging_job(self, task_id: str) -> None:
-        """Remove job from staging tracking set (called on completion/failure)."""
         if self.redis_client:
             try:
                 await self.redis_client.srem("staging:jobs", task_id)
@@ -258,12 +192,10 @@ class QueueConsumer:
     async def _store_staging_payload(
         self, task_id: str, job_json: str, staging_queue: str
     ) -> None:
-        """Persist job payload + queue name so _remove_from_staging can LREM it later."""
         if not self.redis_client:
             return
         try:
-            import json as _json
-            meta = _json.dumps({"payload": job_json, "queue": staging_queue})
+            meta = json.dumps({"payload": job_json, "queue": staging_queue})
             await self.redis_client.setex(
                 f"staging:meta:{task_id}", JOB_MARKER_TTL, meta
             )
@@ -271,33 +203,18 @@ class QueueConsumer:
             pass
 
     async def _remove_from_staging(self, task_id: str) -> None:
-        """Remove job from staging list (LREM) after completion/failure.
-
-        Prevents recover_staging_jobs() from re-queuing already-finished jobs
-        on the next worker restart.
-        """
         if not self.redis_client:
             return
         try:
-            import json as _json
             raw = await self.redis_client.get(f"staging:meta:{task_id}")
             if raw:
-                meta = _json.loads(raw)
+                meta = json.loads(raw)
                 await self.redis_client.lrem(meta["queue"], 1, meta["payload"])
             await self.redis_client.delete(f"staging:meta:{task_id}")
         except Exception as e:
             logger.debug(f"Could not remove staging entry for {task_id}: {e}")
 
     async def push_job(self, job: ExportRequest) -> bool:
-        """
-        Push job back to queue (for retries).
-
-        Args:
-            job: ExportRequest to push
-
-        Returns:
-            True if successful, False otherwise
-        """
         if not self.redis_client:
             raise RuntimeError("Not connected to Redis")
 
@@ -312,15 +229,6 @@ class QueueConsumer:
             return False
 
     async def mark_job_processing(self, task_id: str) -> bool:
-        """
-        Mark job as being processed (in Redis).
-
-        Args:
-            task_id: Task ID
-
-        Returns:
-            True if successful
-        """
         if not self.redis_client:
             return False
 
@@ -338,15 +246,6 @@ class QueueConsumer:
             return False
 
     async def mark_job_completed(self, task_id: str) -> bool:
-        """
-        Mark job as completed.
-
-        Args:
-            task_id: Task ID
-
-        Returns:
-            True if successful
-        """
         if not self.redis_client:
             return False
 
@@ -355,7 +254,6 @@ class QueueConsumer:
             completed_key = f"job:completed:{task_id}"
 
             # Resolve staging metadata before pipeline (needs a GET)
-            import json as _json
             raw = await self.redis_client.get(f"staging:meta:{task_id}")
 
             # Batch the 4 write operations into one pipeline (4 RTT → 1 RTT)
@@ -369,7 +267,7 @@ class QueueConsumer:
             pipe.srem("staging:jobs", task_id)
             if raw:
                 try:
-                    meta = _json.loads(raw)
+                    meta = json.loads(raw)
                     pipe.lrem(meta["queue"], 1, meta["payload"])
                 except Exception:
                     pass
@@ -384,16 +282,6 @@ class QueueConsumer:
             return False
 
     async def mark_job_failed(self, task_id: str, error: str) -> bool:
-        """
-        Mark job as failed.
-
-        Args:
-            task_id: Task ID
-            error: Error message
-
-        Returns:
-            True if successful
-        """
         if not self.redis_client:
             return False
 
@@ -424,17 +312,6 @@ class QueueConsumer:
             return False
 
     async def get_pending_jobs(self) -> dict:
-        """
-        Return pending jobs from queue without removing them, limited to first MAX_PENDING_RETURN.
-
-        Uses LLEN to get the true total count (O(1)) and LRANGE 0..MAX_PENDING_RETURN-1
-        to deserialize only a bounded number of jobs (prevents OOM on large queues).
-
-        Returns:
-            Dict with keys:
-                - jobs: list of ExportRequest (up to MAX_PENDING_RETURN items)
-                - total_count: int, the actual total number of pending jobs across both queues
-        """
         if not self.redis_client:
             return {"jobs": [], "total_count": 0}
 
@@ -474,10 +351,6 @@ class QueueConsumer:
             return {"jobs": [], "total_count": 0}
 
     async def recover_staging_jobs(self) -> int:
-        """Recover jobs left in staging from a previous crash.
-
-        Moves all staging jobs back to their original queues and returns count.
-        """
         if not self.redis_client:
             return 0
 
@@ -512,12 +385,6 @@ class QueueConsumer:
         return recovered
 
     async def get_queue_stats(self) -> Optional[dict]:
-        """
-        Get queue statistics.
-
-        Returns:
-            Dict with stats or None
-        """
         if not self.redis_client:
             return None
 
@@ -535,25 +402,13 @@ class QueueConsumer:
             return None
 
     async def __aenter__(self):
-        """Async context manager entry."""
         await self.connect()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Async context manager exit."""
         await self.disconnect()
 
-
 async def create_queue_consumer() -> QueueConsumer:
-    """
-    Factory function to create and verify queue consumer.
-
-    Returns:
-        Connected QueueConsumer instance
-
-    Raises:
-        RuntimeError: If connection fails
-    """
     consumer = QueueConsumer()
 
     if not await consumer.connect():

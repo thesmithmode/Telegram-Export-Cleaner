@@ -16,12 +16,6 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * Интеграционные тесты для полного цикла обработки Telegram-экспорта.
- *
- * <p>Тесты работают с реальным {@link TelegramExporter} без моков,
- * проверяя сквозной путь от JSON-файла до итоговых строк.</p>
- */
 @DisplayName("Интеграционные тесты")
 class IntegrationTest {
 

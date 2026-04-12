@@ -9,9 +9,6 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
-/**
- * Конфигурация безопасности приложения.
- */
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
@@ -22,13 +19,7 @@ public class SecurityConfig {
         this.apiKeyFilter = apiKeyFilter;
     }
 
-    /**
-     * Фильтр цепочки безопасности для HTTP запросов.
-     *
-     * @param http конфигурация HTTP безопасности
-     * @return настроенный SecurityFilterChain
-     * @throws Exception при ошибке конфигурации
-     */
+    
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http

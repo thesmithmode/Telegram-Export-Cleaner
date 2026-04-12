@@ -1,22 +1,8 @@
 #!/usr/bin/env python3
-"""
-Generate Pyrogram String Session for stateless authentication.
-
-Usage:
-    python get_session.py
-
-This script creates a string session that can be stored as a GitHub Secret
-(TELEGRAM_SESSION_STRING) for production deployment without interactive auth.
-
-The generated session string is a permanent credential for your Telegram account
-and can be used across multiple machines and deployments.
-"""
 
 from pyrogram import Client
 
-
 def generate_session():
-    """Interactively generate and display a Pyrogram string session."""
     print("\n" + "=" * 80)
     print("Pyrogram String Session Generator")
     print("=" * 80)
@@ -73,7 +59,6 @@ def generate_session():
     except Exception as e:
         print(f"\n❌ Error during authentication: {e}")
         print("Make sure your API_ID and API_HASH are correct")
-
 
 if __name__ == "__main__":
     generate_session()

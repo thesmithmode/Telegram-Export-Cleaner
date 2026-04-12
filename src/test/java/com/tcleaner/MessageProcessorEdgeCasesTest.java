@@ -13,9 +13,6 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * Расширенные тесты для MessageProcessor - edge cases и граничные условия.
- */
 @DisplayName("MessageProcessor - Edge Cases")
 class MessageProcessorEdgeCasesTest {
 

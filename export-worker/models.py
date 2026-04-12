@@ -1,38 +1,10 @@
-"""
-Pydantic models for Export Worker.
-
-Defines data structures for:
-- Export requests from Java queue
-- Export responses to Java API
-- Message entity formatting
-- Error code enumeration
-"""
 
 from typing import List, Optional, Dict, Any, Union
 from datetime import datetime
 from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 
-
 class ErrorCode(str, Enum):
-    """Export error codes for job failure categorization.
-
-    Error codes help identify failure types and determine appropriate handling:
-
-    Permanent Failures (don't retry):
-    - CHAT_NOT_ACCESSIBLE: Chat was deleted or user was kicked
-    - CHAT_PRIVATE: Chat is private or user has no access
-    - CHAT_ADMIN_REQUIRED: Exporting chat requires admin rights
-    - INVALID_CHAT_ID: Invalid chat ID format or syntax error
-
-    Temporary Failures (may retry):
-    - EXPORT_ERROR: Unexpected error during export (partial results sent)
-    - NETWORK_ERROR: Network connectivity issue
-    - TIMEOUT: Job exceeded maximum time limit
-
-    Rate Limiting (auto-retry with backoff):
-    - RATE_LIMIT: Telegram FloodWait (auto-retried with exponential backoff)
-    """
 
     # Non-retryable errors
     CHAT_NOT_ACCESSIBLE = "CHAT_NOT_ACCESSIBLE"
@@ -48,9 +20,7 @@ class ErrorCode(str, Enum):
     # Rate limiting
     RATE_LIMIT = "RATE_LIMIT"
 
-
 class ExportRequest(BaseModel):
-    """Request to export chat messages."""
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -80,13 +50,6 @@ class ExportRequest(BaseModel):
     @field_validator("chat_id", mode="before")
     @classmethod
     def coerce_chat_id(cls, v):
-        """Принимает chat_id как int, str-число или username.
-
-        Java иногда сериализует chat_id как строку (числовой ID или username).
-        Числовые строки приводим к int (чтобы вся остальная логика — кэш-ключи,
-        сравнения, передача в Pyrogram — работала с одним типом). Username
-        (нечисловые строки) оставляем как есть — Pyrogram умеет их разрешать.
-        """
         if isinstance(v, str):
             stripped = v.strip()
             try:
@@ -98,7 +61,6 @@ class ExportRequest(BaseModel):
     @field_validator("from_date", "to_date", mode="before")
     @classmethod
     def validate_date(cls, v: Optional[str]) -> Optional[str]:
-        """Проверяет, что дата является валидным ISO 8601 значением."""
         if v is None:
             return v
         for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d"):
@@ -111,9 +73,7 @@ class ExportRequest(BaseModel):
             f"Неверный формат даты: '{v}'. Ожидается YYYY-MM-DD, YYYY-MM-DDTHH:MM или YYYY-MM-DDTHH:MM:SS"
         )
 
-
 class MessageEntity(BaseModel):
-    """Text entity (formatting, links, mentions)."""
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -150,9 +110,7 @@ class MessageEntity(BaseModel):
     url: Optional[str] = Field(None, description="URL for text_url/custom_emoji")
     user_id: Optional[int] = Field(None, description="User ID for text_mention")
 
-
 class ExportedMessage(BaseModel):
-    """Single exported message in result.json format."""
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -198,15 +156,29 @@ class ExportedMessage(BaseModel):
     height: Optional[int] = Field(None, description="Media height")
     duration: Optional[int] = Field(None, description="Media duration (seconds)")
 
+class SendResponsePayload(BaseModel):
+
+    task_id: str = Field(..., description="Unique task ID")
+    status: str = Field(
+        ...,
+        description="completed or failed",
+        pattern="^(completed|failed)$"
+    )
+    messages: Union[List[ExportedMessage], Any] = Field(
+        ...,
+        description="Exported messages (list or AsyncIterator)"
+    )
+    actual_count: int = Field(default=0, description="Number of messages actually exported")
+    error: Optional[str] = Field(None, description="Error message if status=failed")
+    error_code: Optional[str] = Field(None, description="Error code for retries")
+    user_chat_id: Optional[int] = Field(None, description="User chat ID to send result")
+    chat_title: Optional[str] = Field(None, description="Chat title for filename")
+    from_date: Optional[str] = Field(None, description="Date range filter start")
+    to_date: Optional[str] = Field(None, description="Date range filter end")
+    keywords: Optional[str] = Field(None, description="Keywords filter")
+    exclude_keywords: Optional[str] = Field(None, description="Exclude keywords filter")
 
 class ExportResponse(BaseModel):
-    """
-    Response from export worker to Java API.
-
-    NOTE: This is a contract model used in tests and documentation.
-    The actual response flow uses individual ExportedMessage objects sent through JavaBotClient,
-    not this model. Kept for reference and potential future API contracts.
-    """
 
     model_config = ConfigDict(
         json_schema_extra={
