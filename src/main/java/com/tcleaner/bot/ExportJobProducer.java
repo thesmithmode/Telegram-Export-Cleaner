@@ -43,12 +43,6 @@ public class ExportJobProducer {
         return enqueue(userId, userChatId, (Object) chatId, fromDate, toDate, null, null);
     }
 
-    public String enqueue(long userId, long userChatId, long chatId,
-                          String fromDate, String toDate,
-                          String keywords, String excludeKeywords) {
-        return enqueue(userId, userChatId, (Object) chatId, fromDate, toDate, keywords, excludeKeywords);
-    }
-
     public String enqueue(long userId, long userChatId, String chatIdentifier) {
         return enqueue(userId, userChatId, (Object) chatIdentifier, null, null, null, null);
     }

@@ -54,7 +54,6 @@ public class TelegramExporter {
             return List.of();
         }
 
-        // Single pass: iterate + filter without creating an intermediate ArrayList.
         List<JsonNode> messages = StreamSupport
                 .stream(messagesNode.spliterator(), false)
                 .filter(n -> filter == null || filter.matches(n))
