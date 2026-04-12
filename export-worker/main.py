@@ -4,7 +4,6 @@ import logging
 import asyncio
 import signal
 import sys
-import shutil
 import psutil
 from datetime import date as date_cls, datetime, timedelta, timezone
 from pathlib import Path
