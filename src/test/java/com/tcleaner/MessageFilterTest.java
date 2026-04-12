@@ -52,7 +52,7 @@ class MessageFilterTest {
         @Test
         @DisplayName("Все параметры null или пустые → null")
         void allNullOrBlankReturnsNull() {
-            assertThat(MessageFilter.fromParameters(null, null, null, null)).isNull();
+            assertThat(MessageFilter.fromParameters((String)null, (String)null, null, null)).isNull();
             assertThat(MessageFilter.fromParameters("", "  ", "", "")).isNull();
         }
 
@@ -83,7 +83,7 @@ class MessageFilterTest {
         @Test
         @DisplayName("Корректно парсит ключевые слова (CSV)")
         void parsesKeywords() throws Exception {
-            MessageFilter filter = MessageFilter.fromParameters(null, null, " java , spring ", " spam ");
+            MessageFilter filter = MessageFilter.fromParameters((String)null, (String)null, " java , spring ", " spam ");
             assertThat(filter.matches(msg("2025-01-01T00:00:00", "java rocks"))).isTrue();
             assertThat(filter.matches(msg("2025-01-01T00:00:00", "buy spam"))).isFalse();
         }
