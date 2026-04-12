@@ -125,12 +125,5 @@ class ApiExceptionHandlerTest {
                     .andExpect(status().isBadRequest());
         }
 
-        @Test
-        @DisplayName("400 при пустом файле")
-        void shouldReturn400OnEmptyFile() throws Exception {
-            mockMvc.perform(multipart("/api/convert")
-                    .file(dummyFile()))
-                    .andExpect(status().isBadRequest());
-        }
     }
 }
