@@ -813,11 +813,10 @@ class TestExportWorkerWithCache:
         await worker.process_job(job)
 
         # Verify: Java received ALL 5 messages (3 cached + 2 new).
-        # messages_for_send из cache-path — это AsyncGenerator (iter_messages
-        # из SQLite), а не list, поэтому собираем через async for.
-        args, kwargs = worker.java_client.send_response.call_args
-        assert kwargs["status"] == "completed"
-        result_ids = sorted([m.id async for m in kwargs["messages"]])
+        # send_response вызывается с SendResponsePayload как позиционный аргумент
+        payload = worker.java_client.send_response.call_args[0][0]
+        assert payload.status == "completed"
+        result_ids = sorted([m.id async for m in payload.messages])
         assert result_ids == [1, 2, 3, 4, 5]
 
 class TestExportWorkerDateCache:
@@ -927,9 +926,9 @@ class TestExportWorkerDateCache:
         assert ("2025-01-14", "2025-01-15") in fetch_calls
 
         # Verify: Java received all 15 messages.
-        # date-cache path возвращает AsyncGenerator из iter_messages_by_date.
-        last_call = worker.java_client.send_response.call_args
-        result_ids = sorted([m.id async for m in last_call.kwargs["messages"]])
+        # send_response вызывается с SendResponsePayload как позиционный аргумент
+        payload = worker.java_client.send_response.call_args[0][0]
+        result_ids = sorted([m.id async for m in payload.messages])
         assert result_ids == list(range(1, 16))
 
         # Cache now has complete Jan 1-15

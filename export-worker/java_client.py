@@ -38,7 +38,7 @@ class JavaBotClient:
     async def send_response(self, payload: SendResponsePayload) -> bool:
         if payload.status == "failed":
             if payload.error and payload.user_chat_id and self.bot_token:
-                await self._notify_user_failure(
+                await self.notify_user_failure(
                     payload.user_chat_id, payload.task_id, payload.error
                 )
             return True

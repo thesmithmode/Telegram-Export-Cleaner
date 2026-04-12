@@ -180,7 +180,7 @@ class TestSendResponse:
         client, p = _make_client()
         try:
             with patch.object(
-                client, "_notify_user_failure", new_callable=AsyncMock
+                client, "notify_user_failure", new_callable=AsyncMock
             ) as mock_notify:
                 result = await client.send_response(
                     SendResponsePayload(
@@ -239,7 +239,7 @@ class TestSendResponse:
             ) as mock_upload, patch.object(
                 client, "_send_file_to_user", new_callable=AsyncMock
             ) as mock_send, patch.object(
-                client, "_notify_user_failure", new_callable=AsyncMock
+                client, "notify_user_failure", new_callable=AsyncMock
             ) as mock_notify:
                 mock_upload.return_value = "cleaned text"
                 mock_send.return_value = False  # delivery failed
@@ -268,7 +268,7 @@ class TestSendResponse:
             with patch.object(
                 client, "_upload_file_to_java", new_callable=AsyncMock
             ) as mock_upload, patch.object(
-                client, "_notify_user_failure", new_callable=AsyncMock
+                client, "notify_user_failure", new_callable=AsyncMock
             ) as mock_notify:
                 mock_upload.return_value = None  # simulate Java API outage
 
