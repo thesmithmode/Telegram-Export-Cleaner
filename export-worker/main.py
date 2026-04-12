@@ -537,22 +537,6 @@ class ExportWorker:
             batch: list[ExportedMessage] = []
             gap_fetched = 0
 
-            # Прежде чем идти в Telegram, проверяем: вдруг сообщения уже есть в messages
-            # (загружены через ID-путь или более ранний экспорт, но date_ranges не обновлён).
-            already_in_db = await self.message_cache.count_messages_by_date(
-                job.chat_id, gap_from, gap_to
-            ) if self.message_cache and self.message_cache.enabled else 0
-            if already_in_db > 0:
-                logger.info(
-                    f"  Gap [{gap_from} - {gap_to}]: {already_in_db} сообщений уже в messages — "
-                    f"обновляем date_ranges без запроса в Telegram"
-                )
-                await self.message_cache.mark_date_range_checked(job.chat_id, gap_from, gap_to)
-                fetched_count += already_in_db
-                if tracker:
-                    await tracker.track(fetched_count)
-                continue
-
             try:
                 async for msg in self.telegram_client.get_chat_history(
                     chat_id=job.chat_id,
