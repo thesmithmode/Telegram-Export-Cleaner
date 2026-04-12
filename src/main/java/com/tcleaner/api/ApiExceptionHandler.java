@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.io.IOException;
 import java.time.format.DateTimeParseException;
@@ -20,6 +21,7 @@ import java.util.Map;
  *
  * Обрабатывает следующие типы ошибок:
  * - DateTimeParseException → 400 Bad Request (неверный формат даты)
+ * - MethodArgumentTypeMismatchException → 400 Bad Request (неверный тип параметра, напр. @DateTimeFormat)
  * - IllegalArgumentException → 400 Bad Request (неверные параметры)
  * - TelegramExporterException → 400 Bad Request (ошибка обработки)
  * - Exception (generic) → 500 Internal Server Error (неожиданная ошибка)
@@ -53,6 +55,22 @@ public class ApiExceptionHandler {
     public ResponseEntity<Map<String, String>> handleDateTimeParse(DateTimeParseException ex) {
         log.warn("Date parse error: {}", ex.getMessage());
         return ResponseEntity.badRequest().body(makeError("Невалидный формат даты. Используйте YYYY-MM-DD", ex));
+    }
+
+    /**
+     * Обработчик ошибок типизации параметров запроса.
+     *
+     * Spring бросает {@link MethodArgumentTypeMismatchException} когда параметр запроса
+     * не может быть сконвертирован в нужный тип (например, при {@code @DateTimeFormat}).
+     *
+     * @param ex исключение MethodArgumentTypeMismatchException
+     * @return ResponseEntity с 400 статусом и описанием ошибки
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<Map<String, String>> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        log.warn("Parameter type mismatch for '{}': {}", ex.getName(), ex.getMessage());
+        return ResponseEntity.badRequest().body(makeError(
+                "Невалидный формат параметра '" + ex.getName() + "'. Используйте YYYY-MM-DD для дат", ex));
     }
 
     /**

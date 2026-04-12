@@ -37,18 +37,19 @@ public class MessageFilter {
     }
 
     /**
-     * Создаёт {@link MessageFilter} из строковых параметров.
+     * Создаёт {@link MessageFilter} из уже разобранных параметров.
+     * Используется там, где даты уже распарсены (например, Spring @DateTimeFormat в контроллере).
      *
-     * @param startDate       начальная дата в формате YYYY-MM-DD, или {@code null}
-     * @param endDate         конечная дата в формате YYYY-MM-DD, или {@code null}
+     * @param startDate       начальная дата, или {@code null}
+     * @param endDate         конечная дата, или {@code null}
      * @param keywords        ключевые слова для включения, через запятую, или {@code null}
      * @param excludeKeywords ключевые слова для исключения, через запятую, или {@code null}
      * @return настроенный {@link MessageFilter}, или {@code null} если ни один параметр не задан
      */
-    public static MessageFilter fromParameters(String startDate, String endDate,
+    public static MessageFilter fromParameters(LocalDate startDate, LocalDate endDate,
                                              String keywords, String excludeKeywords) {
-        boolean hasFilters = isPresent(startDate)
-                || isPresent(endDate)
+        boolean hasFilters = startDate != null
+                || endDate != null
                 || isPresent(keywords)
                 || isPresent(excludeKeywords);
 
@@ -56,22 +57,19 @@ public class MessageFilter {
             return null;
         }
 
-        MessageFilter filter = new MessageFilter();
-
-        LocalDate parsedStart = isPresent(startDate) ? LocalDate.parse(startDate) : null;
-        LocalDate parsedEnd = isPresent(endDate) ? LocalDate.parse(endDate) : null;
-
-        if (parsedStart != null && parsedEnd != null && parsedStart.isAfter(parsedEnd)) {
+        if (startDate != null && endDate != null && startDate.isAfter(endDate)) {
             throw new IllegalArgumentException(
                     "startDate не может быть позже endDate: " + startDate + " > " + endDate);
         }
 
-        if (parsedStart != null) {
-            filter.withStartDate(parsedStart);
+        MessageFilter filter = new MessageFilter();
+
+        if (startDate != null) {
+            filter.withStartDate(startDate);
         }
 
-        if (parsedEnd != null) {
-            filter.withEndDate(parsedEnd);
+        if (endDate != null) {
+            filter.withEndDate(endDate);
         }
 
         if (isPresent(keywords)) {
@@ -87,6 +85,23 @@ public class MessageFilter {
         }
 
         return filter;
+    }
+
+    /**
+     * Создаёт {@link MessageFilter} из строковых параметров (даты в формате YYYY-MM-DD).
+     * Используется в тестах и местах где даты приходят как строки.
+     *
+     * @param startDate       начальная дата в формате YYYY-MM-DD, или {@code null}
+     * @param endDate         конечная дата в формате YYYY-MM-DD, или {@code null}
+     * @param keywords        ключевые слова для включения, через запятую, или {@code null}
+     * @param excludeKeywords ключевые слова для исключения, через запятую, или {@code null}
+     * @return настроенный {@link MessageFilter}, или {@code null} если ни один параметр не задан
+     */
+    public static MessageFilter fromParameters(String startDate, String endDate,
+                                             String keywords, String excludeKeywords) {
+        LocalDate parsedStart = isPresent(startDate) ? LocalDate.parse(startDate) : null;
+        LocalDate parsedEnd = isPresent(endDate) ? LocalDate.parse(endDate) : null;
+        return fromParameters(parsedStart, parsedEnd, keywords, excludeKeywords);
     }
 
     private static boolean isPresent(String value) {
