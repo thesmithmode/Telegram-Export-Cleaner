@@ -41,6 +41,9 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
 
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("dd.MM.yyyy");
     private static final long SESSION_EVICT_DELAY_MS = 30 * 60 * 1000L;
+    private static final String PROMPT_FROM_DATE = "\n\nВведите начальную дату в формате дд.мм.гггг\nНапример: 01.01.2024";
+    private static final String PROMPT_TO_DATE = "\n\nВведите конечную дату в формате дд.мм.гггг\nНапример: 31.12.2025";
+    private static final String PROMPT_TO_DATE_INLINE = " (дд.мм.гггг):";
 
     private static final String HELP_TEXT = """
             Этот бот экспортирует историю Telegram-чата и отправляет очищенный текст.
@@ -222,9 +225,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
             case CB_DATE_RANGE -> {
                 session.setState(UserSession.State.AWAITING_FROM_DATE);
                 messenger.editMessage(chatId, messageId,
-                        "📅 Чат: " + session.getChatDisplay()
-                                + "\n\nВведите начальную дату в формате дд.мм.гггг"
-                                + "\nНапример: 01.01.2024",
+                        "📅 Чат: " + session.getChatDisplay() + PROMPT_FROM_DATE,
                         buildFromDateKeyboard());
             }
             case CB_FROM_START -> {
@@ -232,9 +233,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
                 session.setState(UserSession.State.AWAITING_TO_DATE);
                 messenger.editMessage(chatId, messageId,
                         "📅 Чат: " + session.getChatDisplay()
-                                + "\nОт: начало чата"
-                                + "\n\nВведите конечную дату в формате дд.мм.гггг"
-                                + "\nНапример: 31.12.2025",
+                                + "\nОт: начало чата" + PROMPT_TO_DATE,
                         buildToDateKeyboard());
             }
             case CB_TO_TODAY -> {
@@ -257,9 +256,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
                 session.setToDate(null);
                 session.setState(UserSession.State.AWAITING_FROM_DATE);
                 messenger.editMessage(chatId, messageId,
-                        "📅 Чат: " + session.getChatDisplay()
-                                + "\n\nВведите начальную дату в формате дд.мм.гггг"
-                                + "\nНапример: 01.01.2024",
+                        "📅 Чат: " + session.getChatDisplay() + PROMPT_FROM_DATE,
                         buildFromDateKeyboard());
             }
             case CB_CANCEL_EXPORT -> {
@@ -281,7 +278,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         session.setFromDate(date.atStartOfDay().toString());
         session.setState(UserSession.State.AWAITING_TO_DATE);
         messenger.sendWithKeyboard(chatId,
-                "📅 От: " + date.format(DATE_FORMAT) + "\n\nВведите конечную дату (дд.мм.гггг):",
+                "📅 От: " + date.format(DATE_FORMAT) + "\n\nВведите конечную дату" + PROMPT_TO_DATE_INLINE,
                 buildToDateKeyboard());
     }
 

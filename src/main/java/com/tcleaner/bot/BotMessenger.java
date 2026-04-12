@@ -30,11 +30,14 @@ public class BotMessenger {
         this.telegramClient = telegramClient;
     }
 
-    public void send(long chatId, String text) {
-        SendMessage message = SendMessage.builder()
+    private SendMessage.SendMessageBuilder<?, ?> buildMessage(long chatId, String text) {
+        return SendMessage.builder()
                 .chatId(String.valueOf(chatId))
-                .text(text)
-                .build();
+                .text(text);
+    }
+
+    public void send(long chatId, String text) {
+        SendMessage message = buildMessage(chatId, text).build();
         try {
             telegramClient.execute(message);
             log.debug("Сообщение отправлено в чат {}: {} символов", chatId, text.length());
@@ -44,9 +47,7 @@ public class BotMessenger {
     }
 
     public void sendWithKeyboard(long chatId, String text, InlineKeyboardMarkup keyboard) {
-        SendMessage message = SendMessage.builder()
-                .chatId(String.valueOf(chatId))
-                .text(text)
+        SendMessage message = buildMessage(chatId, text)
                 .replyMarkup(keyboard)
                 .build();
         try {
@@ -57,9 +58,7 @@ public class BotMessenger {
     }
 
     public int sendWithKeyboardGetId(long chatId, String text, InlineKeyboardMarkup keyboard) {
-        SendMessage message = SendMessage.builder()
-                .chatId(String.valueOf(chatId))
-                .text(text)
+        SendMessage message = buildMessage(chatId, text)
                 .replyMarkup(keyboard)
                 .build();
         try {

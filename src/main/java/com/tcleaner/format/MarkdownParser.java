@@ -69,11 +69,7 @@ public class MarkdownParser {
         return "[emoji_" + documentId + "]";
     }
 
-    public static String parseEntityList(List<JsonNode> entities) {
-        if (entities == null || entities.isEmpty()) {
-            return "";
-        }
-
+    private static String parseEntityArray(Iterable<JsonNode> entities) {
         StringBuilder sb = new StringBuilder();
         for (JsonNode entity : entities) {
             sb.append(parseEntity(entity));
@@ -81,7 +77,12 @@ public class MarkdownParser {
         return sb.toString();
     }
 
-
+    public static String parseEntityList(List<JsonNode> entities) {
+        if (entities == null || entities.isEmpty()) {
+            return "";
+        }
+        return parseEntityArray(entities);
+    }
 
     public static String parseText(JsonNode node) {
         if (node == null || node.isNull()) {
@@ -93,11 +94,7 @@ public class MarkdownParser {
         }
 
         if (node.isArray()) {
-            StringBuilder sb = new StringBuilder();
-            for (JsonNode element : node) {
-                sb.append(parseEntity(element));
-            }
-            return sb.toString();
+            return parseEntityArray(node);
         }
 
         return "";
