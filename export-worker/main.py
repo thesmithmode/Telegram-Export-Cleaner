@@ -406,12 +406,12 @@ class ExportWorker:
                 and job.user_chat_id
             ):
                 try:
-                    await self.java_client._notify_user_failure(
+                    await self.java_client.notify_user_failure(
                         job.user_chat_id, job.task_id, error_text
                     )
                 except Exception as fallback_err:
                     logger.error(
-                        f"Direct _notify_user_failure also failed for "
+                        f"Direct notify_user_failure also failed for "
                         f"{job.task_id}: {fallback_err}"
                     )
 

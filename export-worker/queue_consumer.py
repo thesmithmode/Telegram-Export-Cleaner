@@ -164,8 +164,7 @@ class QueueConsumer:
         if not self.redis_client:
             return
         try:
-            import json as _json
-            dlq_entry = _json.dumps({
+            dlq_entry = json.dumps({
                 "raw": job_json,
                 "reason": reason,
                 "timestamp": datetime.now().isoformat(),
@@ -196,8 +195,7 @@ class QueueConsumer:
         if not self.redis_client:
             return
         try:
-            import json as _json
-            meta = _json.dumps({"payload": job_json, "queue": staging_queue})
+            meta = json.dumps({"payload": job_json, "queue": staging_queue})
             await self.redis_client.setex(
                 f"staging:meta:{task_id}", JOB_MARKER_TTL, meta
             )
@@ -208,10 +206,9 @@ class QueueConsumer:
         if not self.redis_client:
             return
         try:
-            import json as _json
             raw = await self.redis_client.get(f"staging:meta:{task_id}")
             if raw:
-                meta = _json.loads(raw)
+                meta = json.loads(raw)
                 await self.redis_client.lrem(meta["queue"], 1, meta["payload"])
             await self.redis_client.delete(f"staging:meta:{task_id}")
         except Exception as e:
@@ -257,7 +254,6 @@ class QueueConsumer:
             completed_key = f"job:completed:{task_id}"
 
             # Resolve staging metadata before pipeline (needs a GET)
-            import json as _json
             raw = await self.redis_client.get(f"staging:meta:{task_id}")
 
             # Batch the 4 write operations into one pipeline (4 RTT → 1 RTT)
