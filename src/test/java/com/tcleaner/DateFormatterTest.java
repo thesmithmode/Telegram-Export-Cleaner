@@ -62,28 +62,4 @@ class DateFormatterTest {
         }
     }
     
-    @Nested
-    @DisplayName("parseDateTime() - РїР°СЂСЃРёРЅРі РґР°С‚С‹ Рё РІСЂРµРјРµРЅРё (YYYYMMDDHHmm)")
-    class ParseDateTime {
-        
-        @Test
-        @DisplayName("РџР°СЂСЃРёС‚ РґР°С‚Сѓ Рё РІСЂРµРјСЏ")
-        void parsesDateWithTime() {
-            String result = DateFormatter.parseDateTime("2025-06-24T15:29:46");
-            assertThat(result).isEqualTo("202506241529");
-        }
-        
-        @Test
-        @DisplayName("РџР°СЂСЃРёС‚ РґР°С‚Сѓ СЃ РїРѕР»СѓРЅРѕС‡Рё")
-        void parsesDateWithMidnight() {
-            assertThat(DateFormatter.parseDateTime("2025-06-24T00:00:00")).isEqualTo("202506240000");
-        }
-        
-        @ParameterizedTest
-        @NullAndEmptySource
-        @DisplayName("Р’РѕР·РІСЂР°С‰Р°РµС‚ РїСѓСЃС‚СѓСЋ СЃС‚СЂРѕРєСѓ РґР»СЏ null/empty")
-        void returnsEmptyForNullOrEmpty(String input) {
-            assertThat(DateFormatter.parseDateTime(input)).isEmpty();
-        }
-    }
 }

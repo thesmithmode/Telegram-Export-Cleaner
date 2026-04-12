@@ -267,7 +267,7 @@ class QueueConsumer:
             pipe.srem("staging:jobs", task_id)
             if raw:
                 try:
-                    meta = _json.loads(raw)
+                    meta = json.loads(raw)
                     pipe.lrem(meta["queue"], 1, meta["payload"])
                 except Exception:
                     pass

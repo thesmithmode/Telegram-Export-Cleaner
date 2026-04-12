@@ -680,8 +680,8 @@ class TestExportWorkerProgressReporting:
 
         assert result is True
         # User should be notified of error
-        worker.java_client._notify_user_failure.assert_called_once()
-        call_args = worker.java_client._notify_user_failure.call_args
+        worker.java_client.notify_user_failure.assert_called_once()
+        call_args = worker.java_client.notify_user_failure.call_args
         assert call_args[0][0] == 42  # user_chat_id
 
 class TestExportWorkerCleanup:

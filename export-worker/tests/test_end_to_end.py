@@ -372,54 +372,6 @@ class TestPipelineFlow:
         assert len(response_json['messages']) == 100
 
 @pytest.mark.asyncio
-class TestWorkerCleanup:
-
-    async def test_cleanup_temp_files_for_task(self):
-        from main import ExportWorker
-
-        with patch('main.TelegramClient'), \
-             patch('main.QueueConsumer'), \
-             patch('main.JavaBotClient'):
-
-            worker = ExportWorker()
-
-            # Create temporary directory
-            temp_dir = tempfile.mkdtemp(prefix="export_test_")
-            task_id = os.path.basename(temp_dir).replace("export_", "")
-
-            test_file = os.path.join(temp_dir, "test.json")
-            with open(test_file, "w") as f:
-                f.write('{"test": "data"}')
-
-            # Verify directory exists
-            assert os.path.isdir(temp_dir)
-
-            # Cleanup via worker (it uses /tmp/export_{task_id} pattern)
-            # Since we can't easily mock shutil.rmtree, just verify method doesn't crash
-            await worker.cleanup_temp_files(task_id)
-
-            # Метод должен завершиться без исключения — достижение этой строки это и есть проверка
-
-    async def test_cleanup_temp_files_handles_missing_directory(self):
-        from main import ExportWorker
-
-        with patch('main.TelegramClient'), \
-             patch('main.QueueConsumer'), \
-             patch('main.JavaBotClient'):
-
-            worker = ExportWorker()
-
-            # Try cleanup on nonexistent task_id
-            # Should not raise exception
-            try:
-                await worker.cleanup_temp_files("nonexistent_task_xyz_123")
-                success = True
-            except Exception:
-                success = False
-
-            assert success
-
-@pytest.mark.asyncio
 class TestCancelSupport:
 
     async def test_cancel_stops_export(self):

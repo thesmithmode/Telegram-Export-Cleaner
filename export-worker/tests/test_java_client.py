@@ -545,7 +545,7 @@ class TestNotifyUserFailure:
         try:
             client._http_client.post = AsyncMock(return_value=MagicMock(status_code=200))
 
-            await client._notify_user_failure(123, "task_1", "Chat not accessible")
+            await client.notify_user_failure(123, "task_1", "Chat not accessible")
 
             client._http_client.post.assert_called_once()
             call_args = client._http_client.post.call_args
@@ -561,7 +561,7 @@ class TestNotifyUserFailure:
         try:
             client._http_client.post = AsyncMock(side_effect=Exception("connection refused"))
             # Must not raise
-            await client._notify_user_failure(123, "task_1", "err")
+            await client.notify_user_failure(123, "task_1", "err")
         finally:
             p.stop()
 
