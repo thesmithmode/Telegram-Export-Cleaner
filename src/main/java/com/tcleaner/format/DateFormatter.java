@@ -13,32 +13,25 @@ public class DateFormatter {
     private DateFormatter() {
     }
 
-    
-    public static LocalDate parseDateToLocalDate(String isoDateTime) {
+    private static LocalDateTime parseToLocalDateTime(String isoDateTime) {
         if (isoDateTime == null || isoDateTime.isBlank()) {
             return null;
         }
-
         try {
-            LocalDateTime dateTime = LocalDateTime.parse(isoDateTime, INPUT_FORMAT);
-            return dateTime.toLocalDate();
+            return LocalDateTime.parse(isoDateTime, INPUT_FORMAT);
         } catch (DateTimeParseException ex) {
             return null;
         }
     }
 
-    
-    public static String parseDate(String isoDateTime) {
-        if (isoDateTime == null || isoDateTime.isBlank()) {
-            return "";
-        }
+    public static LocalDate parseDateToLocalDate(String isoDateTime) {
+        LocalDateTime dateTime = parseToLocalDateTime(isoDateTime);
+        return dateTime != null ? dateTime.toLocalDate() : null;
+    }
 
-        try {
-            LocalDateTime dateTime = LocalDateTime.parse(isoDateTime, INPUT_FORMAT);
-            return dateTime.format(OUTPUT_DATE_FORMAT);
-        } catch (DateTimeParseException ex) {
-            return "";
-        }
+    public static String parseDate(String isoDateTime) {
+        LocalDateTime dateTime = parseToLocalDateTime(isoDateTime);
+        return dateTime != null ? dateTime.format(OUTPUT_DATE_FORMAT) : "";
     }
 
 }

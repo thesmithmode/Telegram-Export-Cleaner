@@ -40,6 +40,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
             Pattern.compile("^@([a-zA-Z][a-zA-Z0-9_]{3,})$");
 
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("dd.MM.yyyy");
+    private static final long SESSION_EVICT_DELAY_MS = 30 * 60 * 1000L;
 
     private static final String HELP_TEXT = """
             Этот бот экспортирует историю Telegram-чата и отправляет очищенный текст.
@@ -460,7 +461,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     }
 
     
-    @Scheduled(fixedDelay = 30 * 60 * 1000)
+    @Scheduled(fixedDelay = SESSION_EVICT_DELAY_MS)
     public void evictStaleSessions() {
         Instant cutoff = Instant.now().minus(Duration.ofHours(2));
         int beforeSize = sessions.size();

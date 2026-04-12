@@ -138,7 +138,7 @@ public class MessageFilter {
         }
 
         if (startDate != null || endDate != null) {
-            String dateStr = message.has("date") ? message.get("date").asText() : "";
+            String dateStr = JsonUtils.getText(message, "date");
             LocalDate messageDate = DateFormatter.parseDateToLocalDate(dateStr);
 
             if (messageDate == null) {
