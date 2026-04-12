@@ -90,5 +90,5 @@ README.md                     Быстрый старт
 
 - **Java** — `src/test/java/com/tcleaner/`: JUnit 5 + AssertJ, 80% JaCoCo, Embedded Redis (ТОЛЬКО в CI)
 - **Python** — `export-worker/tests/`: pytest + conftest.py, AsyncMock, SQLite tmp_path (ТОЛЬКО в CI)
-- Все публичные классы: JavaDoc (Java) + docstrings (Python)
+- **Документация:** только README.md и файлы в `docs/`. JavaDoc и docstrings в исходниках — только если логика нетривиальна и требует пояснения
 - Code style: checkstyle.xml (Java), PEP 8 (Python)
