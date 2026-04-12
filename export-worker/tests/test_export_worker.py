@@ -1,8 +1,3 @@
-"""
-Tests for ExportWorker main class.
-
-Covers job processing, error handling, and component lifecycle.
-"""
 
 import pytest
 import asyncio
@@ -14,21 +9,16 @@ from java_client import ProgressTracker
 from message_cache import MessageCache
 from models import ExportRequest, ExportedMessage
 
-
 def _make_mock_java_client():
-    """Create AsyncMock java_client with working ProgressTracker support."""
     client = AsyncMock()
     client.send_progress_update = AsyncMock(return_value=12345)
     client.create_progress_tracker = lambda uid, tid: ProgressTracker(client, uid, tid)
     return client
 
-
 class TestExportWorkerInitialization:
-    """Test worker initialization."""
 
     @pytest.mark.asyncio
     async def test_initialize_success(self):
-        """Test successful initialization of all components."""
         worker = ExportWorker()
 
         # Mock the component creation
@@ -56,7 +46,6 @@ class TestExportWorkerInitialization:
 
     @pytest.mark.asyncio
     async def test_initialize_queue_failure(self):
-        """Test initialization failure when queue connection fails."""
         worker = ExportWorker()
 
         with patch('main.create_queue_consumer') as mock_queue_creator:
@@ -68,13 +57,10 @@ class TestExportWorkerInitialization:
 
             assert result is False
 
-
 class TestExportWorkerJobProcessing:
-    """Test job processing logic."""
 
     @pytest.fixture
     def worker(self):
-        """Create worker with mocked components."""
         worker = ExportWorker()
         worker.queue_consumer = AsyncMock()
         worker.telegram_client = AsyncMock()
@@ -86,7 +72,6 @@ class TestExportWorkerJobProcessing:
 
     @pytest.mark.asyncio
     async def test_process_job_success(self, worker):
-        """Test successful job processing."""
         job = ExportRequest(
             task_id="test_task_123",
             user_id=123,
@@ -130,7 +115,6 @@ class TestExportWorkerJobProcessing:
 
     @pytest.mark.asyncio
     async def test_process_job_chat_not_accessible(self, worker):
-        """Test job processing when chat is not accessible."""
         job = ExportRequest(
             task_id="test_task_456",
             user_id=123,
@@ -158,7 +142,6 @@ class TestExportWorkerJobProcessing:
 
     @pytest.mark.asyncio
     async def test_process_job_export_error(self, worker):
-        """Test job processing when export fails."""
         job = ExportRequest(
             task_id="test_task_789",
             user_id=123,
@@ -193,7 +176,6 @@ class TestExportWorkerJobProcessing:
 
     @pytest.mark.asyncio
     async def test_process_job_response_failure(self, worker):
-        """Test job processing when sending response to Java fails."""
         job = ExportRequest(
             task_id="test_task_101",
             user_id=123,
@@ -224,22 +206,12 @@ class TestExportWorkerJobProcessing:
         assert worker.jobs_failed == 1
         worker.queue_consumer.mark_job_failed.assert_called()
 
-
 def _make_pipeline_mock():
-    """Create a redis-py-style pipeline mock.
-
-    In redis-py async: `client.pipeline()` is a SYNC call returning a pipe
-    object; the queued commands (set/delete/srem/lrem) are sync too; only
-    `pipe.execute()` is awaited. AsyncMock would turn `pipeline()` into a
-    coroutine, which breaks `pipe = client.pipeline()` in real code.
-    """
     pipe = MagicMock()
     pipe.execute = AsyncMock(return_value=[True, True])
     return pipe
 
-
 class TestChatIdNormalization:
-    """Test that chat_id is normalized to canonical numeric ID after verify_and_get_info."""
 
     @pytest.fixture
     def worker(self):
@@ -260,8 +232,6 @@ class TestChatIdNormalization:
 
     @pytest.mark.asyncio
     async def test_chat_id_normalized_from_username_to_numeric(self, worker):
-        """Если пользователь передаёт username, chat_id нормализуется до числового ID
-        из chat_info['id'] — чтобы кэш по числовому ID тоже попадал в цель."""
         canonical_id = -1002477958568
         job = ExportRequest(
             task_id="norm_task_1", user_id=1, user_chat_id=1,
@@ -309,11 +279,6 @@ class TestChatIdNormalization:
 
     @pytest.mark.asyncio
     async def test_chat_id_no_change_when_already_canonical(self, worker):
-        """Если chat_id уже совпадает с chat_info['id'], нормализация не меняет ничего.
-
-        Но canonical-маппинг всё равно пишется (идемпотентно) — это документированное
-        поведение, тест его фиксирует.
-        """
         canonical_id = -1002477958568
         job = ExportRequest(
             task_id="norm_task_2", user_id=1, user_chat_id=1,
@@ -360,30 +325,10 @@ class TestChatIdNormalization:
         )
         worker._test_pipe.execute.assert_awaited_once()
 
-
 class TestThreePathCaching:
-    """STRICT T2 — интеграционные тесты 3-путевого кэша ExportWorker с реальным SQLite.
-
-    Эти тесты покрывают критичную бизнес-логику — то, чем воркер отличается от
-    наивного «качай всё каждый раз»:
-
-    1. **date-hit**: все сообщения в запрошенном диапазоне дат уже в кэше →
-       Telegram НЕ дёргается, данные читаются из SQLite.
-    2. **date-partial**: часть диапазона в кэше, часть — нет. Дёргаем Telegram
-       только на missing gaps и мерджим результат.
-    3. **id-path (без date filter)**: кэш частичный, нужно добрать новые сверху,
-       заполнить gaps внутри, дотянуть старые снизу.
-
-    Поломка этих тестов = непредсказуемая деградация кэша в проде: лишние
-    запросы к Telegram → rate limit, лишние записи → HDD I/O и eviction,
-    или наоборот — пропуски (неполный экспорт).
-
-    SQLite реальный (tmp_path), Telegram/Java/Redis — моки.
-    """
 
     @pytest.fixture
     async def worker_with_cache(self, tmp_path):
-        """Worker с РЕАЛЬНЫМ MessageCache и моками на Telegram/Java/Redis."""
         worker = ExportWorker()
         worker.queue_consumer = AsyncMock()
         worker.queue_consumer.mark_job_processing = AsyncMock()
@@ -415,12 +360,6 @@ class TestThreePathCaching:
 
     @pytest.mark.asyncio
     async def test_date_hit_does_not_call_telegram_history(self, worker_with_cache):
-        """date-HIT: если весь диапазон в кэше — get_chat_history НЕ вызывается.
-
-        Это главное сохранение ресурса: ни одного лишнего RPC к Telegram,
-        ни одной лишней записи в SQLite. Поломка = раньше времени бьётся
-        rate limit и закрывает экспорт для других юзеров.
-        """
         worker = worker_with_cache
         CHAT_ID = 555001
 
@@ -477,11 +416,6 @@ class TestThreePathCaching:
 
     @pytest.mark.asyncio
     async def test_date_partial_miss_fetches_only_missing_gap(self, worker_with_cache):
-        """date-MISS (частичный): Telegram дёргается ТОЛЬКО на отсутствующие даты.
-
-        Кэш содержит Jan 1-5 и Jan 11-15. Запрос Jan 1-15 должен вызвать
-        get_chat_history ровно на gap Jan 6-10, не больше.
-        """
         worker = worker_with_cache
         CHAT_ID = 555002
 
@@ -554,11 +488,6 @@ class TestThreePathCaching:
 
     @pytest.mark.asyncio
     async def test_id_path_fetches_newer_above_cache_max(self, worker_with_cache):
-        """id-path: без date-фильтра кэш дотягивает только новые сообщения выше max_id.
-
-        Кэш содержит id=1..50. Чат реально имеет id=1..60. Worker должен
-        запросить у Telegram только id > 50 (новые сверху), а не весь чат.
-        """
         worker = worker_with_cache
         CHAT_ID = 555003
 
@@ -625,11 +554,6 @@ class TestThreePathCaching:
 
     @pytest.mark.asyncio
     async def test_id_path_full_miss_triggers_full_fetch(self, worker_with_cache):
-        """id-path FULL MISS: пустой кэш → полный фетч и сохранение всех сообщений.
-
-        После успешного экспорта кэш не должен остаться пустым — иначе следующий
-        экспорт повторит всю работу (ломает весь смысл кэша).
-        """
         worker = worker_with_cache
         CHAT_ID = 555004
 
@@ -665,13 +589,10 @@ class TestThreePathCaching:
         )
         assert await worker.message_cache.get_cached_ranges(CHAT_ID) == [[1, 20]]
 
-
 class TestExportWorkerProgressReporting:
-    """Test progress reporting to user."""
 
     @pytest.fixture
     def worker(self):
-        """Create worker with mocked components."""
         worker = ExportWorker()
         worker.queue_consumer = AsyncMock()
         worker.telegram_client = AsyncMock()
@@ -689,7 +610,6 @@ class TestExportWorkerProgressReporting:
 
     @pytest.mark.asyncio
     async def test_fetch_all_sends_started_with_total(self, worker):
-        """_fetch_all_messages sends started notification with total count."""
         job = ExportRequest(
             task_id="progress_1", user_id=1, user_chat_id=1,
             chat_id=456, limit=0, offset_id=0,
@@ -713,7 +633,6 @@ class TestExportWorkerProgressReporting:
 
     @pytest.mark.asyncio
     async def test_fetch_all_sends_5pct_milestones(self, worker):
-        """_fetch_all_messages sends progress at every 5% milestone."""
         job = ExportRequest(
             task_id="progress_2", user_id=1, user_chat_id=1,
             chat_id=456, limit=0, offset_id=0,
@@ -741,7 +660,6 @@ class TestExportWorkerProgressReporting:
 
     @pytest.mark.asyncio
     async def test_process_job_exception_notifies_user(self, worker):
-        """Exception in process_job sends failure notification to user."""
         job = ExportRequest(
             task_id="error_1", user_id=1, user_chat_id=42,
             chat_id=456, limit=0, offset_id=0,
@@ -766,13 +684,10 @@ class TestExportWorkerProgressReporting:
         call_args = worker.java_client._notify_user_failure.call_args
         assert call_args[0][0] == 42  # user_chat_id
 
-
 class TestExportWorkerCleanup:
-    """Test cleanup logic."""
 
     @pytest.mark.asyncio
     async def test_cleanup_disconnects_all(self):
-        """Test that cleanup disconnects all components."""
         worker = ExportWorker()
         worker.running = True
         worker.queue_consumer = AsyncMock()
@@ -788,7 +703,6 @@ class TestExportWorkerCleanup:
 
     @pytest.mark.asyncio
     async def test_cleanup_handles_missing_components(self):
-        """Test cleanup when components are None."""
         worker = ExportWorker()
         worker.running = True
         worker.queue_consumer = None
@@ -800,9 +714,7 @@ class TestExportWorkerCleanup:
 
         assert worker.running is False
 
-
 class TestExportWorkerWithCache:
-    """Test job processing with cache enabled."""
 
     @pytest.fixture
     async def worker(self, tmp_path):
@@ -824,7 +736,6 @@ class TestExportWorkerWithCache:
 
     @pytest.mark.asyncio
     async def test_first_export_populates_cache(self, worker):
-        """First export of a chat should populate cache."""
         job = ExportRequest(
             task_id="cache_test_1",
             user_id=123,
@@ -859,7 +770,6 @@ class TestExportWorkerWithCache:
 
     @pytest.mark.asyncio
     async def test_second_export_uses_cache(self, worker):
-        """Second export should fetch only new messages, reuse cached."""
         job = ExportRequest(
             task_id="cache_test_2",
             user_id=999,
@@ -910,9 +820,7 @@ class TestExportWorkerWithCache:
         result_ids = sorted([m.id async for m in kwargs["messages"]])
         assert result_ids == [1, 2, 3, 4, 5]
 
-
 class TestExportWorkerDateCache:
-    """Test date-range export with cache (Vasya→Petya→Kolya scenario)."""
 
     @pytest.fixture
     async def worker(self, tmp_path):
@@ -934,12 +842,6 @@ class TestExportWorkerDateCache:
 
     @pytest.mark.asyncio
     async def test_vasya_petya_kolya_date_export(self, worker):
-        """
-        1. Vasya: exports chat for Jan 11-13 → fetched from Telegram, cached
-        2. Petya: exports chat for Jan 1-8 → fetched from Telegram, cached
-        3. Kolya: exports chat for Jan 1-15 → cache provides 1-8 and 11-13,
-           only fetches 9-10 and 14-15 from Telegram
-        """
         worker.telegram_client.verify_and_get_info = AsyncMock(
             return_value=(True, {"id": -1001001001, "title": "Test Chat", "type": "supergroup"}, None)
         )
@@ -1034,19 +936,14 @@ class TestExportWorkerDateCache:
         date_ranges = await worker.message_cache.get_cached_date_ranges(-1001001001)
         assert date_ranges == [["2025-01-01", "2025-01-15"]]
 
-
 class TestExportWorkerMemoryLogging:
-    """Test memory and resource logging."""
 
     def test_log_memory_usage(self):
-        """Test memory logging doesn't crash."""
         worker = ExportWorker()
         # Should not raise even without psutil
         worker.log_memory_usage("TEST")
 
-
 class TestCancelBeforeStart:
-    """Тесты отмены задачи до начала обработки (задача ещё в очереди)."""
 
     @pytest.fixture
     def worker(self):
@@ -1073,7 +970,6 @@ class TestCancelBeforeStart:
 
     @pytest.mark.asyncio
     async def test_job_cancelled_before_start_completes_without_export(self, worker):
-        """Если задача отменена ещё до начала обработки, воркер завершает её без экспорта."""
         job = ExportRequest(
             task_id="cancel_early_task",
             user_id=1,
@@ -1102,7 +998,6 @@ class TestCancelBeforeStart:
 
     @pytest.mark.asyncio
     async def test_active_processing_job_set_at_start_and_cleared_at_end(self, worker):
-        """active_processing_job ключ устанавливается при старте и удаляется при завершении."""
         job = ExportRequest(
             task_id="active_job_test",
             user_id=2,
@@ -1137,13 +1032,10 @@ class TestCancelBeforeStart:
             f"active_processing_job не удалён. Вызовы delete: {delete_calls}"
         )
 
-
 class TestActiveProcessingJobHelpers:
-    """Тесты вспомогательных методов set/clear active_processing_job."""
 
     @pytest.mark.asyncio
     async def test_set_active_processing_job(self):
-        """set_active_processing_job вызывает redis.set с правильным ключом."""
         worker = ExportWorker()
         worker.control_redis = AsyncMock()
         worker.control_redis.set = AsyncMock()
@@ -1156,7 +1048,6 @@ class TestActiveProcessingJobHelpers:
 
     @pytest.mark.asyncio
     async def test_clear_active_processing_job(self):
-        """clear_active_processing_job вызывает redis.delete с правильным ключом."""
         worker = ExportWorker()
         worker.control_redis = AsyncMock()
         worker.control_redis.delete = AsyncMock()
@@ -1167,7 +1058,6 @@ class TestActiveProcessingJobHelpers:
 
     @pytest.mark.asyncio
     async def test_set_active_processing_job_no_redis(self):
-        """set_active_processing_job не падает если control_redis не инициализирован."""
         worker = ExportWorker()
         worker.control_redis = None
 
@@ -1176,16 +1066,13 @@ class TestActiveProcessingJobHelpers:
 
     @pytest.mark.asyncio
     async def test_clear_active_processing_job_no_redis(self):
-        """clear_active_processing_job не падает если control_redis не инициализирован."""
         worker = ExportWorker()
         worker.control_redis = None
 
         # Не должно бросать исключение
         await worker.clear_active_processing_job()
 
-
 class TestFloodWaitHeartbeat:
-    """on_floodwait callback передаётся в get_chat_history и вызывается при rate limit."""
 
     @pytest.fixture
     def worker(self):
@@ -1202,7 +1089,6 @@ class TestFloodWaitHeartbeat:
 
     @pytest.mark.asyncio
     async def test_on_floodwait_called_with_wait_time(self, worker):
-        """Когда get_chat_history вызывает on_floodwait — он должен быть передан из _export_with_date_cache."""
         from java_client import ProgressTracker
 
         floodwait_calls = []

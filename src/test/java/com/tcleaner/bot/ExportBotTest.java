@@ -25,12 +25,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/**
- * Юнит-тесты для {@link ExportBot}.
- *
- * <p>Покрывает: обработку идентификатора чата, интерактивный wizard выбора
- * диапазона дат через callback-кнопки, ручной ввод дат и управление экспортом.</p>
- */
 class ExportBotTest {
 
     private ExportJobProducer jobProducerMock;

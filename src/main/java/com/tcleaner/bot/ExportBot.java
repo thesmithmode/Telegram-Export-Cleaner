@@ -27,33 +27,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/**
- * Telegram-бот для запуска экспорта чатов (Версия 10.0.0).
- *
- * <p>Принимает идентификатор целевого чата в формате username (@channel) или ссылки
- * (https://t.me/channel), после чего предлагает интерактивный wizard выбора диапазона
- * экспорта через inline-кнопки.</p>
- *
- * <h3>Состояния сессии</h3>
- * <ul>
- *   <li>IDLE — ожидание username или ссылки</li>
- *   <li>AWAITING_DATE_CHOICE — показан wizard: «📦 Весь чат» или «📅 Указать даты»</li>
- *   <li>AWAITING_FROM_DATE — ввод начальной даты (дд.мм.гггг) или кнопка «⏮ С начала чата»</li>
- *   <li>AWAITING_TO_DATE — ввод конечной даты (дд.мм.гггг) или кнопка «⏭ До сегодня»</li>
- * </ul>
- *
- * <h3>Команды</h3>
- * <ul>
- *   <li>/start — справка, автоматически снимает устаревшую reply-клавиатуру</li>
- *   <li>/cancel — отмена активного экспорта</li>
- *   <li>@username, https://t.me/username — запуск диалога</li>
- * </ul>
- *
- * <p>Бот работает только в личных сообщениях (private chat). Сообщения из групп игнорируются.</p>
- *
- * <p>Защита от параллельных экспортов через Redis SET NX.
- * Сессии автоматически очищаются через {@link #evictStaleSessions()} каждые 30 минут.</p>
- */
 @Component
 @ConditionalOnExpression("'${telegram.bot.token:}' != ''")
 public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadUpdateConsumer {
@@ -391,9 +364,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         session.reset();
     }
 
-    /**
-     * Отправляет меню выбора диапазона дат с inline-кнопками.
-     */
+    
     private void sendDateChoiceMenu(long chatId, String display) {
         messenger.sendWithKeyboard(chatId,
                 "📋 Чат: " + display + "\n\nВыберите диапазон экспорта:",
@@ -438,11 +409,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
                 .build();
     }
 
-    /**
-     * Быстрый экспорт за последние N календарных дней (включая сегодня).
-     * Устанавливает fromDate = (сегодня - (days - 1)), toDate = null (= до сегодня)
-     * и сразу стартует задачу, редактируя исходное сообщение выбора диапазона.
-     */
+    
     private void startQuickRangeExport(long chatId, long userId, int messageId, int days) {
         UserSession session = getSession(userId);
         LocalDate from = LocalDate.now().minusDays(days - 1L);
@@ -481,10 +448,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
                 .build();
     }
 
-    /**
-     * Проверяет наличие активного экспорта у пользователя.
-     * Если есть — отправляет уведомление и возвращает true.
-     */
+    
     private boolean checkActiveExportAndNotify(long chatId, long userId) {
         String activeTaskId = jobProducer.getActiveExport(userId);
         if (activeTaskId != null) {
@@ -495,9 +459,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         return false;
     }
 
-    /**
-     * Очистка сессий старше 2 часов.
-     */
+    
     @Scheduled(fixedDelay = 30 * 60 * 1000)
     public void evictStaleSessions() {
         Instant cutoff = Instant.now().minus(Duration.ofHours(2));

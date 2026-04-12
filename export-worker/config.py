@@ -1,16 +1,9 @@
-"""
-Configuration management for Export Worker.
-
-Loads settings from environment variables with defaults.
-"""
 
 from typing import Optional
 from pydantic import ConfigDict, field_validator
 from pydantic_settings import BaseSettings
 
-
 class Settings(BaseSettings):
-    """Export Worker configuration from environment variables."""
 
     model_config = ConfigDict(
         env_file=".env",
@@ -89,7 +82,6 @@ class Settings(BaseSettings):
         # Only required for file-based session (development)
         # Return empty string if not provided - will use SESSION_STRING instead
         return v or ""
-
 
 # Global settings instance
 settings = Settings()

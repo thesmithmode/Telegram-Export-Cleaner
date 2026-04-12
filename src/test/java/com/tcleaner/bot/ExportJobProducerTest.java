@@ -27,12 +27,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/**
- * Тесты для ExportJobProducer.
- *
- * Проверяет корректность управления Redis очередью, защиты от дубликатов (SET NX),
- * и функции отмены экспорта.
- */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("ExportJobProducer")
 class ExportJobProducerTest {

@@ -1,19 +1,3 @@
-"""
-MessageCache: SQLite-backed message cache stored on disk (HDD/SSD).
-
-Replaces the previous Redis sorted-set implementation.  All message data lives
-in a single SQLite file, leaving Redis free for the job queue and short-lived
-state only.
-
-Schema:
-  messages          — msgpack blobs indexed by (chat_id, msg_id) and msg_ts
-  chat_id_ranges    — merged [min_id, max_id] intervals per chat
-  chat_date_ranges  — merged [from_date, to_date] intervals per chat
-  chat_meta         — LRU tracking: last_accessed, msg_count, size_bytes
-
-Capacity example (30 GB HDD, 25 GB budget):
-  ~400 full chats of 250k messages  |  ~2000 average chats of 50k messages
-"""
 
 import logging
 import os
@@ -32,9 +16,7 @@ logger = logging.getLogger(__name__)
 _FETCH_CHUNK = 1_000   # rows per fetchmany — O(1000) RAM peak
 _STORE_BATCH = 1_000   # rows per executemany INSERT
 
-
 class MessageCache:
-    """Per-chat message cache backed by SQLite on disk."""
 
     def __init__(
         self,
@@ -56,56 +38,16 @@ class MessageCache:
     # ------------------------------------------------------------------ #
 
     async def initialize(self):
-        """Open SQLite connection and create tables (idempotent)."""
         if not self.enabled:
             return
         db_dir = os.path.dirname(self.db_path)
         if db_dir:
             os.makedirs(db_dir, exist_ok=True)
         self._db = await aiosqlite.connect(self.db_path)
-        await self._db.executescript("""
-            PRAGMA journal_mode=WAL;
-            PRAGMA synchronous=NORMAL;
-            PRAGMA cache_size=-32000;
-            PRAGMA temp_store=MEMORY;
-            PRAGMA mmap_size=268435456;
-
-            CREATE TABLE IF NOT EXISTS messages (
-                chat_id  INTEGER NOT NULL,
-                msg_id   INTEGER NOT NULL,
-                msg_ts   INTEGER NOT NULL,
-                data     BLOB    NOT NULL,
-                PRIMARY KEY (chat_id, msg_id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_msg_ts
-                ON messages(chat_id, msg_ts);
-
-            CREATE TABLE IF NOT EXISTS chat_id_ranges (
-                chat_id  INTEGER NOT NULL,
-                min_id   INTEGER NOT NULL,
-                max_id   INTEGER NOT NULL,
-                PRIMARY KEY (chat_id, min_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS chat_date_ranges (
-                chat_id    INTEGER NOT NULL,
-                from_date  TEXT    NOT NULL,
-                to_date    TEXT    NOT NULL,
-                PRIMARY KEY (chat_id, from_date)
-            );
-
-            CREATE TABLE IF NOT EXISTS chat_meta (
-                chat_id       INTEGER PRIMARY KEY,
-                last_accessed REAL    NOT NULL DEFAULT 0,
-                msg_count     INTEGER NOT NULL DEFAULT 0,
-                size_bytes    INTEGER NOT NULL DEFAULT 0
-            );
-        """)
         await self._db.commit()
         logger.info(f"MessageCache initialized at {self.db_path}")
 
     async def close(self):
-        """Close the SQLite connection."""
         if self._db:
             await self._db.close()
             self._db = None
@@ -130,18 +72,6 @@ class MessageCache:
     async def store_messages(
         self, chat_id: Union[int, str], messages: List[ExportedMessage]
     ) -> int:
-        """Store messages in cache, update ranges and metadata.
-
-        Writes in batches of _STORE_BATCH rows — O(batch) RAM regardless of
-        how many messages are passed.  Returns the number of rows stored.
-
-        Атомарность: все 4 группы записей (messages, chat_id_ranges,
-        chat_date_ranges, chat_meta) выполняются в ОДНОЙ транзакции с одним
-        commit() в конце.  Crash в середине откатит всё — иначе сообщения
-        оказались бы в БД без ranges/meta, и 3-path cache на следующем запуске
-        ушёл бы в fallback-miss, переписывая уже сохранённые данные (а LRU
-        eviction ошибся бы в размере чата).
-        """
         if not self.enabled or not messages or self._db is None:
             return 0
 
@@ -183,14 +113,6 @@ class MessageCache:
                 actual_count = row[0] if row else len(messages)
 
             await self._db.execute(
-                """
-                INSERT INTO chat_meta(chat_id, last_accessed, msg_count, size_bytes)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(chat_id) DO UPDATE SET
-                    last_accessed = excluded.last_accessed,
-                    msg_count     = excluded.msg_count,
-                    size_bytes    = chat_meta.size_bytes + excluded.size_bytes
-                """,
                 (chat_id_int, now, actual_count, total_bytes),
             )
 
@@ -219,10 +141,6 @@ class MessageCache:
     async def iter_messages(
         self, chat_id: Union[int, str], low_id: int, high_id: int
     ) -> AsyncGenerator[ExportedMessage, None]:
-        """Async generator — yields messages sorted by msg_id.
-
-        Memory: O(_FETCH_CHUNK) — never loads the full result into RAM.
-        """
         if not self.enabled or self._db is None:
             return
 
@@ -248,7 +166,6 @@ class MessageCache:
     async def get_messages(
         self, chat_id: Union[int, str], low_id: int, high_id: int
     ) -> List[ExportedMessage]:
-        """Return messages as a list. Prefer iter_messages() for large chats."""
         result = []
         async for msg in self.iter_messages(chat_id, low_id, high_id):
             result.append(msg)
@@ -257,7 +174,6 @@ class MessageCache:
     async def count_messages(
         self, chat_id: Union[int, str], low_id: int, high_id: int
     ) -> int:
-        """Count messages in [low_id, high_id] — fast via primary key index."""
         if not self.enabled or self._db is None:
             return 0
         async with self._db.execute(
@@ -273,7 +189,6 @@ class MessageCache:
     # ------------------------------------------------------------------ #
 
     async def get_cached_ranges(self, chat_id: Union[int, str]) -> List[List[int]]:
-        """Return list of [min_id, max_id] cached intervals for this chat."""
         if not self.enabled or self._db is None:
             return []
         async with self._db.execute(
@@ -287,7 +202,6 @@ class MessageCache:
     async def get_missing_ranges(
         self, chat_id: Union[int, str], requested_low: int, requested_high: int
     ) -> List[Tuple[int, int]]:
-        """Given [low, high], return sub-ranges NOT present in cache."""
         if not self.enabled:
             return [(requested_low, requested_high)]
 
@@ -313,7 +227,6 @@ class MessageCache:
     def merge_and_sort(
         cached: List[ExportedMessage], fresh: List[ExportedMessage]
     ) -> List[ExportedMessage]:
-        """Merge two message lists, deduplicate by ID, sort by ID ascending."""
         by_id = {msg.id: msg for msg in cached}
         by_id.update({msg.id: msg for msg in fresh})  # fresh wins
         return sorted(by_id.values(), key=lambda m: m.id)
@@ -325,7 +238,6 @@ class MessageCache:
     async def iter_messages_by_date(
         self, chat_id: Union[int, str], from_date: str, to_date: str
     ) -> AsyncGenerator[ExportedMessage, None]:
-        """Stream messages in [from_date, to_date] (YYYY-MM-DD), sorted by msg_id."""
         if not self.enabled or self._db is None:
             return
 
@@ -353,7 +265,6 @@ class MessageCache:
     async def get_messages_by_date(
         self, chat_id: Union[int, str], from_date: str, to_date: str
     ) -> List[ExportedMessage]:
-        """Return date-filtered messages as a list."""
         result = []
         async for msg in self.iter_messages_by_date(chat_id, from_date, to_date):
             result.append(msg)
@@ -362,7 +273,6 @@ class MessageCache:
     async def count_messages_by_date(
         self, chat_id: Union[int, str], from_date: str, to_date: str
     ) -> int:
-        """Count messages in [from_date, to_date] — fast via idx_msg_ts."""
         if not self.enabled or self._db is None:
             return 0
         ts_from = int(self._date_str_to_timestamp(from_date))
@@ -376,7 +286,6 @@ class MessageCache:
             return row[0] if row else 0
 
     async def get_cached_date_ranges(self, chat_id: Union[int, str]) -> List[List[str]]:
-        """Return list of [from_date, to_date] intervals cached for this chat."""
         if not self.enabled or self._db is None:
             return []
         async with self._db.execute(
@@ -390,7 +299,6 @@ class MessageCache:
     async def get_missing_date_ranges(
         self, chat_id: Union[int, str], from_date: str, to_date: str
     ) -> List[Tuple[str, str]]:
-        """Given [from_date, to_date], return sub-ranges NOT present in cache."""
         if not self.enabled:
             return [(from_date, to_date)]
         cached = await self.get_cached_date_ranges(chat_id)
@@ -401,13 +309,6 @@ class MessageCache:
     async def mark_date_range_checked(
         self, chat_id: Union[int, str], from_date: str, to_date: str
     ) -> None:
-        """Пометить диапазон дат как проверенный.
-
-        Вызывается когда сообщения за этот период уже есть в таблице messages
-        (загружены через ID-путь или более ранний date-экспорт), либо когда
-        Telegram вернул 0 сообщений за этот период. В обоих случаях повторный
-        запрос в Telegram не нужен.
-        """
         if not self.enabled or self._db is None:
             return
         chat_id_int = int(chat_id)
@@ -418,7 +319,6 @@ class MessageCache:
     def _compute_missing_date_ranges(
         cached: List[List[str]], from_date: str, to_date: str
     ) -> List[Tuple[str, str]]:
-        """Subtract cached date intervals from [from_date, to_date]."""
         req_start = date.fromisoformat(from_date)
         req_end   = date.fromisoformat(to_date)
         missing: list = []
@@ -442,11 +342,6 @@ class MessageCache:
     # ------------------------------------------------------------------ #
 
     async def _add_range(self, chat_id: int, new_min: int, new_max: int):
-        """Merge [new_min, new_max] into this chat's stored ID ranges.
-
-        ВАЖНО: без commit() — caller (store_messages) коммитит всё одним
-        транзакционным блоком, чтобы messages/ranges/meta были атомарны.
-        """
         cached = await self.get_cached_ranges(chat_id)
         merged = self._merge_intervals(cached + [[new_min, new_max]])
         await self._db.execute(
@@ -459,7 +354,6 @@ class MessageCache:
 
     @staticmethod
     def _merge_intervals(intervals: List[List[int]]) -> List[List[int]]:
-        """Classic interval merge (overlapping or adjacent → single interval)."""
         if not intervals:
             return []
         sorted_iv = sorted(intervals, key=lambda x: x[0])
@@ -473,11 +367,6 @@ class MessageCache:
         return merged
 
     async def _add_date_range(self, chat_id: int, new_from: str, new_to: str):
-        """Merge [new_from, new_to] into this chat's stored date ranges.
-
-        ВАЖНО: без commit() — caller (store_messages) коммитит всё одним
-        транзакционным блоком.
-        """
         cached = await self.get_cached_date_ranges(chat_id)
         merged = self._merge_date_intervals(cached + [[new_from, new_to]])
         await self._db.execute(
@@ -490,7 +379,6 @@ class MessageCache:
 
     @staticmethod
     def _merge_date_intervals(intervals: List[List[str]]) -> List[List[str]]:
-        """Merge overlapping or adjacent date intervals (YYYY-MM-DD strings)."""
         if not intervals:
             return []
         # Parse strings to date objects for comparison, reuse int merge logic
@@ -511,7 +399,6 @@ class MessageCache:
     # ------------------------------------------------------------------ #
 
     async def _touch(self, chat_id: int):
-        """Update last_accessed timestamp for LRU tracking."""
         if self._db is None:
             return
         await self._db.execute(
@@ -521,11 +408,6 @@ class MessageCache:
         await self._db.commit()
 
     async def evict_if_needed(self) -> int:
-        """Evict least-recently-used chats until disk usage is under 90% of budget.
-
-        Evicts whole chats atomically so cache ranges stay consistent.
-        Returns the number of chats evicted.
-        """
         if self._db is None:
             return 0
 
@@ -577,7 +459,6 @@ class MessageCache:
 
     @staticmethod
     def _parse_date_to_timestamp(date_str: str) -> Optional[float]:
-        """Parse ISO datetime string to unix timestamp (UTC)."""
         try:
             dt = datetime.fromisoformat(date_str)
             dt = ensure_utc(dt)
@@ -587,11 +468,9 @@ class MessageCache:
 
     @staticmethod
     def _date_str_to_timestamp(date_str: str) -> float:
-        """Parse YYYY-MM-DD to unix timestamp (start of day, UTC)."""
         dt = datetime.fromisoformat(date_str + "T00:00:00").replace(tzinfo=timezone.utc)
         return dt.timestamp()
 
     @staticmethod
     def _extract_date_str(date_iso: str) -> str:
-        """Extract YYYY-MM-DD from ISO datetime string."""
         return date_iso[:10]

@@ -14,10 +14,6 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/**
- * Тесты для {@link MessageFilter}.
- * Покрывает фильтрацию по датам, ключевым словам, типам и кастомным предикатам.
- */
 @DisplayName("MessageFilter")
 class MessageFilterTest {
 

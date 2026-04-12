@@ -10,16 +10,6 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * РўРµСЃС‚С‹ РґР»СЏ DateFormatter.
- * 
- * РћР¶РёРґР°РµРјРѕРµ РїРѕРІРµРґРµРЅРёРµ:
- * - parseDate("2025-06-24T15:29:46") в†’ "20250624"
- * - parseDate("2025-01-01T00:00:00") в†’ "20250101"
- * - parseDate(null) в†’ ""
- * - parseDate("") в†’ ""
- * - parseDate("invalid") в†’ "invalid"
- */
 @DisplayName("DateFormatter")
 class DateFormatterTest {
 

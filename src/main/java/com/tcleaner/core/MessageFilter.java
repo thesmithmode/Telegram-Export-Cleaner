@@ -12,9 +12,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.Predicate;
 
-/**
- * Фильтр сообщений Telegram export.
- */
 public class MessageFilter {
 
     private LocalDate startDate;
@@ -25,9 +22,7 @@ public class MessageFilter {
     private final Set<String> excludeTypes;
     private final List<Predicate<JsonNode>> customPredicates;
 
-    /**
-     * Создаёт пустой фильтр без условий (все сообщения проходят).
-     */
+    
     public MessageFilter() {
         this.keywords = new ArrayList<>();
         this.excludeKeywords = new ArrayList<>();
@@ -36,16 +31,7 @@ public class MessageFilter {
         this.customPredicates = new ArrayList<>();
     }
 
-    /**
-     * Создаёт {@link MessageFilter} из уже разобранных параметров.
-     * Используется там, где даты уже распарсены (например, Spring @DateTimeFormat в контроллере).
-     *
-     * @param startDate       начальная дата, или {@code null}
-     * @param endDate         конечная дата, или {@code null}
-     * @param keywords        ключевые слова для включения, через запятую, или {@code null}
-     * @param excludeKeywords ключевые слова для исключения, через запятую, или {@code null}
-     * @return настроенный {@link MessageFilter}, или {@code null} если ни один параметр не задан
-     */
+    
     public static MessageFilter fromParameters(LocalDate startDate, LocalDate endDate,
                                              String keywords, String excludeKeywords) {
         boolean hasFilters = startDate != null
@@ -87,16 +73,7 @@ public class MessageFilter {
         return filter;
     }
 
-    /**
-     * Создаёт {@link MessageFilter} из строковых параметров (даты в формате YYYY-MM-DD).
-     * Используется в тестах и местах где даты приходят как строки.
-     *
-     * @param startDate       начальная дата в формате YYYY-MM-DD, или {@code null}
-     * @param endDate         конечная дата в формате YYYY-MM-DD, или {@code null}
-     * @param keywords        ключевые слова для включения, через запятую, или {@code null}
-     * @param excludeKeywords ключевые слова для исключения, через запятую, или {@code null}
-     * @return настроенный {@link MessageFilter}, или {@code null} если ни один параметр не задан
-     */
+    
     public static MessageFilter fromParameters(String startDate, String endDate,
                                              String keywords, String excludeKeywords) {
         LocalDate parsedStart = isPresent(startDate) ? LocalDate.parse(startDate) : null;

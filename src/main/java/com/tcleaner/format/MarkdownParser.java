@@ -4,42 +4,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import java.util.List;
 
-/**
- * Парсер text_entities из Telegram export в Markdown.
- *
- * Поддерживаемые типы сущностей:
- * - plain → text
- * - bold → **text**
- * - italic → *text*
- * - strikethrough → ~~text~~
- * - code → `text`
- * - pre → ```text``` или ```language\ntext\n``` (если указан язык)
- * - link → text (как есть)
- * - text_link → [text](href)
- * - mention → @username (если text уже начинается с @, не дублирует символ)
- * - mention_name → text (именованное упоминание)
- * - hashtag → #hashtag (если text уже начинается с #, не дублирует символ)
- * - cashtag → $symbol (если text не начинается с $, добавляет символ)
- * - email → email
- * - phone → phone
- * - spoiler → ||text||
- * - underline → <u>text</u>
- * - blockquote → > text
- * - custom_emoji → [emoji_document_id]
- * - bot_command → text (содержит "/" в исходном JSON)
- * - bank_card → [CARD] (карточные номера маскируются)
- */
 public class MarkdownParser {
 
     private MarkdownParser() {
     }
 
-    /**
-     * Парсит одну сущность в Markdown.
-     * 
-     * @param entity JSON-узел с сущностью
-     * @return Markdown-строка
-     */
     public static String parseEntity(JsonNode entity) {
         if (entity == null) {
             return "";
@@ -80,9 +49,6 @@ public class MarkdownParser {
         };
     }
 
-    /**
-     * Парсит сущность pre (code block) с языком или без.
-     */
     private static String parsePre(JsonNode entity, String text) {
         String language = entity.has("language") ? entity.get("language").asText() : "";
         if (language.isEmpty()) {
@@ -91,10 +57,6 @@ public class MarkdownParser {
         return "```" + language + "\n" + text + "\n```";
     }
 
-    /**
-     * Парсит сущность text_link с валидацией URL.
-     * SECURITY: Блокирует javascript:, data:, и другие опасные схемы для защиты от XSS.
-     */
     private static String parseTextLink(JsonNode entity, String text) {
         String href = entity.has("href") ? entity.get("href").asText() : "#";
         // Валидируем URL перед вставкой в markdown
@@ -102,20 +64,11 @@ public class MarkdownParser {
         return "[" + text + "](" + safeHref + ")";
     }
 
-    /**
-     * Парсит custom_emoji.
-     */
     private static String parseCustomEmoji(JsonNode entity, String text) {
         String documentId = entity.has("document_id") ? entity.get("document_id").asText() : "";
         return "[emoji_" + documentId + "]";
     }
 
-    /**
-     * Парсит список сущностей в одну Markdown-строку.
-     * 
-     * @param entities список JSON-узлов
-     * @return объединённая Markdown-строка
-     */
     public static String parseEntityList(List<JsonNode> entities) {
         if (entities == null || entities.isEmpty()) {
             return "";
@@ -130,12 +83,6 @@ public class MarkdownParser {
 
 
 
-    /**
-     * Парсит JsonNode, который может быть строкой или массивом.
-     * 
-     * @param node JSON-узел
-     * @return обработанный текст
-     */
     public static String parseText(JsonNode node) {
         if (node == null || node.isNull()) {
             return "";

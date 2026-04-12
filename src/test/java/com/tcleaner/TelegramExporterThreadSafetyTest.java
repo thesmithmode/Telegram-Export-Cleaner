@@ -21,9 +21,6 @@ import java.util.concurrent.Future;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * Тесты на потокобезопасность TelegramExporter.
- */
 @DisplayName("TelegramExporter - Thread Safety")
 class TelegramExporterThreadSafetyTest {
 

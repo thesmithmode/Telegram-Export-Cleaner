@@ -1,9 +1,3 @@
-"""
-End-to-End tests for Export Worker.
-
-Tests complete workflow with mocked external services.
-Full E2E tests with real services are recommended for Phase 3.
-"""
 
 import pytest
 from unittest.mock import AsyncMock, Mock, patch
@@ -14,21 +8,16 @@ import os
 from models import ExportRequest, ExportResponse, ExportedMessage
 from java_client import ProgressTracker
 
-
 def _make_mock_java_client():
-    """Create AsyncMock java_client with working ProgressTracker support."""
     client = AsyncMock()
     client.send_progress_update = AsyncMock(return_value=12345)
     client.create_progress_tracker = lambda uid, tid: ProgressTracker(client, uid, tid)
     return client
 
-
 @pytest.mark.asyncio
 class TestExportWorkerE2E:
-    """End-to-end tests for ExportWorker."""
 
     async def test_worker_initialization(self):
-        """Test worker can be initialized."""
         from main import ExportWorker
 
         worker = ExportWorker()
@@ -37,7 +26,6 @@ class TestExportWorkerE2E:
         assert worker.jobs_failed == 0
 
     async def test_worker_job_processing_success(self):
-        """Test successful job processing."""
         from main import ExportWorker
 
         with patch('main.TelegramClient'), \
@@ -92,7 +80,6 @@ class TestExportWorkerE2E:
             worker.telegram_client.verify_and_get_info.assert_called_once()
 
     async def test_worker_job_processing_no_access(self):
-        """Test job processing when no access to chat."""
         from main import ExportWorker
 
         with patch('main.TelegramClient'), \
@@ -125,7 +112,6 @@ class TestExportWorkerE2E:
             assert 'CHAT_NOT_ACCESSIBLE' in str(call_args[1]['error_code'])
 
     async def test_worker_job_processing_export_error(self):
-        """Test job processing with export error."""
         from main import ExportWorker
 
         with patch('main.TelegramClient'), \
@@ -173,7 +159,6 @@ class TestExportWorkerE2E:
             assert call_args[1]['status'] == 'failed'
 
     async def test_worker_statistics_tracking(self):
-        """Test worker tracks statistics correctly."""
         from main import ExportWorker
 
         with patch('main.TelegramClient'), \
@@ -237,13 +222,10 @@ class TestExportWorkerE2E:
             assert worker.jobs_processed == initial_processed + 1
             assert worker.jobs_failed == initial_failed
 
-
 @pytest.mark.asyncio
 class TestErrorRecovery:
-    """Test error recovery mechanisms."""
 
     async def test_partial_message_export(self):
-        """Test handling of partial exports."""
         # Simulate exporting 50 messages before error
         messages = [
             ExportedMessage(
@@ -280,7 +262,6 @@ class TestErrorRecovery:
         assert len(response_json['messages']) == 50
 
     async def test_retry_logic_with_backoff(self):
-        """Test exponential backoff calculation."""
         from config import settings
 
         base_delay = settings.RETRY_BASE_DELAY
@@ -304,13 +285,10 @@ class TestErrorRecovery:
             delay = min(base_delay * (2 ** attempt), max_delay)
             assert delay <= max_delay
 
-
 @pytest.mark.asyncio
 class TestSignalHandling:
-    """Test graceful shutdown handling."""
 
     async def test_worker_signal_handling(self):
-        """Test signal handler sets running flag."""
         from main import ExportWorker
         import signal
 
@@ -323,7 +301,6 @@ class TestSignalHandling:
         assert worker.running is False
 
     async def test_worker_cleanup(self):
-        """Test worker cleanup procedure."""
         from main import ExportWorker
 
         with patch('main.TelegramClient'), \
@@ -346,13 +323,10 @@ class TestSignalHandling:
             worker.telegram_client.disconnect.assert_called_once()
             worker.queue_consumer.disconnect.assert_called_once()
 
-
 @pytest.mark.asyncio
 class TestPipelineFlow:
-    """Test complete pipeline flow."""
 
     async def test_request_to_response_flow(self):
-        """Test complete request to response flow."""
         # 1. Create request
         request = ExportRequest(
             task_id="export_001",
@@ -396,13 +370,10 @@ class TestPipelineFlow:
         assert response_json['status'] == 'completed'
         assert len(response_json['messages']) == 100
 
-
 @pytest.mark.asyncio
 class TestWorkerCleanup:
-    """Test worker cleanup methods."""
 
     async def test_cleanup_temp_files_for_task(self):
-        """Test worker cleanup_temp_files removes temp directory."""
         from main import ExportWorker
 
         with patch('main.TelegramClient'), \
@@ -429,7 +400,6 @@ class TestWorkerCleanup:
             # Метод должен завершиться без исключения — достижение этой строки это и есть проверка
 
     async def test_cleanup_temp_files_handles_missing_directory(self):
-        """Test cleanup_temp_files handles missing directories gracefully."""
         from main import ExportWorker
 
         with patch('main.TelegramClient'), \
@@ -448,13 +418,10 @@ class TestWorkerCleanup:
 
             assert success
 
-
 @pytest.mark.asyncio
 class TestCancelSupport:
-    """Test export cancellation functionality."""
 
     async def test_cancel_stops_export(self):
-        """Test that is_cancelled() returns True when cancel flag is set."""
         from main import ExportWorker
 
         with patch('main.TelegramClient'), \
@@ -475,7 +442,6 @@ class TestCancelSupport:
             worker.control_redis.get.assert_called_once_with("cancel_export:test_task_123")
 
     async def test_cancel_saves_partial_messages(self):
-        """Test that cancelled jobs save accumulated messages to cache."""
         from main import ExportWorker
 
         with patch('main.TelegramClient'), \
@@ -517,7 +483,6 @@ class TestCancelSupport:
             worker.message_cache.store_messages.assert_called_once_with(job.chat_id, test_messages)
 
     async def test_cancel_clears_active_export_marker(self):
-        """Test that cancelled export clears the active_export marker."""
         from main import ExportWorker
 
         with patch('main.TelegramClient'), \
