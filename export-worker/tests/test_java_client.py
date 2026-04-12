@@ -15,7 +15,6 @@ def _patch_settings(**overrides):
     mock = patcher.start()
     mock.JAVA_API_BASE_URL = overrides.get("JAVA_API_BASE_URL", "http://localhost:8080")
     mock.TELEGRAM_BOT_TOKEN = overrides.get("TELEGRAM_BOT_TOKEN", "test_bot_token")
-    mock.JAVA_API_KEY = overrides.get("JAVA_API_KEY", None)
     mock.RETRY_BASE_DELAY = overrides.get("RETRY_BASE_DELAY", 0.0)
     mock.RETRY_MAX_DELAY = overrides.get("RETRY_MAX_DELAY", 60.0)
     return patcher, mock
