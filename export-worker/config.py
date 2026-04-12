@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     @field_validator("TELEGRAM_API_HASH")
     @classmethod
     def validate_api_hash(cls, v: str) -> str:
-        if not v or v == "":
+        if not v:
             raise ValueError(
                 "TELEGRAM_API_HASH must be set. "
                 "Get it from https://my.telegram.org/apps"

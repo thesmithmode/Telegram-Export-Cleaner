@@ -176,16 +176,6 @@ class QueueConsumer:
         except Exception as e:
             logger.error(f"Failed to move job to DLQ: {e}")
 
-    async def ack_job_completed(self, task_id: str) -> bool:
-        if not self.redis_client:
-            return False
-        try:
-            await self.redis_client.srem("staging:acked", task_id)
-            return True
-        except Exception as e:
-            logger.error(f"Failed to ack completed job {task_id}: {e}")
-            return False
-
     async def _track_staging_job(self, task_id: str) -> None:
         if self.redis_client:
             try:

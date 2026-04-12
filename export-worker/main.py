@@ -109,17 +109,7 @@ class ExportWorker:
         except Exception as e:
             logger.warning(f"Could not get resource stats: {e}")
 
-    async def cleanup_temp_files(self, task_id: str) -> None:
-        try:
-            temp_dir = Path(f"/tmp/export_{task_id}")
-            if temp_dir.exists():
-                shutil.rmtree(temp_dir)
-                logger.debug(f"Cleaned up temp files for task {task_id}")
-        except Exception as e:
-            logger.warning(f"Failed to cleanup temp files for {task_id}: {e}")
-
     async def _cleanup_job(self, job: ExportRequest) -> None:
-        await self.cleanup_temp_files(job.task_id)
         await self.clear_active_export(job.user_id)
         await self.clear_active_processing_job()
 
