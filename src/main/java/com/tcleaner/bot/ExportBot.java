@@ -360,18 +360,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         boolean fromCache = jobProducer.isLikelyCached(targetIdentifier);
         long pendingInQueue = jobProducer.getQueueLength();
         boolean hasActiveJob = jobProducer.hasActiveProcessingJob();
-        long aheadCount = (pendingInQueue - 1) + (hasActiveJob ? 1 : 0);
-        long myPosition = pendingInQueue + (hasActiveJob ? 1 : 0);
-
-        String queueInfo;
-        if (fromCache) {
-            queueInfo = "\n\n⚡ Данные в кэше — результат будет быстро!";
-        } else if (aheadCount <= 0) {
-            queueInfo = "\n\n⚙️ Задача поставлена в работу, ожидайте...";
-        } else {
-            queueInfo = String.format("\n\n📋 Вы в очереди: позиция %d\nВпереди %d задач(и)",
-                    myPosition, aheadCount);
-        }
+        String queueInfo = buildQueueInfoText(fromCache, pendingInQueue, hasActiveJob);
 
         String resultText = String.format(
                 "⏳ Задача принята!\n\nID: %s\nЧат: %s%s%s",
@@ -524,6 +513,19 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         UserSession session = sessions.computeIfAbsent(userId, k -> new UserSession());
         session.touch();
         return session;
+    }
+
+    private String buildQueueInfoText(boolean fromCache, long pendingInQueue, boolean hasActiveJob) {
+        if (fromCache) {
+            return "\n\n⚡ Данные в кэше — результат будет быстро!";
+        }
+        // pendingInQueue includes this job; aheadCount excludes it
+        long aheadCount = (pendingInQueue - 1) + (hasActiveJob ? 1 : 0);
+        long myPosition = pendingInQueue + (hasActiveJob ? 1 : 0);
+        if (aheadCount <= 0) {
+            return "\n\n⚙️ Задача поставлена в работу, ожидайте...";
+        }
+        return String.format("\n\n📋 Вы в очереди: позиция %d\nВпереди %d задач(и)", myPosition, aheadCount);
     }
 
     private String buildDateInfoText(UserSession session) {
