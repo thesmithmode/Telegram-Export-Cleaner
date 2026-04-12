@@ -155,7 +155,7 @@ public class MessageFilter {
         }
 
         if (!keywords.isEmpty() || !excludeKeywords.isEmpty()) {
-            String text = message.has("text") ? MarkdownParser.parseText(message.get("text")) : "";
+            String text = MarkdownParser.parseText(message.get("text"));
             String textLower = text.toLowerCase();
 
             if (!keywords.isEmpty()) {

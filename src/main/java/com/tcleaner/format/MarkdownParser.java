@@ -19,8 +19,8 @@ public class MarkdownParser {
             return entity.asText();
         }
 
-        String type = entity.has("type") ? entity.get("type").asText() : "plain";
-        String text = entity.has("text") ? entity.get("text").asText() : "";
+        String type = entity.path("type").asText("plain");
+        String text = entity.path("text").asText();
 
         return switch (type) {
             case "plain" -> text;
@@ -50,7 +50,7 @@ public class MarkdownParser {
     }
 
     private static String parsePre(JsonNode entity, String text) {
-        String language = entity.has("language") ? entity.get("language").asText() : "";
+        String language = entity.path("language").asText();
         if (language.isEmpty()) {
             return "```\n" + text + "\n```";
         }
@@ -58,14 +58,14 @@ public class MarkdownParser {
     }
 
     private static String parseTextLink(JsonNode entity, String text) {
-        String href = entity.has("href") ? entity.get("href").asText() : "#";
+        String href = entity.path("href").asText("#");
         // Валидируем URL перед вставкой в markdown
         String safeHref = UrlValidator.sanitizeUrl(href, "#");
         return "[" + text + "](" + safeHref + ")";
     }
 
     private static String parseCustomEmoji(JsonNode entity, String text) {
-        String documentId = entity.has("document_id") ? entity.get("document_id").asText() : "";
+        String documentId = entity.path("document_id").asText();
         return "[emoji_" + documentId + "]";
     }
 

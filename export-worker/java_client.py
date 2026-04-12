@@ -59,8 +59,10 @@ class JavaBotClient:
                 exclude_keywords=payload.exclude_keywords
             )
         finally:
-            if os.path.exists(tmp_path):
+            try:
                 os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
 
         if cleaned_text is None:
             logger.error(f"❌ Java API processing failed for task {payload.task_id}")
@@ -184,7 +186,8 @@ class JavaBotClient:
                 if "user_id" in e: new_e["user_id"] = e["user_id"]
                 res.append(new_e)
             return res
-        except: return entities
+        except Exception:
+            return entities
 
     @staticmethod
     def _sanitize_filename(name: str) -> str:
@@ -238,13 +241,16 @@ class JavaBotClient:
         try:
             resp = await self._http_client.get(f"{self.base_url}/api/health")
             return resp.status_code == 200
-        except: return False
+        except Exception:
+            return False
 
     async def notify_user_failure(self, chat_id, task_id, error):
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
         text = f"❌ Export failed (task {task_id})\n\nReason: {error}"
-        try: await self._http_client.post(url, data={"chat_id": chat_id, "text": text})
-        except: pass
+        try:
+            await self._http_client.post(url, data={"chat_id": chat_id, "text": text})
+        except Exception as e:
+            logger.debug(f"Failed to notify user {chat_id} about export failure: {e}")
 
     def create_progress_tracker(self, user_chat_id: int, task_id: str):
         return ProgressTracker(self, user_chat_id, task_id)
