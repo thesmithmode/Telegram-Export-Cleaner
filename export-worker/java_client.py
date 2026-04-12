@@ -65,7 +65,7 @@ class JavaBotClient:
         if cleaned_text is None:
             logger.error(f"❌ Java API processing failed for task {payload.task_id}")
             if payload.user_chat_id and self.bot_token:
-                await self._notify_user_failure(
+                await self.notify_user_failure(
                     payload.user_chat_id, payload.task_id, "Processing service unavailable"
                 )
             return False
@@ -79,7 +79,7 @@ class JavaBotClient:
                 payload.user_chat_id, payload.task_id, cleaned_text, filename=filename
             )
             if not sent:
-                await self._notify_user_failure(
+                await self.notify_user_failure(
                     payload.user_chat_id, payload.task_id,
                     "Не удалось отправить файл. Попробуйте снова."
                 )
