@@ -187,7 +187,6 @@ jobs:
             TELEGRAM_API_ID=${{ secrets.TELEGRAM_API_ID }}
             TELEGRAM_API_HASH=${{ secrets.TELEGRAM_API_HASH }}
             TELEGRAM_SESSION_STRING=${{ secrets.TELEGRAM_SESSION_STRING }}
-            JAVA_API_KEY=${{ secrets.JAVA_API_KEY }}
             ENVEOF
 
             echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin

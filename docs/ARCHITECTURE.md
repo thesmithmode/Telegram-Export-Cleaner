@@ -153,7 +153,6 @@ If cancelled → save accumulated messages to cache + return partial result
 ```
 
 **Security:**
-- `ApiKeyFilter` — X-API-Key header validation (SET or no auth)
 - `SecurityConfig` — CSRF disabled (stateless API), CSP headers, HTTPS enforcement
 - `UrlValidator` — Whitelist URL schemes (http, https, tg, mailto, etc), block javascript:, data:, etc
 
