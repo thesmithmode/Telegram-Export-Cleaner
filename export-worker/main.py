@@ -28,7 +28,7 @@ from typing import AsyncGenerator, Optional
 import redis.asyncio as aioredis
 
 from config import settings
-from pyrogram_client import TelegramClient, create_client as create_telegram_client
+from pyrogram_client import TelegramClient, create_client as create_telegram_client, ensure_utc
 from queue_consumer import QueueConsumer, create_queue_consumer
 from java_client import JavaBotClient, ProgressTracker, create_java_client
 from message_cache import MessageCache
@@ -946,13 +946,13 @@ class ExportWorker:
         if job.from_date:
             try:
                 dt = datetime.fromisoformat(job.from_date)
-                from_date = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+                from_date = ensure_utc(dt)
             except ValueError:
                 pass
         if job.to_date:
             try:
                 dt = datetime.fromisoformat(job.to_date)
-                to_date = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+                to_date = ensure_utc(dt)
             except ValueError:
                 pass
 

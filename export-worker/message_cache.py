@@ -25,6 +25,7 @@ import aiosqlite
 import msgpack
 
 from models import ExportedMessage
+from pyrogram_client import ensure_utc
 
 logger = logging.getLogger(__name__)
 
@@ -492,18 +493,18 @@ class MessageCache:
         """Merge overlapping or adjacent date intervals (YYYY-MM-DD strings)."""
         if not intervals:
             return []
-        sorted_iv = sorted(intervals, key=lambda x: x[0])
+        # Parse strings to date objects for comparison, reuse int merge logic
+        date_intervals = [[date.fromisoformat(d[0]), date.fromisoformat(d[1])] for d in intervals]
+        sorted_iv = sorted(date_intervals, key=lambda x: x[0])
         merged = [sorted_iv[0][:]]
-        for low_s, high_s in sorted_iv[1:]:
-            last      = merged[-1]
-            last_high = date.fromisoformat(last[1])
-            curr_low  = date.fromisoformat(low_s)
-            if curr_low <= last_high + timedelta(days=1):
-                if high_s > last[1]:
-                    last[1] = high_s
+        for low, high in sorted_iv[1:]:
+            last = merged[-1]
+            if low <= last[1] + timedelta(days=1):
+                last[1] = max(last[1], high)
             else:
-                merged.append([low_s, high_s])
-        return merged
+                merged.append([low, high])
+        # Convert back to ISO strings
+        return [[d[0].isoformat(), d[1].isoformat()] for d in merged]
 
     # ------------------------------------------------------------------ #
     # LRU touch & eviction
@@ -579,8 +580,7 @@ class MessageCache:
         """Parse ISO datetime string to unix timestamp (UTC)."""
         try:
             dt = datetime.fromisoformat(date_str)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
+            dt = ensure_utc(dt)
             return dt.timestamp()
         except (ValueError, TypeError):
             return None
