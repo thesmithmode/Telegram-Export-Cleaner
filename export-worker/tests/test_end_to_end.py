@@ -108,8 +108,9 @@ class TestExportWorkerE2E:
             worker.java_client.send_response.assert_called_once()
             # Verify error response sent
             call_args = worker.java_client.send_response.call_args
-            assert call_args[1]['status'] == 'failed'
-            assert 'CHAT_NOT_ACCESSIBLE' in str(call_args[1]['error_code'])
+            payload = call_args[0][0]
+            assert payload.status == 'failed'
+            assert 'CHAT_NOT_ACCESSIBLE' in str(payload.error_code)
 
     async def test_worker_job_processing_export_error(self):
         from main import ExportWorker
@@ -156,7 +157,7 @@ class TestExportWorkerE2E:
             assert result is True
             # Verify error response sent
             call_args = worker.java_client.send_response.call_args
-            assert call_args[1]['status'] == 'failed'
+            assert call_args[0][0].status == 'failed'
 
     async def test_worker_statistics_tracking(self):
         from main import ExportWorker

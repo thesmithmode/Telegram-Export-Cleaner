@@ -44,6 +44,44 @@ class MessageCache:
         if db_dir:
             os.makedirs(db_dir, exist_ok=True)
         self._db = await aiosqlite.connect(self.db_path)
+        await self._db.executescript("""
+            PRAGMA journal_mode=WAL;
+            PRAGMA synchronous=NORMAL;
+            PRAGMA cache_size=-32000;
+            PRAGMA temp_store=MEMORY;
+            PRAGMA mmap_size=268435456;
+
+            CREATE TABLE IF NOT EXISTS messages (
+                chat_id  INTEGER NOT NULL,
+                msg_id   INTEGER NOT NULL,
+                msg_ts   INTEGER NOT NULL,
+                data     BLOB    NOT NULL,
+                PRIMARY KEY (chat_id, msg_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_msg_ts
+                ON messages(chat_id, msg_ts);
+
+            CREATE TABLE IF NOT EXISTS chat_id_ranges (
+                chat_id  INTEGER NOT NULL,
+                min_id   INTEGER NOT NULL,
+                max_id   INTEGER NOT NULL,
+                PRIMARY KEY (chat_id, min_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS chat_date_ranges (
+                chat_id    INTEGER NOT NULL,
+                from_date  TEXT    NOT NULL,
+                to_date    TEXT    NOT NULL,
+                PRIMARY KEY (chat_id, from_date)
+            );
+
+            CREATE TABLE IF NOT EXISTS chat_meta (
+                chat_id       INTEGER PRIMARY KEY,
+                last_accessed REAL    NOT NULL DEFAULT 0,
+                msg_count     INTEGER NOT NULL DEFAULT 0,
+                size_bytes    INTEGER NOT NULL DEFAULT 0
+            );
+        """)
         await self._db.commit()
         logger.info(f"MessageCache initialized at {self.db_path}")
 
@@ -113,6 +151,14 @@ class MessageCache:
                 actual_count = row[0] if row else len(messages)
 
             await self._db.execute(
+                """
+                INSERT INTO chat_meta(chat_id, last_accessed, msg_count, size_bytes)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    last_accessed = excluded.last_accessed,
+                    msg_count     = excluded.msg_count,
+                    size_bytes    = chat_meta.size_bytes + excluded.size_bytes
+                """,
                 (chat_id_int, now, actual_count, total_bytes),
             )
 

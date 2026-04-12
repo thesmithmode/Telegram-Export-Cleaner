@@ -108,10 +108,10 @@ class TestExportWorkerJobProcessing:
         assert result is True
         assert worker.jobs_processed == 1
         worker.java_client.send_response.assert_called_once()
-        args, kwargs = worker.java_client.send_response.call_args
-        assert kwargs["task_id"] == "test_task_123"
-        assert kwargs["status"] == "completed"
-        assert len(kwargs["messages"]) == 2
+        payload = worker.java_client.send_response.call_args[0][0]
+        assert payload.task_id == "test_task_123"
+        assert payload.status == "completed"
+        assert len(payload.messages) == 2
 
     @pytest.mark.asyncio
     async def test_process_job_chat_not_accessible(self, worker):
@@ -136,9 +136,9 @@ class TestExportWorkerJobProcessing:
         assert result is True
         assert worker.jobs_failed == 0  # Not counted in jobs_failed, marked separately
         worker.java_client.send_response.assert_called_once()
-        args, kwargs = worker.java_client.send_response.call_args
-        assert kwargs["status"] == "failed"
-        assert kwargs["error_code"] == "CHAT_NOT_ACCESSIBLE"
+        payload = worker.java_client.send_response.call_args[0][0]
+        assert payload.status == "failed"
+        assert payload.error_code == "CHAT_NOT_ACCESSIBLE"
 
     @pytest.mark.asyncio
     async def test_process_job_export_error(self, worker):
@@ -170,9 +170,9 @@ class TestExportWorkerJobProcessing:
         assert result is True
         assert worker.jobs_failed == 1
         worker.java_client.send_response.assert_called_once()
-        args, kwargs = worker.java_client.send_response.call_args
-        assert kwargs["status"] == "failed"
-        assert "Export failed" in kwargs["error"]
+        payload = worker.java_client.send_response.call_args[0][0]
+        assert payload.status == "failed"
+        assert "Export failed" in payload.error
 
     @pytest.mark.asyncio
     async def test_process_job_response_failure(self, worker):
@@ -410,9 +410,9 @@ class TestThreePathCaching:
 
         # Java получил ответ с 10 сообщениями
         worker.java_client.send_response.assert_called_once()
-        send_kwargs = worker.java_client.send_response.call_args.kwargs
-        assert send_kwargs["status"] == "completed"
-        assert send_kwargs["task_id"] == "date_hit_task"
+        payload = worker.java_client.send_response.call_args[0][0]
+        assert payload.status == "completed"
+        assert payload.task_id == "date_hit_task"
 
     @pytest.mark.asyncio
     async def test_date_partial_miss_fetches_only_missing_gap(self, worker_with_cache):
