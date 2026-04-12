@@ -22,7 +22,7 @@ public class MessageProcessor {
     }
 
     public static String getMessageType(JsonNode message) {
-        return message.has("type") ? message.get("type").asText() : DEFAULT_MESSAGE_TYPE;
+        return message.path("type").asText(DEFAULT_MESSAGE_TYPE);
     }
 
     public String processMessage(JsonNode message) {

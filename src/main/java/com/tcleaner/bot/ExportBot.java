@@ -460,6 +460,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     
     @Scheduled(fixedDelay = SESSION_EVICT_DELAY_MS)
     public void evictStaleSessions() {
+        if (sessions.isEmpty()) return;
         Instant cutoff = Instant.now().minus(Duration.ofHours(2));
         int beforeSize = sessions.size();
         sessions.entrySet().removeIf(entry -> entry.getValue().getLastAccess().isBefore(cutoff));

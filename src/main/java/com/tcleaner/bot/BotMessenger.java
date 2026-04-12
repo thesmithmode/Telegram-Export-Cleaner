@@ -96,9 +96,7 @@ public class BotMessenger {
     }
 
     public void sendRemoveReplyKeyboard(long chatId, String text) {
-        SendMessage message = SendMessage.builder()
-                .chatId(String.valueOf(chatId))
-                .text(text)
+        SendMessage message = buildMessage(chatId, text)
                 .replyMarkup(ReplyKeyboardRemove.builder().removeKeyboard(true).build())
                 .build();
         try {
