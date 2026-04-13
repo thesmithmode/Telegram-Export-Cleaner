@@ -1,45 +1,80 @@
 # Python Worker
 
-Worker находится в папке `export-worker/` и запускается как отдельный контейнер.
+Worker код находится в `export-worker/`.
 
-## Что делает worker
+## Основные обязанности
 
-- Читает задачи из Redis (`QueueConsumer`).
-- Проверяет доступ к чату через Pyrogram (`TelegramClient`).
-- Резолвит вход (`@username`/ссылка) в canonical chat ID.
-- Отдаёт сообщения из SQLite-кэша или догружает из Telegram API.
-- Передаёт данные в Java API (`POST /api/convert`).
-- Отправляет пользователю прогресс и финальный результат.
+- Получать задачи из Redis очередей.
+- Проверять доступ к чату и экспортировать сообщения через Pyrogram.
+- Поддерживать дисковый кэш сообщений (SQLite).
+- Передавать JSON в Java `/api/convert` и доставлять итог пользователю.
 
-## Очередь и recovery
+---
 
-Используется атомарный перенос задачи `BLMOVE`:
-- из `telegram_export_express` → `telegram_export_express_processing`,
-- или из `telegram_export` → `telegram_export_processing`.
+## Job lifecycle
 
-Если worker падает, незавершённые задачи из staging восстанавливаются при старте.
+1. `QueueConsumer.get_job()` делает `BLMOVE` в staging.
+2. Worker помечает задачу как processing (`job:processing:*`).
+3. Проверяет доступ к чату (`verify_and_get_info`).
+4. Пробует cache-aware путь:
+   - по диапазону дат,
+   - или по ID-диапазонам.
+5. При miss дозапрашивает Telegram API.
+6. Периодически проверяет флаг отмены `cancel_export:{taskId}`.
+7. Отправляет результат через `JavaBotClient`.
+8. Ставит `job:completed:*`/`job:failed:*` и очищает staging.
 
-## Кэш сообщений
+---
 
-`MessageCache` использует SQLite (`CACHE_DB_PATH`, по умолчанию `/data/cache/messages.db`).
+## Очереди и crash recovery
 
-Особенности:
-- хранение msgpack-сериализованных сообщений;
-- индексы по `chat_id/msg_id` и timestamp;
-- интервалы покрытых диапазонов (по ID и датам);
-- LRU-эвикция по лимиту диска (`CACHE_MAX_DISK_GB`).
+Используемые очереди:
+- `telegram_export`
+- `telegram_export_express`
+- `telegram_export_processing`
+- `telegram_export_express_processing`
 
-## Отмена задач
+Подход `BLMOVE -> staging` защищает от потери задачи при падении между pop/ack.
+На старте worker выполняет `recover_staging_jobs()`.
 
-Java-бот выставляет `cancel_export:{taskId}` в Redis.
-Worker проверяет флаг во время экспорта и завершает задачу корректно.
+---
 
-## Ключевые env-переменные
+## SQLite message cache
 
-- `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`
-- `TELEGRAM_SESSION_STRING` (рекомендуется для production)
-- `TELEGRAM_PHONE_NUMBER` (нужен для file-based session)
+`MessageCache` хранит данные в файле `CACHE_DB_PATH` (по умолчанию `/data/cache/messages.db`).
+
+Ключевые таблицы:
+- `messages`
+- `chat_id_ranges`
+- `chat_date_ranges`
+- `chat_meta`
+
+Функциональность:
+- пакетная запись/чтение;
+- слияние покрытых диапазонов;
+- LRU-эвикция по дисковому лимиту (`CACHE_MAX_DISK_GB`);
+- TTL-ориентированная логика актуальности диапазонов.
+
+---
+
+## Canonical ID mapping
+
+Worker нормализует входы (`@username`, `t.me`, numeric) к единому canonical ID и сохраняет маппинги в Redis (`canonical:*`).
+Это нужно для:
+- стабильных cache key,
+- предикта cache hit в Java (`express` queue).
+
+---
+
+## Конфигурация (env)
+
+Минимум:
+- `TELEGRAM_API_ID`
+- `TELEGRAM_API_HASH`
 - `TELEGRAM_BOT_TOKEN`
+
+На практике обычно нужны:
+- `TELEGRAM_SESSION_STRING` (production)
 - `REDIS_HOST`, `REDIS_PORT`, `REDIS_DB`, `REDIS_QUEUE_NAME`
 - `JAVA_API_BASE_URL`
 - `CACHE_ENABLED`, `CACHE_DB_PATH`, `CACHE_MAX_DISK_GB`

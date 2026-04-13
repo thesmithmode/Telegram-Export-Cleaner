@@ -1,19 +1,41 @@
 # Telegram Export Cleaner
 
-Сервис для экспорта истории Telegram-чатов в текст:
-- **Java/Spring Boot**: Telegram-бот + REST API конвертации.
-- **Python worker**: получает задачи из Redis, выгружает сообщения через Pyrogram, отправляет результат в Java API.
+Telegram Export Cleaner — сервис для выгрузки истории Telegram-чатов в читаемый текстовый файл.
 
-## Что умеет
+## Что это за проект
 
-- Экспорт по `@username` или `https://t.me/...` через Telegram-бота.
-- Выбор диапазона: весь чат, последние 24ч/3д/7д/30д, или ручной диапазон дат.
-- Отмена активного экспорта (`/cancel` или кнопка в сообщении задачи).
-- REST-конвертация `result.json` в `output.txt` с фильтрами дат и ключевых слов.
-- Потоковая обработка больших JSON в Java (`StreamingResponseBody`).
-- Двухуровневый кэш:
-  - Redis — очередь/состояние задач.
-  - SQLite — кэш сообщений worker-а на диске.
+Проект состоит из трех рабочих компонентов:
+
+1. **Java/Spring Boot сервис**
+   - Telegram-бот (интерфейс для пользователей).
+   - REST API для конвертации `result.json` → `output.txt`.
+2. **Python worker (Pyrogram)**
+   - Вычитывает задачи из Redis.
+   - Забирает сообщения из Telegram API.
+   - Использует дисковый кэш сообщений (SQLite).
+3. **Redis**
+   - Очереди задач + статусные ключи/флаги отмены.
+
+> Важно: Redis в текущей архитектуре **не** является основным хранилищем сообщений. Сообщения кэшируются в SQLite у worker-а.
+
+---
+
+## Ключевые возможности
+
+- Экспорт из `@username` или `https://t.me/...` через бота.
+- Диапазоны дат в боте:
+  - весь чат,
+  - последние 24 часа / 3 / 7 / 30 дней,
+  - ручной диапазон (`дд.мм.гггг`).
+- Отмена экспорта:
+  - командой `/cancel`,
+  - inline-кнопкой в сообщении задачи.
+- Потоковая конвертация крупных JSON-файлов в Java (`StreamingResponseBody`).
+- Фильтры в REST API:
+  - даты (`startDate`, `endDate`),
+  - include/exclude keywords.
+
+---
 
 ## Быстрый старт (Docker)
 
@@ -21,8 +43,7 @@
 git clone https://github.com/thesmithmode/Telegram-Export-Cleaner
 cd Telegram-Export-Cleaner
 cp .env.example .env
-# заполните TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_BOT_TOKEN
-# (TELEGRAM_SESSION_STRING желательно для production)
+# заполните как минимум TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_BOT_TOKEN
 docker compose up -d
 curl http://localhost:8080/api/health
 ```
@@ -33,43 +54,72 @@ curl http://localhost:8080/api/health
 {"status":"UP"}
 ```
 
+---
+
+## Минимальные переменные окружения
+
+Обязательные для реальной работы:
+
+- `TELEGRAM_API_ID`
+- `TELEGRAM_API_HASH`
+- `TELEGRAM_BOT_TOKEN`
+
+Рекомендуемые:
+
+- `TELEGRAM_SESSION_STRING` — для production/stable авторизации worker-а.
+- `REDIS_QUEUE_NAME` — если нужно нестандартное имя очереди.
+- `CACHE_DB_PATH`, `CACHE_MAX_DISK_GB` — если нужно кастомизировать кэш.
+
+Подробно: [docs/SETUP.md](docs/SETUP.md).
+
+---
+
 ## Как пользоваться ботом
 
 1. Откройте бота и отправьте `/start`.
-2. Отправьте `@username` или ссылку `https://t.me/<chat>`.
+2. Отправьте идентификатор чата:
+   - `@username`, или
+   - `https://t.me/username`.
 3. Выберите диапазон дат кнопками.
 4. Дождитесь `output.txt`.
 
-> В приватных чатах/каналах аккаунт worker-а (не бот) должен иметь доступ.
+Если экспорт уже запущен — бот не создаст дубль, а попросит дождаться завершения или сделать `/cancel`.
+
+---
 
 ## REST API
 
 ### `POST /api/convert`
+
 `multipart/form-data`:
-- `file` (обязательно) — Telegram export JSON.
-- `startDate`, `endDate` (опционально, `YYYY-MM-DD`).
-- `keywords`, `excludeKeywords` (опционально, CSV).
+- `file` (обязательно): JSON Telegram Export (`result.json`).
+- `startDate`, `endDate` (опционально): `YYYY-MM-DD`.
+- `keywords`, `excludeKeywords` (опционально): CSV строки.
 
 Пример:
+
 ```bash
 curl -X POST http://localhost:8080/api/convert \
   -F "file=@result.json" \
   -F "startDate=2024-01-01" \
   -F "endDate=2024-12-31" \
+  -F "keywords=release,note" \
   -o output.txt
 ```
 
 ### `GET /api/health`
-Проверка доступности Java-сервиса:
+
 ```bash
 curl http://localhost:8080/api/health
 ```
 
+---
+
 ## Документация
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — компоненты и поток данных.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — архитектура и data flow.
 - [docs/API.md](docs/API.md) — контракт REST API.
 - [docs/BOT.md](docs/BOT.md) — сценарии Telegram-бота.
-- [docs/PYTHON_WORKER.md](docs/PYTHON_WORKER.md) — работа воркера и кэша.
-- [docs/SETUP.md](docs/SETUP.md) — установка и конфигурация.
+- [docs/PYTHON_WORKER.md](docs/PYTHON_WORKER.md) — worker, кэш, recovery.
+- [docs/SETUP.md](docs/SETUP.md) — установка, конфиг, troubleshooting.
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — разработка и проверки.

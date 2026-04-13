@@ -1,66 +1,98 @@
 # Architecture
 
-## Компоненты
+## 1. Компоненты
 
-1. **Java Bot/API (Spring Boot, порт 8080)**
-   - Telegram long-polling bot (`ExportBot`).
-   - Приём задач и постановка в Redis (`ExportJobProducer`).
-   - REST API: `/api/convert`, `/api/health`.
+### Java (Spring Boot, `java-bot`)
 
-2. **Python Worker (`export-worker`)**
-   - Читает очередь Redis (`QueueConsumer`, `BLMOVE`).
-   - Экспортирует сообщения через Pyrogram (`TelegramClient`).
-   - Кэширует сообщения в SQLite (`MessageCache`).
-   - Отправляет результат в Java API (`JavaBotClient`).
+Ответственность:
+- Telegram long-polling bot (`ExportBot`).
+- Управление пользовательской сессией и диалогом выбора дат (`UserSession`).
+- Постановка задач в Redis (`ExportJobProducer`).
+- REST API:
+  - `POST /api/convert`
+  - `GET /api/health`
 
-3. **Redis**
-   - Очереди задач, признаки статусов и флаги отмены.
-   - Не хранит сами сообщения (они в SQLite кэше worker-а).
+### Python (`export-worker`)
+
+Ответственность:
+- Получение задач из Redis (`QueueConsumer`).
+- Проверка доступа к чату + экспорт через Pyrogram (`TelegramClient`).
+- Кэширование сообщений в SQLite (`MessageCache`).
+- Отправка результата пользователю через Java-путь/бот (`JavaBotClient`).
+
+### Redis
+
+Ответственность:
+- Очереди задач.
+- Сигналы статуса/отмены.
+- Сервисные ключи (дедупликация, staging, canonical mapping).
 
 ---
 
-## Поток данных
+## 2. Поток обработки
 
-1. Пользователь пишет боту `@username`/`t.me/...`.
-2. `ExportBot` собирает параметры даты и вызывает `ExportJobProducer.enqueue(...)`.
+1. Пользователь отправляет `@username` или `t.me` ссылку боту.
+2. `ExportBot` формирует параметры даты и вызывает `ExportJobProducer.enqueue(...)`.
 3. `ExportJobProducer`:
-   - ставит lock `active_export:{userId}` (SET NX + TTL),
-   - кладёт JSON задачи в `telegram_export` или `telegram_export_express`.
-4. Worker берёт задачу через `BLMOVE` в staging-очередь.
+   - ставит lock `active_export:{userId}`;
+   - сохраняет metadata задачи;
+   - отправляет payload в `telegram_export` или `telegram_export_express`.
+4. Worker забирает задачу atomically через `BLMOVE` в staging-очередь.
 5. Worker:
-   - проверяет доступ к чату,
-   - пытается отдать данные из SQLite-кэша,
-   - при miss догружает из Telegram API,
-   - отправляет собранный JSON в `POST /api/convert`.
-6. Java API потоково форматирует JSON в plain text и отдаёт файл.
-7. Worker отправляет итог пользователю через Telegram Bot API.
+   - проверяет доступ к чату;
+   - нормализует chat ID (canonical);
+   - пробует отдать из SQLite cache;
+   - при cache miss идет в Telegram API и дозаполняет кэш.
+6. Worker отправляет JSON в Java `POST /api/convert`.
+7. Java потоково форматирует и возвращает текстовый output.
+8. Пользователь получает результат в Telegram.
 
 ---
 
-## Кэш и очереди
+## 3. Очереди и ключи Redis
 
-### Redis (оркестрация)
+### Очереди
+- `telegram_export` — обычная очередь.
+- `telegram_export_express` — приоритетная очередь (когда есть признаки cache hit).
+- `telegram_export_processing`, `telegram_export_express_processing` — staging для crash-safe обработки.
 
-Основные ключи:
-- `telegram_export`, `telegram_export_express` — очереди.
-- `telegram_export_processing`, `telegram_export_express_processing` — staging при обработке.
-- `active_export:{userId}` — защита от параллельного экспорта одним пользователем.
+### Статус/управление
+- `active_export:{userId}` — запрет параллельного экспорта пользователя.
 - `cancel_export:{taskId}` — флаг отмены.
-- `job:processing:*`, `job:completed:*`, `job:failed:*` — маркеры статуса.
-- `canonical:*` — маппинг входного идентификатора чата в canonical ID.
-
-### SQLite (данные сообщений)
-
-`export-worker/message_cache.py` хранит:
-- таблицу `messages(chat_id, msg_id, msg_ts, data)`;
-- интервалы покрытия по ID и датам (`chat_id_ranges`, `chat_date_ranges`);
-- метаданные LRU (`chat_meta`) для эвикции по дисковому лимиту.
+- `job:processing:{taskId}` / `job:completed:{taskId}` / `job:failed:{taskId}` — маркеры job lifecycle.
+- `staging:jobs`, `staging:meta:{taskId}` — восстановление задач после падения worker-а.
+- `canonical:{input}` — кэш соответствия входного идентификатора чата canonical ID.
 
 ---
 
-## Отказоустойчивость
+## 4. SQLite cache (worker)
 
-- Worker использует `BLMOVE` в staging-очередь, чтобы не терять задачу между pop/push.
-- При рестарте worker выполняет recovery зависших задач из staging.
-- `active_export` и job-маркеры имеют TTL для автоочистки.
-- Отмена задачи работает даже если она уже в обработке: worker периодически проверяет `cancel_export:{taskId}`.
+Кэш реализован в `export-worker/message_cache.py`.
+
+Таблицы:
+- `messages` — сериализованные сообщения (msgpack) + timestamp.
+- `chat_id_ranges` — покрытие по диапазонам message ID.
+- `chat_date_ranges` — покрытие по диапазонам дат.
+- `chat_meta` — last_access + размер/количество, используется для LRU эвикции.
+
+Поведение:
+- запись батчами;
+- merge диапазонов при дозагрузках;
+- LRU eviction при превышении лимита диска (`CACHE_MAX_DISK_GB`).
+
+---
+
+## 5. Надежность и отказоустойчивость
+
+- `BLMOVE` + staging защищает от потери задачи в момент между pop/push.
+- На старте worker делает recovery задач, зависших в staging.
+- TTL у lock/status ключей препятствует «вечным» зависаниям статусов.
+- Отмена поддерживается в обработке: worker периодически проверяет `cancel_export:{taskId}`.
+
+---
+
+## 6. Границы ответственности
+
+- **Java API**: безопасно и потоково форматирует текст, валидирует входные параметры.
+- **Worker**: общается с Telegram API и отвечает за сбор/кэш исходных сообщений.
+- **Redis**: координация очередей и состояний, не долговременное хранение message history.
