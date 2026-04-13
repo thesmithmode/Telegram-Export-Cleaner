@@ -466,7 +466,7 @@ class TestDeadLetterQueue:
 
     async def test_invalid_json_moves_to_dlq(self):
         mock_client = AsyncMock()
-        mock_client.blpop = AsyncMock(return_value=("telegram_export", "not valid json {"))
+        mock_client.blmove = AsyncMock(side_effect=[None, "not valid json {"])
         mock_client.rpush = AsyncMock(return_value=1)
         mock_client.lrem = AsyncMock(return_value=1)
 
@@ -489,7 +489,7 @@ class TestDeadLetterQueue:
     async def test_validation_error_moves_to_dlq(self):
         invalid_job = json.dumps({"task_id": "t1"})  # Missing user_id, chat_id
         mock_client = AsyncMock()
-        mock_client.blpop = AsyncMock(return_value=("telegram_export", invalid_job))
+        mock_client.blmove = AsyncMock(side_effect=[None, invalid_job])
         mock_client.rpush = AsyncMock(return_value=1)
         mock_client.lrem = AsyncMock(return_value=1)
 
@@ -514,7 +514,7 @@ class TestDeadLetterQueue:
             "chat_id": -1001234567890
         })
         mock_client = AsyncMock()
-        mock_client.blpop = AsyncMock(return_value=("telegram_export", valid_job))
+        mock_client.blmove = AsyncMock(side_effect=[None, valid_job])
         mock_client.rpush = AsyncMock()
 
         consumer = self._make_consumer(mock_client)
@@ -522,7 +522,7 @@ class TestDeadLetterQueue:
 
         assert result is not None
         assert result.task_id == "export_ok"
-        # В DLQ не уходит — но в staging RPUSH делается (см. TestStagingDurability)
+        # В DLQ не уходит; задача сразу атомарно переносится в staging через BLMOVE.
         assert self._dlq_calls(mock_client) == []
 
 class TestStagingDurability:
@@ -547,7 +547,7 @@ class TestStagingDurability:
             "chat_id": -1001234567890
         })
         mock_client = AsyncMock()
-        mock_client.blpop = AsyncMock(return_value=("telegram_export", valid_job))
+        mock_client.blmove = AsyncMock(side_effect=[None, valid_job])
         mock_client.rpush = AsyncMock()
         mock_client.sadd = AsyncMock()
         mock_client.setex = AsyncMock()
@@ -557,9 +557,12 @@ class TestStagingDurability:
 
         assert result is not None
         assert result.task_id == "task_123"
-        # Job pushed to staging (not LMOVE — BLPOP already removed it)
-        mock_client.rpush.assert_called_once_with(
-            "telegram_export_processing", valid_job
+        # Первая попытка проверяет express queue, затем регулярную queue.
+        assert mock_client.blmove.await_args_list[0].args[:2] == (
+            "telegram_export_express", "telegram_export_express_processing"
+        )
+        assert mock_client.blmove.await_args_list[1].args[:2] == (
+            "telegram_export", "telegram_export_processing"
         )
         # Job tracked in staging set
         mock_client.sadd.assert_called_once_with("staging:jobs", "task_123")
@@ -576,7 +579,7 @@ class TestStagingDurability:
             "chat_id": -1001234567890
         })
         mock_client = AsyncMock()
-        mock_client.blpop = AsyncMock(return_value=("telegram_export_express", valid_job))
+        mock_client.blmove = AsyncMock(side_effect=[valid_job])
         mock_client.rpush = AsyncMock()
         mock_client.sadd = AsyncMock()
         mock_client.setex = AsyncMock()
@@ -585,15 +588,16 @@ class TestStagingDurability:
         result = await consumer.get_job()
 
         assert result is not None
-        mock_client.rpush.assert_called_once_with(
-            "telegram_export_express_processing", valid_job
+        mock_client.blmove.assert_awaited_once_with(
+            "telegram_export_express", "telegram_export_express_processing",
+            timeout=1, src="LEFT", dest="RIGHT"
         )
 
     @pytest.mark.asyncio
     async def test_invalid_json_goes_to_dlq_and_removed_from_staging(self):
         invalid_json = "not valid json"
         mock_client = AsyncMock()
-        mock_client.blpop = AsyncMock(return_value=("telegram_export", invalid_json))
+        mock_client.blmove = AsyncMock(side_effect=[None, invalid_json])
         mock_client.rpush = AsyncMock()
         mock_client.lrem = AsyncMock()
 

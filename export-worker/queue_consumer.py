@@ -103,23 +103,25 @@ class QueueConsumer:
             raise RuntimeError("Not connected to Redis")
 
         try:
-            # BLPOP to find which queue has a job
-            result = await self.redis_client.blpop(
-                [self.express_queue_name, self.queue_name], timeout=5
+            # Atomically move job from source queue to staging queue.
+            # This closes a durability gap from BLPOP+RPUSH (job loss on worker crash
+            # between two commands).
+            source_queue = self.express_queue_name
+            dest_queue = self.staging_express_name
+            job_json = await self.redis_client.blmove(
+                source_queue, dest_queue, timeout=1, src="LEFT", dest="RIGHT"
             )
 
-            if not result:
+            # If express queue is empty, wait longer on regular queue.
+            if not job_json:
+                source_queue = self.queue_name
+                dest_queue = self.staging_name
+                job_json = await self.redis_client.blmove(
+                    source_queue, dest_queue, timeout=4, src="LEFT", dest="RIGHT"
+                )
+
+            if not job_json:
                 return None
-
-            source_queue, job_json = result
-
-            # BLPOP already removed the job — push the SAME job to staging
-            # for crash recovery. Using RPUSH preserves the job payload.
-            dest_queue = (
-                self.staging_express_name if source_queue == self.express_queue_name
-                else self.staging_name
-            )
-            await self.redis_client.rpush(dest_queue, job_json)
 
             try:
                 job_data = json.loads(job_json)
