@@ -5,6 +5,9 @@ import com.tcleaner.format.MarkdownParser;
 import com.tcleaner.format.StringUtils;
 import com.fasterxml.jackson.databind.JsonNode;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -13,6 +16,8 @@ import java.util.Set;
 import java.util.function.Predicate;
 
 public class MessageFilter {
+
+    private static final Logger log = LoggerFactory.getLogger(MessageFilter.class);
 
     private LocalDate startDate;
     private LocalDate endDate;
@@ -138,10 +143,11 @@ public class MessageFilter {
         }
 
         if (startDate != null || endDate != null) {
-            String dateStr = JsonUtils.getText(message, "date");
+            String dateStr = message.path("date").asText();
             LocalDate messageDate = DateFormatter.parseDateToLocalDate(dateStr);
 
             if (messageDate == null) {
+                log.debug("Сообщение пропущено: невалидная дата '{}'", dateStr);
                 return false;
             }
 

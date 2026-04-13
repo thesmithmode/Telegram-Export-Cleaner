@@ -55,7 +55,11 @@
       "Bash(nlm research:*)",
       "Bash(nlm query:*)",
       "Bash(gh repo:*)",
-      "Bash(gh api:*)"
+      "Bash(gh api:*)",
+      "mcp__serena__initial_instructions",
+      "Bash(rtk find:*)",
+      "mcp__sequentialthinking__sequentialthinking",
+      "mcp__serena__write_memory"
     ]
   },
   "enableAllProjectMcpServers": true,
