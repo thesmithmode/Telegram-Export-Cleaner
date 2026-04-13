@@ -702,3 +702,85 @@ class TestProgressTracker:
         assert second_call.kwargs["message_count"] == 0
         assert second_call.kwargs["total"] == 42
         assert second_call.kwargs["progress_message_id"] == 777
+
+    async def test_send_progress_update_includes_topic_name(self):
+        client, p = _make_client()
+        try:
+            client._http_client.post = AsyncMock(
+                return_value=MagicMock(status_code=200, json=lambda: {"result": {"message_id": 1}})
+            )
+
+            await client.send_progress_update(
+                user_chat_id=123,
+                task_id="task_1",
+                message_count=50,
+                total=100,
+                topic_name="Обход блокировок",
+            )
+
+            text = client._http_client.post.call_args[1]["data"]["text"]
+            assert "Топик: Обход блокировок" in text
+            assert "50%" in text
+        finally:
+            p.stop()
+
+    async def test_send_progress_update_no_topic_name_no_suffix(self):
+        client, p = _make_client()
+        try:
+            client._http_client.post = AsyncMock(
+                return_value=MagicMock(status_code=200, json=lambda: {"result": {"message_id": 1}})
+            )
+
+            await client.send_progress_update(
+                user_chat_id=123,
+                task_id="task_1",
+                message_count=50,
+                total=100,
+            )
+
+            text = client._http_client.post.call_args[1]["data"]["text"]
+            assert "Топик:" not in text
+        finally:
+            p.stop()
+
+    async def test_progress_tracker_with_topic_name_passes_to_all_updates(self):
+        mock_java_client = AsyncMock()
+        mock_java_client.send_progress_update = AsyncMock(return_value=12345)
+
+        tracker = ProgressTracker(
+            client=mock_java_client,
+            user_chat_id=123,
+            task_id="task_1",
+            topic_name="Тестовый топик",
+        )
+
+        await tracker.start(total=100)
+        await tracker.set_total(200)
+        await tracker.finalize(count=200)
+
+        for call in mock_java_client.send_progress_update.call_args_list:
+            assert call.kwargs.get("topic_name") == "Тестовый топик"
+
+    async def test_progress_tracker_without_topic_name(self):
+        mock_java_client = AsyncMock()
+        mock_java_client.send_progress_update = AsyncMock(return_value=12345)
+
+        tracker = ProgressTracker(
+            client=mock_java_client,
+            user_chat_id=123,
+            task_id="task_1",
+        )
+
+        await tracker.start(total=100)
+        await tracker.finalize(count=100)
+
+        for call in mock_java_client.send_progress_update.call_args_list:
+            assert call.kwargs.get("topic_name") is None
+
+    async def test_create_progress_tracker_with_topic_name(self):
+        client, p = _make_client()
+        try:
+            tracker = client.create_progress_tracker(123, "task_1", topic_name="Мой топик")
+            assert tracker._topic_name == "Мой топик"
+        finally:
+            p.stop()
