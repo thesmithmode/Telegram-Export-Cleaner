@@ -455,7 +455,6 @@ class MessageCache:
             "UPDATE chat_meta SET last_accessed=? WHERE chat_id=?",
             (time.time(), chat_id),
         )
-        await self._db.commit()
 
     async def evict_if_needed(self) -> int:
         if self._db is None:
