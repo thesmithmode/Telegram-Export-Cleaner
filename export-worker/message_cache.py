@@ -15,8 +15,6 @@ logger = logging.getLogger(__name__)
 
 _FETCH_CHUNK = 1_000   # rows per fetchmany — O(1000) RAM peak
 _STORE_BATCH = 1_000   # rows per executemany INSERT
-_TOUCH_INTERVAL_SECONDS = 60
-
 class MessageCache:
 
     def __init__(
@@ -450,18 +448,14 @@ class MessageCache:
     # ------------------------------------------------------------------ #
 
     async def _touch(self, chat_id: int):
-        """Обновляет last_accessed с троттлингом, чтобы не держать долгую write-транзакцию."""
+        """Обновляет last_accessed и сразу фиксирует изменение в БД."""
         if self._db is None:
             return
-        now = time.time()
-        before_changes = self._db.total_changes
         await self._db.execute(
-            "UPDATE chat_meta SET last_accessed=?"
-            " WHERE chat_id=? AND last_accessed < ?",
-            (now, chat_id, now - _TOUCH_INTERVAL_SECONDS),
+            "UPDATE chat_meta SET last_accessed=? WHERE chat_id=?",
+            (time.time(), chat_id),
         )
-        if self._db.total_changes > before_changes:
-            await self._db.commit()
+        await self._db.commit()
 
     async def evict_if_needed(self) -> int:
         if self._db is None:
