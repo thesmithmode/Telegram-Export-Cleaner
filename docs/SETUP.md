@@ -90,7 +90,16 @@ docker compose logs -f redis
 Отличия:
 - Java API проброшен на `127.0.0.1:8081`.
 - Используются prebuilt образы из GHCR.
+- Redis защищен паролем (`REDIS_PASSWORD`).
+- Контейнеры запускаются с hardening-настройками (`no-new-privileges`, `cap_drop`, `read_only` где применимо).
 - Важно корректно задать `.env` на сервере.
+
+Минимально для production:
+- `TELEGRAM_API_ID`
+- `TELEGRAM_API_HASH`
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_SESSION_STRING`
+- `REDIS_PASSWORD`
 
 ---
 

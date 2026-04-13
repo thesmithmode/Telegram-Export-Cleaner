@@ -40,7 +40,6 @@ public class ApiExceptionHandler {
         return ResponseEntity.badRequest().body(makeError(ex.getMessage(), ex));
     }
 
-    
     @ExceptionHandler(TelegramExporterException.class)
     public ResponseEntity<Map<String, String>> handleExporterException(TelegramExporterException ex) {
         log.error("Exporter error [{}]: {}", ex.getErrorCode(), ex.getMessage());
@@ -53,15 +52,19 @@ public class ApiExceptionHandler {
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, String>> handleGenericException(Exception ex) {
         log.error("CRITICAL ERROR: {} - {}", ex.getClass().getName(), ex.getMessage(), ex);
-        return ResponseEntity.internalServerError().body(makeError("Внутренняя ошибка сервера", ex));
+        return ResponseEntity.internalServerError().body(makeError("Внутренняя ошибка сервера", ex, false));
     }
 
     
     private Map<String, String> makeError(String message, Exception ex) {
+        return makeError(message, ex, true);
+    }
+
+    private Map<String, String> makeError(String message, Exception ex, boolean includeDetails) {
         Map<String, String> body = new HashMap<>();
         body.put("message", message != null ? message : "Unknown error");
         body.put("type", ex.getClass().getSimpleName());
-        if (ex.getMessage() != null) {
+        if (includeDetails && ex.getMessage() != null) {
             body.put("details", ex.getMessage());
         }
         return body;

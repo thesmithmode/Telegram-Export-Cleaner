@@ -69,6 +69,7 @@ curl http://localhost:8080/api/health
 - `TELEGRAM_SESSION_STRING` — для production/stable авторизации worker-а.
 - `REDIS_QUEUE_NAME` — если нужно нестандартное имя очереди.
 - `CACHE_DB_PATH`, `CACHE_MAX_DISK_GB` — если нужно кастомизировать кэш.
+- `REDIS_PASSWORD` — пароль Redis (обязательно для production).
 
 Подробно: [docs/SETUP.md](docs/SETUP.md).
 
@@ -123,3 +124,4 @@ curl http://localhost:8080/api/health
 - [docs/PYTHON_WORKER.md](docs/PYTHON_WORKER.md) — worker, кэш, recovery.
 - [docs/SETUP.md](docs/SETUP.md) — установка, конфиг, troubleshooting.
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — разработка и проверки.
+- [docs/SECURITY.md](docs/SECURITY.md) — security model и production hardening.
