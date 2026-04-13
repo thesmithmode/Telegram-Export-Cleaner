@@ -311,6 +311,18 @@ class TelegramClient:
                         if msg_id in seen_message_ids:
                             continue
 
+                        # Date filtering (messages arrive newest→oldest)
+                        message_date = ensure_utc(getattr(parsed, "date", None))
+                        if from_date and message_date and message_date < from_date:
+                            logger.debug(
+                                f"Reached message older than from_date "
+                                f"({message_date} < {from_date}), stopping"
+                            )
+                            return
+                        if to_date and message_date and message_date > to_date:
+                            continue
+
+
                         seen_message_ids.add(msg_id)
                         last_offset_id = msg_id
 

@@ -59,7 +59,20 @@
       "mcp__serena__initial_instructions",
       "Bash(rtk find:*)",
       "mcp__sequentialthinking__sequentialthinking",
-      "mcp__serena__write_memory"
+      "mcp__serena__write_memory",
+      "mcp__serena__read_memory",
+      "Bash(rtk ls:*)",
+      "mcp__plugin_context7_context7__resolve-library-id",
+      "mcp__plugin_context7_context7__query-docs",
+      "Bash(python3 -c \"from pyrogram import Client; help\\(Client.get_chat_history\\)\")",
+      "WebFetch(domain:docs.pyrogram.org)",
+      "WebFetch(domain:telegramplayground.github.io)",
+      "Bash(python3:*)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:gist.github.com)",
+      "WebFetch(domain:core.telegram.org)",
+      "Bash(rtk read:*)",
+      "Bash(rtk docker:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
