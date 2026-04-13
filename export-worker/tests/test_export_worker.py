@@ -12,7 +12,7 @@ from models import ExportRequest, ExportedMessage
 def _make_mock_java_client():
     client = AsyncMock()
     client.send_progress_update = AsyncMock(return_value=12345)
-    client.create_progress_tracker = lambda uid, tid: ProgressTracker(client, uid, tid)
+    client.create_progress_tracker = lambda uid, tid, topic_name=None: ProgressTracker(client, uid, tid, topic_name=topic_name)
     return client
 
 class TestExportWorkerInitialization:
@@ -1209,3 +1209,121 @@ class TestExportWorkerTopicSupport:
         assert result is True
         assert len(history_kwargs_list) > 0
         assert history_kwargs_list[0].get("topic_id") is None
+
+    @pytest.mark.asyncio
+    async def test_topic_export_uses_cache(self, worker):
+        """Job с topic_id не обходит кэш — кэш-методы чтения вызываются."""
+        worker.message_cache = MagicMock()
+        worker.message_cache.enabled = True
+        worker.message_cache.get_cached_date_ranges = AsyncMock(return_value=[])
+        worker.message_cache.get_cached_ranges = AsyncMock(return_value=[])
+        worker.message_cache.get_missing_date_ranges = AsyncMock(return_value=[])
+        worker.message_cache.get_missing_ranges = AsyncMock(return_value=[])
+        worker.message_cache.store_messages = AsyncMock()
+        worker.message_cache.mark_date_range_checked = AsyncMock()
+        worker.message_cache.count_messages = AsyncMock(return_value=0)
+        worker.message_cache.count_messages_by_date = AsyncMock(return_value=0)
+        worker.message_cache.iter_messages = AsyncMock(return_value=[])
+        worker.message_cache.iter_messages_by_date = AsyncMock(return_value=[])
+
+        job = ExportRequest(
+            task_id="test_topic_cache",
+            user_id=123,
+            user_chat_id=123,
+            chat_id=456,
+            topic_id=148220,
+            limit=0,
+            offset_id=0,
+        )
+
+        worker.telegram_client.verify_and_get_info = AsyncMock(
+            return_value=(True, {"title": "Test Chat", "type": "supergroup", "id": 456}, None)
+        )
+        worker.telegram_client.get_topic_name = AsyncMock(return_value="Тестовый топик")
+        worker.telegram_client.get_messages_count = AsyncMock(return_value=50)
+
+        async def mock_history(*args, **kwargs):
+            yield ExportedMessage(id=1, date="2025-01-01T00:00:00", text="Topic msg")
+
+        worker.telegram_client.get_chat_history = mock_history
+        worker.java_client.send_response = AsyncMock(return_value=True)
+        worker.queue_consumer.mark_job_processing = AsyncMock()
+        worker.queue_consumer.mark_job_completed = AsyncMock()
+
+        await worker.process_job(job)
+
+        # Кэш НЕ обходится для топиков — методы чтения/записи должны вызываться
+        cache_read_called = (
+            worker.message_cache.get_cached_date_ranges.called
+            or worker.message_cache.get_cached_ranges.called
+        )
+        assert cache_read_called, "Кэш обходится для топиков — должен использоваться"
+
+    @pytest.mark.asyncio
+    async def test_topic_export_passes_topic_id_to_get_messages_count(self, worker):
+        """Job с topic_id передаёт его в get_messages_count."""
+        job = ExportRequest(
+            task_id="test_topic_count",
+            user_id=123,
+            user_chat_id=123,
+            chat_id=456,
+            topic_id=148220,
+            limit=0,
+            offset_id=0,
+        )
+
+        worker.telegram_client.verify_and_get_info = AsyncMock(
+            return_value=(True, {"title": "Test Chat", "type": "supergroup", "id": 456}, None)
+        )
+        worker.telegram_client.get_topic_name = AsyncMock(return_value="Тест")
+        worker.telegram_client.get_messages_count = AsyncMock(return_value=50)
+
+        async def mock_history(*args, **kwargs):
+            yield ExportedMessage(id=1, date="2025-01-01T00:00:00", text="msg")
+
+        worker.telegram_client.get_chat_history = mock_history
+        worker.java_client.send_response = AsyncMock(return_value=True)
+        worker.queue_consumer.mark_job_processing = AsyncMock()
+        worker.queue_consumer.mark_job_completed = AsyncMock()
+
+        await worker.process_job(job)
+
+        # Проверяем что topic_id передан в get_messages_count
+        count_call = worker.telegram_client.get_messages_count.call_args
+        assert count_call.kwargs.get("topic_id") == 148220
+
+    @pytest.mark.asyncio
+    async def test_topic_export_shows_topic_name_in_progress(self, worker):
+        """Job с topic_id отображает название топика в прогрессе."""
+        job = ExportRequest(
+            task_id="test_topic_name",
+            user_id=123,
+            user_chat_id=123,
+            chat_id=456,
+            topic_id=148220,
+            limit=0,
+            offset_id=0,
+        )
+
+        worker.telegram_client.verify_and_get_info = AsyncMock(
+            return_value=(True, {"title": "Test Chat", "type": "supergroup", "id": 456}, None)
+        )
+        worker.telegram_client.get_topic_name = AsyncMock(return_value="Обход блокировок")
+        worker.telegram_client.get_messages_count = AsyncMock(return_value=50)
+
+        async def mock_history(*args, **kwargs):
+            yield ExportedMessage(id=1, date="2025-01-01T00:00:00", text="msg")
+
+        worker.telegram_client.get_chat_history = mock_history
+        worker.java_client.send_response = AsyncMock(return_value=True)
+        worker.queue_consumer.mark_job_processing = AsyncMock()
+        worker.queue_consumer.mark_job_completed = AsyncMock()
+
+        await worker.process_job(job)
+
+        # Проверяем что topic_name передан через send_progress_update
+        progress_calls = worker.java_client.send_progress_update.call_args_list
+        assert any(
+            call.kwargs.get("topic_name") == "Обход блокировок"
+            for call in progress_calls
+        )
