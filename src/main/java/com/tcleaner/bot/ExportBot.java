@@ -275,7 +275,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
             return;
         }
         UserSession session = getSession(userId);
-        session.setFromDate(date.atStartOfDay().toString());
+        session.setFromDate(date.atStartOfDay().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
         session.setState(UserSession.State.AWAITING_TO_DATE);
         messenger.sendWithKeyboard(chatId,
                 "📅 От: " + date.format(DATE_FORMAT) + "\n\nВведите конечную дату" + PROMPT_TO_DATE_INLINE,
@@ -411,7 +411,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     private void startQuickRangeExport(long chatId, long userId, int messageId, int days) {
         UserSession session = getSession(userId);
         LocalDate from = LocalDate.now().minusDays(days - 1L);
-        session.setFromDate(from.atStartOfDay().toString());
+        session.setFromDate(from.atStartOfDay().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
         session.setToDate(null);
         startExport(chatId, userId, messageId);
     }
