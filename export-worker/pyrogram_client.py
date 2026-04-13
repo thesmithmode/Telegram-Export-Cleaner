@@ -5,7 +5,7 @@ from typing import Any, Optional, AsyncGenerator, Union
 from pathlib import Path
 from datetime import datetime, timezone
 
-from pyrogram import Client
+from pyrogram import Client, types as pyrogram_types
 from pyrogram.raw import functions, types as raw_types
 from pyrogram.errors import (
     FloodWait, Unauthorized, BadRequest, ChannelPrivate, ChatAdminRequired,
@@ -107,12 +107,23 @@ class TelegramClient:
         from_date: Optional[datetime] = None,
         to_date: Optional[datetime] = None,
         on_floodwait: Optional[Any] = None,
+        topic_id: Optional[int] = None,
     ) -> AsyncGenerator[ExportedMessage, None]:
         if not self.is_connected:
             raise RuntimeError("Not connected to Telegram")
 
         from_date = ensure_utc(from_date)
         to_date = ensure_utc(to_date)
+
+        if topic_id is not None:
+            async for msg in self._get_topic_history(
+                chat_id=chat_id, topic_id=topic_id, limit=limit,
+                offset_id=offset_id, min_id=min_id,
+                from_date=from_date, to_date=to_date,
+                on_floodwait=on_floodwait,
+            ):
+                yield msg
+            return
 
         try:
             logger.info(f"Fetching history for chat {chat_id} (limit: {limit})")
@@ -225,6 +236,132 @@ class TelegramClient:
 
         except Exception as e:
             logger.error(f"❌ Error fetching history for chat {chat_id}: {e}", exc_info=True)
+            raise
+
+    async def _get_topic_history(
+        self,
+        chat_id: Union[int, str],
+        topic_id: int,
+        limit: int = 0,
+        offset_id: int = 0,
+        min_id: int = 0,
+        from_date: Optional[datetime] = None,
+        to_date: Optional[datetime] = None,
+        on_floodwait: Optional[Any] = None,
+    ) -> AsyncGenerator[ExportedMessage, None]:
+        """Экспорт сообщений из конкретного forum topic через raw MTProto messages.Search."""
+        logger.info(f"Fetching topic {topic_id} history for chat {chat_id} (limit: {limit})")
+
+        try:
+            peer = await self.client.resolve_peer(chat_id)
+            message_count = 0
+            last_offset_id = offset_id
+            max_retries = settings.MAX_RETRIES
+            seen_message_ids: set[int] = set()
+            batch_size = 100
+
+            from_ts = int(from_date.timestamp()) if from_date else 0
+            to_ts = int(to_date.timestamp()) if to_date else 0
+
+            retry_count = 0
+            while True:
+                try:
+                    result = await self.client.invoke(
+                        functions.messages.Search(
+                            peer=peer,
+                            q="",
+                            filter=raw_types.InputMessagesFilterEmpty(),
+                            min_date=from_ts,
+                            max_date=to_ts,
+                            offset_id=last_offset_id,
+                            add_offset=0,
+                            limit=min(batch_size, limit) if limit > 0 else batch_size,
+                            max_id=0,
+                            min_id=min_id,
+                            hash=0,
+                            top_msg_id=topic_id,
+                        )
+                    )
+
+                    messages = result.messages
+                    if not messages:
+                        break
+
+                    users = {u.id: u for u in getattr(result, 'users', [])}
+                    chats = {c.id: c for c in getattr(result, 'chats', [])}
+
+                    for raw_msg in messages:
+                        try:
+                            parsed = await pyrogram_types.Message._parse(
+                                self.client, raw_msg, users, chats,
+                            )
+                        except Exception as e:
+                            logger.debug(f"Failed to parse raw message: {e}")
+                            continue
+
+                        msg_id = parsed.id
+                        if msg_id is None:
+                            continue
+
+                        if min_id and msg_id <= min_id:
+                            return
+
+                        if msg_id in seen_message_ids:
+                            continue
+
+                        seen_message_ids.add(msg_id)
+                        last_offset_id = msg_id
+
+                        exported = MessageConverter.convert_message(parsed)
+                        yield exported
+
+                        message_count += 1
+                        if limit > 0 and message_count >= limit:
+                            logger.info(f"✅ Exported {message_count} topic messages (limit reached)")
+                            return
+
+                        if message_count % 100 == 0:
+                            logger.debug(f"Exported {message_count} topic messages...")
+
+                    # Если вернулось меньше batch_size — значит всё
+                    if len(messages) < batch_size:
+                        break
+
+                    retry_count = 0
+
+                except FloodWait as e:
+                    if retry_count >= max_retries:
+                        raise
+
+                    wait_time = min(
+                        max(e.value, settings.RETRY_BASE_DELAY * (2 ** retry_count)),
+                        settings.RETRY_MAX_DELAY,
+                    )
+                    retry_count += 1
+                    logger.warning(
+                        f"Rate limited (FloodWait {e.value}s) in topic export. "
+                        f"Retry {retry_count}/{max_retries} after {wait_time}s."
+                    )
+                    if on_floodwait:
+                        await on_floodwait(wait_time)
+                    await asyncio.sleep(wait_time)
+
+            logger.info(f"✅ Exported {message_count} messages from topic {topic_id} in chat {chat_id}")
+
+        except ChannelPrivate:
+            logger.error(f"❌ Channel {chat_id} is private")
+            raise
+
+        except ChatAdminRequired:
+            logger.error(f"❌ Admin rights required for chat {chat_id}")
+            raise
+
+        except BadRequest as e:
+            logger.error(f"❌ Invalid request for chat {chat_id}: {e}")
+            raise
+
+        except Exception as e:
+            logger.error(f"❌ Error fetching topic {topic_id} history for chat {chat_id}: {e}", exc_info=True)
             raise
 
     async def get_chat_messages_count(self, chat_id: Union[int, str]) -> Optional[int]:
