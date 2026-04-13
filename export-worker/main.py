@@ -317,6 +317,12 @@ class ExportWorker:
 
             # Fallback: кэш отключён или cache path завершился с ошибкой (не отменой)
             if messages_for_send is None:
+                # Финальная проверка отмены перед тяжёлым fallback-запросом
+                if await self.is_cancelled(job.task_id):
+                    logger.info(f"🛑 Job {job.task_id} отменена перед fallback")
+                    await self.queue_consumer.mark_job_completed(job.task_id)
+                    await self._cleanup_job(job)
+                    return True
                 fallback_result = await self._fetch_all_messages(job)
                 if fallback_result is None:
                     return True
