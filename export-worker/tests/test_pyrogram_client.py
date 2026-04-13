@@ -835,6 +835,153 @@ class TestTelegramClientMessageCount:
         assert mock_pyrogram.invoke.call_count == 2
         mock_pyrogram.get_chat_history_count.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_get_topic_messages_count_success(self):
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.resolve_peer = AsyncMock(return_value=MagicMock())
+
+        result = MagicMock()
+        result.count = 350
+        mock_pyrogram.invoke = AsyncMock(return_value=result)
+        client.client = mock_pyrogram
+
+        count = await client.get_topic_messages_count(123, topic_id=42)
+
+        assert count == 350
+        mock_pyrogram.invoke.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_topic_messages_count_with_dates(self):
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.resolve_peer = AsyncMock(return_value=MagicMock())
+
+        result = MagicMock()
+        result.count = 100
+        mock_pyrogram.invoke = AsyncMock(return_value=result)
+        client.client = mock_pyrogram
+
+        count = await client.get_topic_messages_count(
+            123, topic_id=42,
+            from_date=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            to_date=datetime(2025, 1, 31, tzinfo=timezone.utc),
+        )
+
+        assert count == 100
+        # Проверяем что min_date и max_date переданы
+        call_args = mock_pyrogram.invoke.call_args[0][0]
+        assert call_args.min_date == int(datetime(2025, 1, 1, tzinfo=timezone.utc).timestamp())
+        assert call_args.max_date == int(datetime(2025, 1, 31, tzinfo=timezone.utc).timestamp())
+        assert call_args.top_msg_id == 42
+
+    @pytest.mark.asyncio
+    async def test_get_topic_messages_count_no_count_attr(self):
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.resolve_peer = AsyncMock(return_value=MagicMock())
+
+        result = MagicMock(spec=[])
+        result.messages = [MagicMock(), MagicMock()]
+        mock_pyrogram.invoke = AsyncMock(return_value=result)
+        client.client = mock_pyrogram
+
+        count = await client.get_topic_messages_count(123, topic_id=42)
+
+        assert count == 2
+
+    @pytest.mark.asyncio
+    async def test_get_topic_messages_count_error_returns_none(self):
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.resolve_peer = AsyncMock(side_effect=Exception("API error"))
+        client.client = mock_pyrogram
+
+        result = await client.get_topic_messages_count(123, topic_id=42)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_messages_count_with_topic_id_delegates_to_topic(self):
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.resolve_peer = AsyncMock(return_value=MagicMock())
+
+        result = MagicMock()
+        result.count = 200
+        mock_pyrogram.invoke = AsyncMock(return_value=result)
+        client.client = mock_pyrogram
+
+        count = await client.get_messages_count(123, topic_id=42)
+
+        assert count == 200
+        # Должен использовать messages.Search (invoke), а не get_chat_history_count
+        mock_pyrogram.invoke.assert_called_once()
+        mock_pyrogram.get_chat_history_count.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_messages_count_with_topic_and_dates(self):
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.resolve_peer = AsyncMock(return_value=MagicMock())
+
+        result = MagicMock()
+        result.count = 50
+        mock_pyrogram.invoke = AsyncMock(return_value=result)
+        client.client = mock_pyrogram
+
+        count = await client.get_messages_count(
+            123, datetime(2025, 1, 1), datetime(2025, 1, 31), topic_id=42
+        )
+
+        assert count == 50
+        # Один вызов Search (не два GetHistory как для date_range_count)
+        assert mock_pyrogram.invoke.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_get_topic_name_success(self):
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.resolve_peer = AsyncMock(return_value=MagicMock())
+
+        topic = MagicMock()
+        topic.title = "Обход блокировок"
+        result = MagicMock()
+        result.topics = [topic]
+        mock_pyrogram.invoke = AsyncMock(return_value=result)
+        client.client = mock_pyrogram
+
+        name = await client.get_topic_name(123, topic_id=42)
+
+        assert name == "Обход блокировок"
+
+    @pytest.mark.asyncio
+    async def test_get_topic_name_not_found(self):
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.resolve_peer = AsyncMock(return_value=MagicMock())
+
+        result = MagicMock()
+        result.topics = []
+        mock_pyrogram.invoke = AsyncMock(return_value=result)
+        client.client = mock_pyrogram
+
+        name = await client.get_topic_name(123, topic_id=99999)
+
+        assert name is None
+
+    @pytest.mark.asyncio
+    async def test_get_topic_name_error_returns_none(self):
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.resolve_peer = AsyncMock(side_effect=Exception("API error"))
+        client.client = mock_pyrogram
+
+        name = await client.get_topic_name(123, topic_id=42)
+
+        assert name is None
+
+
 class TestTelegramClientContextManager:
 
     @pytest.mark.asyncio

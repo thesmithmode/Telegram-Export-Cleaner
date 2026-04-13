@@ -247,8 +247,9 @@ class JavaBotClient:
         except Exception as e:
             logger.warning(f"Failed to notify user {chat_id} about failure: {e}")
 
-    def create_progress_tracker(self, user_chat_id: int, task_id: str):
-        return ProgressTracker(self, user_chat_id, task_id)
+    def create_progress_tracker(self, user_chat_id: int, task_id: str,
+                                topic_name: Optional[str] = None):
+        return ProgressTracker(self, user_chat_id, task_id, topic_name=topic_name)
 
     async def update_queue_position(
         self,
@@ -296,12 +297,11 @@ class JavaBotClient:
         started=False,
         progress_message_id=None,
         eta_text: Optional[str] = None,
+        topic_name: Optional[str] = None,
     ):
         if total is not None:
-            # Safe against total == 0 (chat count unknown yet) — we still show a
-            # 0%/(0 из 0) bar so users don't see the generic "начался..." spinner
-            # forever while Telegram counts messages.
-            # "N из M" instead of "N/M" so Telegram doesn't autolink it as a phone.
+            # total может быть 0 (Telegram ещё не посчитал) — показываем 0% вместо спиннера.
+            # "N из M" вместо "N/M" чтобы Telegram не превращал в ссылку на телефон.
             pct = min(message_count * 100 // total, 100) if total > 0 else 0
             bar = self._build_progress_bar(pct)
             text = f"📊 {bar} {pct}% ({message_count} из {total})"
@@ -311,6 +311,8 @@ class JavaBotClient:
             text = "⏳ Экспорт начался..."
         else:
             text = f"📊 Экспортировано {message_count}..."
+        if topic_name:
+            text += f"\nТопик: {topic_name}"
 
         try:
             if progress_message_id:
@@ -356,10 +358,11 @@ def _format_eta(seconds: float) -> Optional[str]:
 
 class ProgressTracker:
 
-    def __init__(self, client, user_chat_id, task_id):
+    def __init__(self, client, user_chat_id, task_id, topic_name: Optional[str] = None):
         self._client = client
         self._user_chat_id = user_chat_id
         self._task_id = task_id
+        self._topic_name = topic_name
         self._message_id: Optional[int] = None
         self._total: Optional[int] = None
         self._last_reported_pct = 0
@@ -378,7 +381,8 @@ class ProgressTracker:
         self._last_reported_pct = 0
         self._baseline_count = 0
         self._message_id = await self._client.send_progress_update(
-            self._user_chat_id, self._task_id, 0, total=total, started=True
+            self._user_chat_id, self._task_id, 0, total=total, started=True,
+            topic_name=self._topic_name,
         )
 
     async def set_total(self, total):
@@ -394,6 +398,7 @@ class ProgressTracker:
                 message_count=self._baseline_count,
                 total=total,
                 progress_message_id=self._message_id,
+                topic_name=self._topic_name,
             )
 
     async def seed(self, cached_count: int) -> None:
@@ -409,6 +414,7 @@ class ProgressTracker:
             cached_count,
             self._total,
             progress_message_id=self._message_id,
+            topic_name=self._topic_name,
         )
         if mid:
             self._message_id = mid
@@ -457,6 +463,7 @@ class ProgressTracker:
             self._total,
             progress_message_id=self._message_id,
             eta_text=eta_text,
+            topic_name=self._topic_name,
         )
         if mid:
             self._message_id = mid
@@ -471,6 +478,7 @@ class ProgressTracker:
             total=self._total,
             progress_message_id=self._message_id,
             eta_text=f"⏳ Telegram: ожидание ~{wait_seconds}с",
+            topic_name=self._topic_name,
         )
 
     async def finalize(self, count):
@@ -481,6 +489,7 @@ class ProgressTracker:
             count,
             final_total,
             progress_message_id=self._message_id,
+            topic_name=self._topic_name,
         )
 
 async def create_java_client() -> JavaBotClient:
