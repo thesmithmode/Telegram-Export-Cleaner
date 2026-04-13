@@ -500,7 +500,7 @@ class TestStoreMessagesAtomicity:
 
         original_add_range = cache._add_range
 
-        async def failing_add_range(chat_id, new_min, new_max):
+        async def failing_add_range(chat_id, topic_id, new_min, new_max):
             # Простая эмуляция сбоя ПОСЛЕ того, как INSERT messages уже выполнен
             # в рамках ещё НЕ закоммиченной транзакции.
             raise RuntimeError("simulated crash during _add_range")
@@ -534,7 +534,7 @@ class TestStoreMessagesAtomicity:
         CHAT = 888
         messages = _make_messages([10, 11, 12])
 
-        async def failing_add_date_range(chat_id, new_from, new_to):
+        async def failing_add_date_range(chat_id, topic_id, new_from, new_to):
             raise RuntimeError("simulated crash during _add_date_range")
 
         monkeypatch.setattr(cache, "_add_date_range", failing_add_date_range)
@@ -587,7 +587,7 @@ class TestStoreMessagesAtomicity:
         # Второй батч — падает в _add_range
         second = _make_messages([100, 101, 102])
 
-        async def failing_add_range(chat_id, new_min, new_max):
+        async def failing_add_range(chat_id, topic_id, new_min, new_max):
             raise RuntimeError("second batch must fail")
 
         monkeypatch.setattr(cache, "_add_range", failing_add_range)
@@ -636,3 +636,85 @@ class TestMarkDateRangeChecked:
         cache = MessageCache(enabled=False)
         await cache.mark_date_range_checked(123, "2025-01-01", "2025-01-07")
         # Нет исключения — тест пройден
+
+
+class TestTopicIsolation:
+    """Тесты изоляции данных между topic_id=0 (весь чат) и конкретными топиками."""
+
+    @pytest.mark.asyncio
+    async def test_messages_isolated_by_topic_id(self, cache):
+        msg_chat = _make_msg(1, text="whole chat")
+        msg_topic = _make_msg(1, text="topic msg")
+
+        await cache.store_messages(100, [msg_chat], topic_id=0)
+        await cache.store_messages(100, [msg_topic], topic_id=42)
+
+        chat_msgs = await cache.get_messages(100, 0, 10, topic_id=0)
+        topic_msgs = await cache.get_messages(100, 0, 10, topic_id=42)
+
+        assert len(chat_msgs) == 1
+        assert chat_msgs[0].text == "whole chat"
+        assert len(topic_msgs) == 1
+        assert topic_msgs[0].text == "topic msg"
+
+    @pytest.mark.asyncio
+    async def test_count_messages_isolated_by_topic(self, cache):
+        msgs_chat = [_make_msg(i, text=f"c{i}") for i in range(1, 6)]
+        msgs_topic = [_make_msg(i, text=f"t{i}") for i in range(1, 4)]
+
+        await cache.store_messages(100, msgs_chat, topic_id=0)
+        await cache.store_messages(100, msgs_topic, topic_id=42)
+
+        assert await cache.count_messages(100, 0, 100, topic_id=0) == 5
+        assert await cache.count_messages(100, 0, 100, topic_id=42) == 3
+
+    @pytest.mark.asyncio
+    async def test_id_ranges_isolated_by_topic(self, cache):
+        await cache.store_messages(100, _make_messages([1, 2, 3]), topic_id=0)
+        await cache.store_messages(100, _make_messages([10, 11, 12]), topic_id=42)
+
+        assert await cache.get_cached_ranges(100, topic_id=0) == [[1, 3]]
+        assert await cache.get_cached_ranges(100, topic_id=42) == [[10, 12]]
+
+    @pytest.mark.asyncio
+    async def test_date_ranges_isolated_by_topic(self, cache):
+        msg = _make_msg(1, date="2025-01-15T12:00:00")
+        await cache.store_messages(100, [msg], topic_id=0)
+        await cache.mark_date_range_checked(100, "2025-01-01", "2025-01-31", topic_id=0)
+
+        # topic_id=0 — диапазон покрыт
+        missing_chat = await cache.get_missing_date_ranges(
+            100, "2025-01-01", "2025-01-31", topic_id=0
+        )
+        # topic_id=42 — ничего нет
+        missing_topic = await cache.get_missing_date_ranges(
+            100, "2025-01-01", "2025-01-31", topic_id=42
+        )
+
+        assert missing_chat == []
+        assert missing_topic == [("2025-01-01", "2025-01-31")]
+
+    @pytest.mark.asyncio
+    async def test_iter_messages_by_date_isolated(self, cache):
+        msg_chat = _make_msg(1, date="2025-01-15T12:00:00", text="chat")
+        msg_topic = _make_msg(2, date="2025-01-15T12:00:00", text="topic")
+
+        await cache.store_messages(100, [msg_chat], topic_id=0)
+        await cache.store_messages(100, [msg_topic], topic_id=99)
+
+        chat_result = await cache.get_messages_by_date(100, "2025-01-15", "2025-01-15", topic_id=0)
+        topic_result = await cache.get_messages_by_date(100, "2025-01-15", "2025-01-15", topic_id=99)
+
+        assert len(chat_result) == 1 and chat_result[0].text == "chat"
+        assert len(topic_result) == 1 and topic_result[0].text == "topic"
+
+    @pytest.mark.asyncio
+    async def test_default_topic_id_zero(self, cache):
+        """Без указания topic_id используется 0 (обратная совместимость)."""
+        await cache.store_messages(100, _make_messages([1, 2, 3]))
+        msgs = await cache.get_messages(100, 0, 10)
+        assert len(msgs) == 3
+
+        # Явно запросить topic_id=0 — тот же результат
+        msgs_explicit = await cache.get_messages(100, 0, 10, topic_id=0)
+        assert len(msgs_explicit) == 3

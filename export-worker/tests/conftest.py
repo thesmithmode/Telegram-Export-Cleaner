@@ -18,6 +18,19 @@ def sample_export_request():
     )
 
 @pytest.fixture
+def sample_export_request_with_topic():
+    return ExportRequest(
+        task_id="export_topic_12345",
+        user_id=123456789,
+        chat_id=-1001234567890,
+        topic_id=148220,
+        limit=1000,
+        offset_id=0,
+        from_date="2025-01-01T00:00:00",
+        to_date="2025-12-31T23:59:59"
+    )
+
+@pytest.fixture
 def simple_message():
     message = Mock()
     message.id = 123
