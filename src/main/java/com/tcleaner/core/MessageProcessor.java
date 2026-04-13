@@ -36,7 +36,7 @@ public class MessageProcessor {
             return null;
         }
 
-        String dateStr = JsonUtils.getText(message, "date");
+        String dateStr = message.path("date").asText();
         String date = DateFormatter.parseDate(dateStr);
 
         if (date.isEmpty()) {

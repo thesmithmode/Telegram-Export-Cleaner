@@ -101,11 +101,12 @@ public class ExportJobProducer {
             // Если данные чата уже в кэше — задача идёт в приоритетную очередь
             boolean cached = isLikelyCached(chatId);
             String targetQueue = cached ? queueName + EXPRESS_QUEUE_SUFFIX : queueName;
-            redis.opsForList().rightPush(targetQueue, json);
-            // Сохраняем JSON задачи для возможного LREM при отмене из очереди
+            // Сохраняем метаданные ДО LPUSH: если LPUSH упадёт — откат удалит бронь,
+            // а эти ключи протухнут по TTL без последствий.
+            // Если же SET упадёт до LPUSH — задача не попадёт в очередь (безопасно).
             redis.opsForValue().set(JOB_JSON_PREFIX + taskId, json, ACTIVE_EXPORT_TTL_MINUTES, TimeUnit.MINUTES);
-            // Запоминаем в какую очередь положили (для отмены)
             redis.opsForValue().set("job_queue:" + taskId, targetQueue, ACTIVE_EXPORT_TTL_MINUTES, TimeUnit.MINUTES);
+            redis.opsForList().rightPush(targetQueue, json);
             log.info("Задача {} добавлена в очередь {} (chat_id={}, cached={})", taskId, targetQueue, chatId, cached);
             return taskId;
         } catch (IllegalStateException e) {
