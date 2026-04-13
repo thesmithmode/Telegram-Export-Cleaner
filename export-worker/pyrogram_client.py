@@ -251,7 +251,7 @@ class TelegramClient:
         to_date: Optional[datetime] = None,
         on_floodwait: Optional[Any] = None,
     ) -> AsyncGenerator[ExportedMessage, None]:
-        """Экспорт сообщений из конкретного forum topic через raw MTProto messages.Search."""
+        """Экспорт сообщений из конкретного forum topic через raw MTProto messages.GetReplies."""
         logger.info(f"Fetching topic {topic_id} history for chat {chat_id} (limit: {limit})")
 
         try:
@@ -262,26 +262,20 @@ class TelegramClient:
             seen_message_ids: set[int] = set()
             batch_size = 100
 
-            from_ts = int(from_date.timestamp()) if from_date else 0
-            to_ts = int(to_date.timestamp()) if to_date else 0
-
             retry_count = 0
             while True:
                 try:
                     result = await self.client.invoke(
-                        functions.messages.Search(
+                        functions.messages.GetReplies(
                             peer=peer,
-                            q="",
-                            filter=raw_types.InputMessagesFilterEmpty(),
-                            min_date=from_ts,
-                            max_date=to_ts,
+                            msg_id=topic_id,
                             offset_id=last_offset_id,
+                            offset_date=0,
                             add_offset=0,
                             limit=min(batch_size, limit) if limit > 0 else batch_size,
                             max_id=0,
                             min_id=min_id,
                             hash=0,
-                            top_msg_id=topic_id,
                         )
                     )
 
@@ -321,7 +315,6 @@ class TelegramClient:
                             return
                         if to_date and message_date and message_date > to_date:
                             continue
-
 
                         seen_message_ids.add(msg_id)
                         last_offset_id = msg_id
@@ -444,22 +437,17 @@ class TelegramClient:
     ) -> Optional[int]:
         try:
             peer = await self.client.resolve_peer(chat_id)
-            from_ts = int(from_date.timestamp()) if from_date else 0
-            to_ts = int(to_date.timestamp()) if to_date else 0
             result = await self.client.invoke(
-                functions.messages.Search(
+                functions.messages.GetReplies(
                     peer=peer,
-                    q="",
-                    filter=raw_types.InputMessagesFilterEmpty(),
-                    min_date=from_ts,
-                    max_date=to_ts,
+                    msg_id=topic_id,
                     offset_id=0,
+                    offset_date=0,
                     add_offset=0,
                     limit=1,
                     max_id=0,
                     min_id=0,
                     hash=0,
-                    top_msg_id=topic_id,
                 )
             )
             count = getattr(result, "count", None)

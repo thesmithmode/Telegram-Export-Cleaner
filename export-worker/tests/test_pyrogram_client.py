@@ -869,11 +869,9 @@ class TestTelegramClientMessageCount:
         )
 
         assert count == 100
-        # Проверяем что min_date и max_date переданы
+        # Проверяем что msg_id (topic_id) передан в GetReplies
         call_args = mock_pyrogram.invoke.call_args[0][0]
-        assert call_args.min_date == int(datetime(2025, 1, 1, tzinfo=timezone.utc).timestamp())
-        assert call_args.max_date == int(datetime(2025, 1, 31, tzinfo=timezone.utc).timestamp())
-        assert call_args.top_msg_id == 42
+        assert call_args.msg_id == 42
 
     @pytest.mark.asyncio
     async def test_get_topic_messages_count_no_count_attr(self):
@@ -915,7 +913,7 @@ class TestTelegramClientMessageCount:
         count = await client.get_messages_count(123, topic_id=42)
 
         assert count == 200
-        # Должен использовать messages.Search (invoke), а не get_chat_history_count
+        # Должен использовать messages.GetReplies (invoke), а не get_chat_history_count
         mock_pyrogram.invoke.assert_called_once()
         mock_pyrogram.get_chat_history_count.assert_not_called()
 
@@ -935,7 +933,7 @@ class TestTelegramClientMessageCount:
         )
 
         assert count == 50
-        # Один вызов Search (не два GetHistory как для date_range_count)
+        # Один вызов GetReplies (не два GetHistory как для date_range_count)
         assert mock_pyrogram.invoke.call_count == 1
 
     @pytest.mark.asyncio
@@ -1393,3 +1391,120 @@ class TestGetTopicHistoryDirect:
             messages.append(msg)
 
         assert len(messages) == 2  # id=10 и id=8, id=9 пропущен
+
+    @pytest.mark.asyncio
+    @patch("pyrogram_client.MessageConverter")
+    @patch("pyrogram_client.pyrogram_types.Message._parse")
+    async def test_from_date_stops_iteration_early(self, mock_parse, mock_converter):
+        """Сообщение старше from_date — итерация останавливается."""
+        client, mock_pyrogram = self._setup_client()
+
+        mock_pyrogram.invoke = AsyncMock(return_value=self._make_search_result([10, 9, 8]))
+
+        async def parse_side_effect(cli, raw, users, chats):
+            m = MagicMock()
+            m.id = raw.id
+            dates = {10: datetime(2025, 1, 3), 9: datetime(2025, 1, 2), 8: datetime(2025, 1, 1)}
+            m.date = dates[raw.id]
+            return m
+        mock_parse.side_effect = parse_side_effect
+        mock_converter.convert_message.side_effect = lambda m: ExportedMessage(
+            id=m.id, date=str(m.date.date()), text="msg"
+        )
+
+        messages = []
+        async for msg in client._get_topic_history(
+            chat_id=123, topic_id=42, from_date=datetime(2025, 1, 2, tzinfo=timezone.utc)
+        ):
+            messages.append(msg)
+
+        assert len(messages) == 2
+        assert [m.id for m in messages] == [10, 9]
+
+    @pytest.mark.asyncio
+    @patch("pyrogram_client.MessageConverter")
+    @patch("pyrogram_client.pyrogram_types.Message._parse")
+    async def test_to_date_skips_newer_messages(self, mock_parse, mock_converter):
+        """Сообщения новее to_date — пропускаются, старые yield'ятся."""
+        client, mock_pyrogram = self._setup_client()
+
+        mock_pyrogram.invoke = AsyncMock(return_value=self._make_search_result([10, 9, 8]))
+
+        async def parse_side_effect(cli, raw, users, chats):
+            m = MagicMock()
+            m.id = raw.id
+            dates = {10: datetime(2025, 1, 3), 9: datetime(2025, 1, 2), 8: datetime(2025, 1, 1)}
+            m.date = dates[raw.id]
+            return m
+        mock_parse.side_effect = parse_side_effect
+        mock_converter.convert_message.side_effect = lambda m: ExportedMessage(
+            id=m.id, date=str(m.date.date()), text="msg"
+        )
+
+        messages = []
+        async for msg in client._get_topic_history(
+            chat_id=123, topic_id=42, to_date=datetime(2025, 1, 2, tzinfo=timezone.utc)
+        ):
+            messages.append(msg)
+
+        assert len(messages) == 2
+        assert [m.id for m in messages] == [9, 8]
+
+    @pytest.mark.asyncio
+    @patch("pyrogram_client.MessageConverter")
+    @patch("pyrogram_client.pyrogram_types.Message._parse")
+    async def test_date_range_filters_both_sides(self, mock_parse, mock_converter):
+        """from_date + to_date — только сообщения в диапазоне."""
+        client, mock_pyrogram = self._setup_client()
+
+        mock_pyrogram.invoke = AsyncMock(return_value=self._make_search_result([10, 9, 8, 7]))
+
+        async def parse_side_effect(cli, raw, users, chats):
+            m = MagicMock()
+            m.id = raw.id
+            dates = {
+                10: datetime(2025, 1, 4),
+                9: datetime(2025, 1, 3),
+                8: datetime(2025, 1, 2),
+                7: datetime(2025, 1, 1),
+            }
+            m.date = dates[raw.id]
+            return m
+        mock_parse.side_effect = parse_side_effect
+        mock_converter.convert_message.side_effect = lambda m: ExportedMessage(
+            id=m.id, date=str(m.date.date()), text="msg"
+        )
+
+        messages = []
+        async for msg in client._get_topic_history(
+            chat_id=123, topic_id=42,
+            from_date=datetime(2025, 1, 2, tzinfo=timezone.utc),
+            to_date=datetime(2025, 1, 3, tzinfo=timezone.utc),
+        ):
+            messages.append(msg)
+
+        assert len(messages) == 2
+        assert [m.id for m in messages] == [9, 8]
+
+    @pytest.mark.asyncio
+    @patch("pyrogram_client.MessageConverter")
+    @patch("pyrogram_client.pyrogram_types.Message._parse")
+    async def test_no_dates_returns_all_messages(self, mock_parse, mock_converter):
+        """Без from_date/to_date — все сообщения возвращаются."""
+        client, mock_pyrogram = self._setup_client()
+
+        mock_pyrogram.invoke = AsyncMock(return_value=self._make_search_result([10, 9, 8]))
+
+        async def parse_side_effect(cli, raw, users, chats):
+            m = MagicMock()
+            m.id = raw.id
+            m.date = datetime(2025, 1, 1)
+            return m
+        mock_parse.side_effect = parse_side_effect
+        mock_converter.convert_message.return_value = ExportedMessage(id=1, date="2025-01-01", text="msg")
+
+        messages = []
+        async for msg in client._get_topic_history(chat_id=123, topic_id=42):
+            messages.append(msg)
+
+        assert len(messages) == 3
