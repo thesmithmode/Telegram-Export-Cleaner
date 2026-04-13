@@ -40,6 +40,13 @@ pip install -r requirements.txt
 python get_session.py
 ```
 
+`requirements.txt` уже включает `pyrogram` и `TgCrypto`, поэтому отдельный `pip install pyrogram` не обязателен.
+Если нужен минимальный вариант только для генерации сессии, можно поставить вручную:
+
+```bash
+pip install pyrogram TgCrypto
+```
+
 Сгенерированную строку сохраните в `.env` как `TELEGRAM_SESSION_STRING`.
 
 ---
