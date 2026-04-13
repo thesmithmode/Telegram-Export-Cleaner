@@ -49,7 +49,13 @@
       "mcp__serena__find_referencing_symbols",
       "Bash(rtk gh:*)",
       "Bash(python -c \"import json,sys; jobs=json.load\\(sys.stdin\\)['jobs']; [print\\(j['name'], j['conclusion']\\) for j in jobs]\")",
-      "Bash(rtk grep:*)"
+      "Bash(rtk grep:*)",
+      "Bash(nlm notebook:*)",
+      "Bash(nlm chat:*)",
+      "Bash(nlm research:*)",
+      "Bash(nlm query:*)",
+      "Bash(gh repo:*)",
+      "Bash(gh api:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
