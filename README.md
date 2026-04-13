@@ -1,51 +1,75 @@
 # Telegram Export Cleaner
 
-Telegram-бот для экспорта истории чатов в чистый текстовый файл.
+Сервис для экспорта истории Telegram-чатов в текст:
+- **Java/Spring Boot**: Telegram-бот + REST API конвертации.
+- **Python worker**: получает задачи из Redis, выгружает сообщения через Pyrogram, отправляет результат в Java API.
 
-**🤖 Попробуй:** [@Export_Cleaner_bot](https://t.me/Export_Cleaner_bot) (доступ по запросу)
+## Что умеет
 
-## Возможности
+- Экспорт по `@username` или `https://t.me/...` через Telegram-бота.
+- Выбор диапазона: весь чат, последние 24ч/3д/7д/30д, или ручной диапазон дат.
+- Отмена активного экспорта (`/cancel` или кнопка в сообщении задачи).
+- REST-конвертация `result.json` в `output.txt` с фильтрами дат и ключевых слов.
+- Потоковая обработка больших JSON в Java (`StreamingResponseBody`).
+- Двухуровневый кэш:
+  - Redis — очередь/состояние задач.
+  - SQLite — кэш сообщений worker-а на диске.
 
-- ✅ Экспорт истории публичных каналов, групп и приватных чатов
-- 📅 Фильтрация по диапазону дат
-- 🔍 Фильтрация по ключевым словам (включение/исключение)
-- 🎨 Форматирование Telegram-разметки: **bold**, *italic*, `code`, [ссылки](url)
-- ⚡ Кэширование результатов для быстрого повторного экспорта
-- ❌ Отмена экспорта во время выполнения
+## Быстрый старт (Docker)
 
-## Быстрый старт
+```bash
+git clone https://github.com/thesmithmode/Telegram-Export-Cleaner
+cd Telegram-Export-Cleaner
+cp .env.example .env
+# заполните TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_BOT_TOKEN
+# (TELEGRAM_SESSION_STRING желательно для production)
+docker compose up -d
+curl http://localhost:8080/api/health
+```
 
-1. **Используй бота в Telegram:**
-   - Отправь ссылку (`https://t.me/username`) или username (`@username`)
-   - Выбери диапазон дат в интерактивном меню
-   - Получи файл `output.txt` в личных сообщениях
+Ожидаемый ответ:
 
-2. **Развёрнуть локально:**
-   ```bash
-   git clone https://github.com/thesmithmode/Telegram-Export-Cleaner
-   cp .env.example .env
-   # Заполни TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_BOT_TOKEN
-   docker compose up -d
-   curl http://localhost:8080/api/health
-   ```
+```json
+{"status":"UP"}
+```
 
-3. **REST API для конвертации файлов:**
-   ```bash
-   curl -X POST http://localhost:8080/api/convert \
-     -F "file=@result.json" \
-     -F "startDate=2024-01-01"
-   ```
+## Как пользоваться ботом
 
-## Стек
+1. Откройте бота и отправьте `/start`.
+2. Отправьте `@username` или ссылку `https://t.me/<chat>`.
+3. Выберите диапазон дат кнопками.
+4. Дождитесь `output.txt`.
 
-**Java 21** · **Spring Boot 3.4.4** · **Python 3.11** · **Pyrogram 2.0** · **Redis 7** · **Docker**
+> В приватных чатах/каналах аккаунт worker-а (не бот) должен иметь доступ.
+
+## REST API
+
+### `POST /api/convert`
+`multipart/form-data`:
+- `file` (обязательно) — Telegram export JSON.
+- `startDate`, `endDate` (опционально, `YYYY-MM-DD`).
+- `keywords`, `excludeKeywords` (опционально, CSV).
+
+Пример:
+```bash
+curl -X POST http://localhost:8080/api/convert \
+  -F "file=@result.json" \
+  -F "startDate=2024-01-01" \
+  -F "endDate=2024-12-31" \
+  -o output.txt
+```
+
+### `GET /api/health`
+Проверка доступности Java-сервиса:
+```bash
+curl http://localhost:8080/api/health
+```
 
 ## Документация
 
-- 🏛️ [**ARCHITECTURE.md**](docs/ARCHITECTURE.md) — архитектура системы, компоненты, data flow
-- 📖 [**DEVELOPMENT.md**](docs/DEVELOPMENT.md) — как контрибьютить, git workflow, тестирование
-- 📡 [**API.md**](docs/API.md) — REST API endpoints, примеры, error codes
-- 🐍 [**PYTHON_WORKER.md**](docs/PYTHON_WORKER.md) — Python worker, Pyrogram, кэширование
-- 🔧 [**SETUP.md**](docs/SETUP.md) — установка, конфигурация, troubleshooting
-
----
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — компоненты и поток данных.
+- [docs/API.md](docs/API.md) — контракт REST API.
+- [docs/BOT.md](docs/BOT.md) — сценарии Telegram-бота.
+- [docs/PYTHON_WORKER.md](docs/PYTHON_WORKER.md) — работа воркера и кэша.
+- [docs/SETUP.md](docs/SETUP.md) — установка и конфигурация.
+- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — разработка и проверки.
