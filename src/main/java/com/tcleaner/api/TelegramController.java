@@ -69,7 +69,7 @@ public class TelegramController {
                 exporter.processFileStreaming(tempFile, filter, writer);
                 writer.flush();
             } catch (Exception e) {
-                log.error("ASYNCHRONOUS ERROR: {}", e.getMessage());
+                log.error("ASYNCHRONOUS ERROR in streaming response", e);
             } finally {
                 try {
                     Files.deleteIfExists(tempFile);

@@ -66,6 +66,9 @@ public class MarkdownParser {
 
     private static String parseCustomEmoji(JsonNode entity, String text) {
         String documentId = entity.path("document_id").asText();
+        if (documentId.isEmpty()) {
+            return text.isEmpty() ? "[emoji]" : text;
+        }
         return "[emoji_" + documentId + "]";
     }
 
