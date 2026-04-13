@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 
 _FETCH_CHUNK = 1_000   # rows per fetchmany — O(1000) RAM peak
 _STORE_BATCH = 1_000   # rows per executemany INSERT
-
 class MessageCache:
 
     def __init__(
@@ -449,7 +448,7 @@ class MessageCache:
     # ------------------------------------------------------------------ #
 
     async def _touch(self, chat_id: int):
-        """Обновляет last_accessed без commit — вызывающий код сам решает когда коммитить."""
+        """Обновляет last_accessed и сразу фиксирует изменение в БД."""
         if self._db is None:
             return
         await self._db.execute(
