@@ -546,6 +546,7 @@ class ExportWorker:
                     from_date=gap_from_dt,
                     to_date=gap_to_dt,
                     on_floodwait=tracker.on_floodwait if tracker else None,
+                    topic_id=job.topic_id,
                 ):
                     batch.append(msg)
                     fetched_count += 1
@@ -647,6 +648,7 @@ class ExportWorker:
                 offset_id=0,
                 min_id=cache_max_id,
                 on_floodwait=tracker.on_floodwait if tracker else None,
+                topic_id=job.topic_id,
             ):
                 batch.append(msg)
                 fetched_count += 1
@@ -684,6 +686,7 @@ class ExportWorker:
                     offset_id=gap_high + 1,
                     min_id=gap_low - 1,
                     on_floodwait=tracker.on_floodwait if tracker else None,
+                    topic_id=job.topic_id,
                 ):
                     batch.append(msg)
                     fetched_count += 1
@@ -716,6 +719,7 @@ class ExportWorker:
                         offset_id=cache_min_id,
                         min_id=0,
                         on_floodwait=tracker.on_floodwait if tracker else None,
+                        topic_id=job.topic_id,
                     ):
                         batch.append(msg)
                         fetched_count += 1
@@ -805,6 +809,7 @@ class ExportWorker:
                 from_date=from_date,
                 to_date=to_date,
                 on_floodwait=tracker.on_floodwait if tracker else None,
+                topic_id=job.topic_id,
             ):
                 count += 1
                 if use_cache:

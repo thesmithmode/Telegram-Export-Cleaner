@@ -34,7 +34,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     private static final Logger log = LoggerFactory.getLogger(ExportBot.class);
 
     private static final Pattern TME_LINK_PATTERN =
-            Pattern.compile("https?://t\\.me/([a-zA-Z][a-zA-Z0-9_]{3,})");
+            Pattern.compile("https?://t\\.me/([a-zA-Z][a-zA-Z0-9_]{3,})(?:/(\\d+))?");
 
     private static final Pattern USERNAME_PATTERN =
             Pattern.compile("^@([a-zA-Z][a-zA-Z0-9_]{3,})$");
@@ -175,13 +175,15 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         }
 
         UserSession session = getSession(userId);
-        String identifier = extractUsername(input);
+        String[] parsed = parseTmeLink(input);
+        String identifier = parsed[0];
         if (identifier == null) {
             messenger.send(chatId, "❌ Неверный формат. Отправьте ссылку (https://t.me/channel) или @username.");
             return;
         }
 
         session.setChatId(identifier);
+        session.setTopicId(parseTopicId(parsed[1]));
         session.setChatDisplay("@" + identifier);
         session.setState(UserSession.State.AWAITING_DATE_CHOICE);
 
@@ -310,7 +312,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
 
         try {
             taskId = jobProducer.enqueue(userId, chatId, targetIdentifier,
-                    session.getFromDate(), session.getToDate());
+                    session.getTopicId(), session.getFromDate(), session.getToDate());
         } catch (IllegalStateException e) {
             log.warn("Попытка дублирующего экспорта от пользователя {}: {}", userId, e.getMessage());
             messenger.send(chatId,
@@ -510,15 +512,38 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     }
 
     static String extractUsername(String input) {
+        return parseTmeLink(input)[0];
+    }
+
+    static Integer extractTopicId(String input) {
+        return parseTopicId(parseTmeLink(input)[1]);
+    }
+
+    private static Integer parseTopicId(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        try {
+            int topicId = Integer.parseInt(raw);
+            return topicId > 0 ? topicId : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Один проход regex: [username, rawTopicId].
+     */
+    private static String[] parseTmeLink(String input) {
         Matcher matcher = TME_LINK_PATTERN.matcher(input);
         if (matcher.find()) {
-            return matcher.group(1);
+            return new String[]{matcher.group(1), matcher.group(2)};
         }
         Matcher usernameMatcher = USERNAME_PATTERN.matcher(input);
         if (usernameMatcher.matches()) {
-            return usernameMatcher.group(1);
+            return new String[]{usernameMatcher.group(1), null};
         }
-        return null;
+        return new String[]{null, null};
     }
 
     static LocalDate parseDate(String text) {

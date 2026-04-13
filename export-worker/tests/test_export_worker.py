@@ -1128,3 +1128,84 @@ class TestFloodWaitHeartbeat:
         # on_floodwait был вызван (через mock_history) — проверяем что он был передан
         assert len(floodwait_calls) == 1
         assert floodwait_calls[0] == 25
+
+
+class TestExportWorkerTopicSupport:
+    """Тесты прокидывания topic_id в get_chat_history."""
+
+    @pytest.fixture
+    def worker(self):
+        worker = ExportWorker()
+        worker.queue_consumer = AsyncMock()
+        worker.telegram_client = AsyncMock()
+        worker.java_client = _make_mock_java_client()
+        worker.telegram_client.get_messages_count = AsyncMock(return_value=100)
+        worker.message_cache = MessageCache(enabled=False)
+        return worker
+
+    @pytest.mark.asyncio
+    async def test_process_job_with_topic_passes_topic_id(self, worker):
+        """Job с topic_id передаёт его в get_chat_history"""
+        job = ExportRequest(
+            task_id="test_topic_123",
+            user_id=123,
+            user_chat_id=123,
+            chat_id=456,
+            topic_id=148220,
+            limit=0,
+            offset_id=0,
+        )
+
+        worker.telegram_client.verify_and_get_info = AsyncMock(
+            return_value=(True, {"title": "Test Chat", "type": "supergroup"}, None)
+        )
+
+        history_kwargs_list = []
+
+        async def mock_history(*args, **kwargs):
+            history_kwargs_list.append(kwargs)
+            yield ExportedMessage(id=1, date="2025-01-01T00:00:00", text="Topic msg")
+
+        worker.telegram_client.get_chat_history = mock_history
+        worker.java_client.send_response = AsyncMock(return_value=True)
+        worker.queue_consumer.mark_job_processing = AsyncMock()
+        worker.queue_consumer.mark_job_completed = AsyncMock()
+
+        result = await worker.process_job(job)
+
+        assert result is True
+        assert len(history_kwargs_list) > 0
+        assert history_kwargs_list[0].get("topic_id") == 148220
+
+    @pytest.mark.asyncio
+    async def test_process_job_without_topic_passes_none(self, worker):
+        """Job без topic_id передаёт topic_id=None"""
+        job = ExportRequest(
+            task_id="test_no_topic_123",
+            user_id=123,
+            user_chat_id=123,
+            chat_id=456,
+            limit=0,
+            offset_id=0,
+        )
+
+        worker.telegram_client.verify_and_get_info = AsyncMock(
+            return_value=(True, {"title": "Test Chat", "type": "supergroup"}, None)
+        )
+
+        history_kwargs_list = []
+
+        async def mock_history(*args, **kwargs):
+            history_kwargs_list.append(kwargs)
+            yield ExportedMessage(id=1, date="2025-01-01T00:00:00", text="Normal msg")
+
+        worker.telegram_client.get_chat_history = mock_history
+        worker.java_client.send_response = AsyncMock(return_value=True)
+        worker.queue_consumer.mark_job_processing = AsyncMock()
+        worker.queue_consumer.mark_job_completed = AsyncMock()
+
+        result = await worker.process_job(job)
+
+        assert result is True
+        assert len(history_kwargs_list) > 0
+        assert history_kwargs_list[0].get("topic_id") is None
