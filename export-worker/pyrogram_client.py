@@ -1,7 +1,7 @@
 
 import asyncio
 import logging
-from typing import Any, Optional, AsyncGenerator, Union
+from typing import Any, Dict, Optional, AsyncGenerator, Union
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -35,6 +35,8 @@ class TelegramClient:
     def __init__(self):
         self.session_path = Path("session")
         self.session_path.mkdir(exist_ok=True)
+        self._topic_name_cache: Dict[tuple, Optional[str]] = {}
+        self._TOPIC_NAME_CACHE_MAX = 500
 
         # Create Pyrogram client
         # Production: use string session from env for stateless auth
@@ -421,12 +423,79 @@ class TelegramClient:
             logger.warning(f"Could not get date range count for chat {chat_id}: {e}")
             return None
 
+    async def get_topic_messages_count(
+        self,
+        chat_id: Union[int, str],
+        topic_id: int,
+        from_date: Optional[datetime] = None,
+        to_date: Optional[datetime] = None,
+    ) -> Optional[int]:
+        try:
+            peer = await self.client.resolve_peer(chat_id)
+            from_ts = int(from_date.timestamp()) if from_date else 0
+            to_ts = int(to_date.timestamp()) if to_date else 0
+            result = await self.client.invoke(
+                functions.messages.Search(
+                    peer=peer,
+                    q="",
+                    filter=raw_types.InputMessagesFilterEmpty(),
+                    min_date=from_ts,
+                    max_date=to_ts,
+                    offset_id=0,
+                    add_offset=0,
+                    limit=1,
+                    max_id=0,
+                    min_id=0,
+                    hash=0,
+                    top_msg_id=topic_id,
+                )
+            )
+            count = getattr(result, "count", None)
+            if count is not None:
+                return max(count, 0)
+            # Для маленьких чатов count может отсутствовать — считаем по messages
+            return len(result.messages) if result.messages else 0
+        except Exception as e:
+            logger.warning(f"Could not get topic {topic_id} message count for chat {chat_id}: {e}")
+            return None
+
+    async def get_topic_name(
+        self,
+        chat_id: Union[int, str],
+        topic_id: int,
+    ) -> Optional[str]:
+        cache_key = (int(chat_id), topic_id)
+        if cache_key in self._topic_name_cache:
+            return self._topic_name_cache[cache_key]
+        try:
+            peer = await self.client.resolve_peer(chat_id)
+            result = await self.client.invoke(
+                functions.channels.GetForumTopicsByID(
+                    channel=peer,
+                    topics=[topic_id],
+                )
+            )
+            topics = getattr(result, "topics", [])
+            name = getattr(topics[0], "title", None) if topics else None
+            if len(self._topic_name_cache) >= self._TOPIC_NAME_CACHE_MAX:
+                self._topic_name_cache.clear()
+            self._topic_name_cache[cache_key] = name
+            return name
+        except Exception as e:
+            logger.warning(f"Could not get topic {topic_id} name for chat {chat_id}: {e}")
+            return None
+
     async def get_messages_count(
         self,
         chat_id: Union[int, str],
         from_date: Optional[datetime] = None,
         to_date: Optional[datetime] = None,
+        topic_id: Optional[int] = None,
     ) -> Optional[int]:
+        if topic_id is not None:
+            effective_from = ensure_utc(from_date) if from_date else None
+            effective_to = ensure_utc(to_date) if to_date else None
+            return await self.get_topic_messages_count(chat_id, topic_id, effective_from, effective_to)
         if from_date or to_date:
             effective_from = ensure_utc(from_date) or datetime(2000, 1, 1, tzinfo=timezone.utc)
             effective_to = ensure_utc(to_date) or datetime.now(timezone.utc)

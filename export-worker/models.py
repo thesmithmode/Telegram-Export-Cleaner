@@ -48,6 +48,10 @@ class ExportRequest(BaseModel):
     keywords: Optional[str] = Field(None, description="Comma-separated keywords to include")
     exclude_keywords: Optional[str] = Field(None, description="Comma-separated keywords to exclude")
 
+    @property
+    def effective_topic_id(self) -> int:
+        return self.topic_id or 0
+
     @field_validator("chat_id", mode="before")
     @classmethod
     def coerce_chat_id(cls, v):
