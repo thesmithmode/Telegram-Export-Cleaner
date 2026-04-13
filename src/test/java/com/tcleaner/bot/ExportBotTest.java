@@ -11,6 +11,7 @@ import org.telegram.telegrambots.meta.api.objects.chat.Chat;
 import org.telegram.telegrambots.meta.api.objects.message.Message;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -40,6 +41,10 @@ class ExportBotTest {
         when(jobProducerMock.enqueue(anyLong(), anyLong(), any(String.class), isNull(), isNull()))
                 .thenReturn("export_test_id");
         when(jobProducerMock.enqueue(anyLong(), anyLong(), any(String.class), any(String.class), any(String.class)))
+                .thenReturn("export_test_id");
+        when(jobProducerMock.enqueue(anyLong(), anyLong(), any(String.class), any(), isNull(), isNull()))
+                .thenReturn("export_test_id");
+        when(jobProducerMock.enqueue(anyLong(), anyLong(), any(String.class), any(), any(String.class), any(String.class)))
                 .thenReturn("export_test_id");
         when(jobProducerMock.isLikelyCached(any())).thenReturn(false);
         when(jobProducerMock.getQueueLength()).thenReturn(0L);
@@ -109,7 +114,7 @@ class ExportBotTest {
             bot.consume(createTextMessageUpdate(123L, "@my_channel"));
             bot.consume(createCallbackUpdate(123L, ExportBot.CB_EXPORT_ALL));
 
-            verify(jobProducerMock).enqueue(123L, 123L, "my_channel", null, null);
+            verify(jobProducerMock).enqueue(123L, 123L, "my_channel", null, null, null);
             verify(messengerMock).editMessage(
                     eq(123L), anyInt(), contains("Задача принята"), any(InlineKeyboardMarkup.class));
         }
@@ -154,7 +159,7 @@ class ExportBotTest {
             bot.consume(createCallbackUpdate(123L, ExportBot.CB_TO_TODAY));
 
             verify(jobProducerMock).enqueue(
-                    eq(123L), eq(123L), eq("my_channel"), contains("2024-01-01"), isNull());
+                    eq(123L), eq(123L), eq("my_channel"), isNull(), contains("2024-01-01"), isNull());
         }
 
         @Test
@@ -182,7 +187,7 @@ class ExportBotTest {
 
             verify(jobProducerMock).enqueue(
                     eq(123L), eq(123L), eq("my_channel"),
-                    contains("2024-01-01"), contains("2024-12-31"));
+                    isNull(), contains("2024-01-01"), contains("2024-12-31"));
         }
 
         @Test
@@ -247,7 +252,7 @@ class ExportBotTest {
             bot.consume(createTextMessageUpdate(123L, "@my_channel"));
 
             verify(messengerMock).send(eq(123L), contains("уже есть активный экспорт"));
-            verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), any(), any(), any());
+            verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString(), any(), any(), any());
         }
 
         @Test
@@ -279,6 +284,102 @@ class ExportBotTest {
             // editMessageId from callback > 0, т.е. storeQueueMsgId вызовется с этим id
             verify(jobProducerMock, atLeast(1))
                     .storeQueueMsgId(eq("export_test_id"), eq(123L), anyInt());
+        }
+    }
+
+    @Nested
+    @DisplayName("Парсинг topic ID из ссылок")
+    class TopicIdParsing {
+
+        @Test
+        @DisplayName("t.me/channel/12345 — extractUsername возвращает channel")
+        void testTmeLinkWithTopicUsername() {
+            assertThat(ExportBot.extractUsername("https://t.me/public_channel/12345"))
+                    .isEqualTo("public_channel");
+        }
+
+        @Test
+        @DisplayName("t.me/channel/12345 — extractTopicId возвращает 12345")
+        void testTmeLinkWithTopicId() {
+            assertThat(ExportBot.extractTopicId("https://t.me/public_channel/12345"))
+                    .isEqualTo(12345);
+        }
+
+        @Test
+        @DisplayName("t.me/channel (без топика) — extractTopicId возвращает null")
+        void testTmeLinkWithoutTopicId() {
+            assertThat(ExportBot.extractTopicId("https://t.me/public_channel"))
+                    .isNull();
+        }
+
+        @Test
+        @DisplayName("@username — extractTopicId возвращает null")
+        void testAtUsernameTopicIdNull() {
+            assertThat(ExportBot.extractTopicId("@test_chat")).isNull();
+        }
+
+        @Test
+        @DisplayName("t.me/channel/0 — невалидный topic_id, extractTopicId возвращает null")
+        void testZeroTopicId() {
+            assertThat(ExportBot.extractTopicId("https://t.me/public_channel/0"))
+                    .isNull();
+        }
+
+        @Test
+        @DisplayName("t.me/channel/abc — нечисловой topic, extractUsername извлекает channel, topicId null")
+        void testNonNumericTopicIgnored() {
+            assertThat(ExportBot.extractUsername("https://t.me/public_channel/abc"))
+                    .isEqualTo("public_channel");
+            assertThat(ExportBot.extractTopicId("https://t.me/public_channel/abc"))
+                    .isNull();
+        }
+
+        @Test
+        @DisplayName("t.me/channel/1 — topic_id=1 (General topic) валиден")
+        void testTopicIdOne() {
+            assertThat(ExportBot.extractTopicId("https://t.me/public_channel/1"))
+                    .isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("t.me/channel/148220 — реальный topic_id парсится")
+        void testRealTopicId() {
+            assertThat(ExportBot.extractTopicId("https://t.me/strbypass/148220"))
+                    .isEqualTo(148220);
+            assertThat(ExportBot.extractUsername("https://t.me/strbypass/148220"))
+                    .isEqualTo("strbypass");
+        }
+
+        @Test
+        @DisplayName("t.me/channel/99999999999 — overflow Integer, extractTopicId возвращает null")
+        void testOverflowTopicId() {
+            assertThat(ExportBot.extractTopicId("https://t.me/public_channel/99999999999"))
+                    .isNull();
+        }
+    }
+
+    @Nested
+    @DisplayName("Topic ID в потоке экспорта")
+    class TopicIdExportFlow {
+
+        @Test
+        @DisplayName("Ссылка с топиком — topicId=148220 передаётся в enqueue")
+        void testTopicLinkStoresTopicId() {
+            bot.consume(createTextMessageUpdate(123L, "https://t.me/public_channel/148220"));
+            bot.consume(createCallbackUpdate(123L, ExportBot.CB_EXPORT_ALL));
+
+            verify(jobProducerMock).enqueue(eq(123L), eq(123L), eq("public_channel"),
+                    eq(148220), isNull(), isNull());
+        }
+
+        @Test
+        @DisplayName("Ссылка без топика — topicId=null передаётся в enqueue")
+        void testNoTopicLinkNullTopicId() {
+            bot.consume(createTextMessageUpdate(123L, "https://t.me/public_channel"));
+            bot.consume(createCallbackUpdate(123L, ExportBot.CB_EXPORT_ALL));
+
+            verify(jobProducerMock).enqueue(eq(123L), eq(123L), eq("public_channel"),
+                    isNull(), isNull(), isNull());
         }
     }
 

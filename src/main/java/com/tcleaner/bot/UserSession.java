@@ -14,6 +14,7 @@ public class UserSession {
     private State state = State.IDLE;
     private String chatId;
     private String chatDisplay;
+    private Integer topicId;
     private String fromDate;
     private String toDate;
     private Instant lastAccess = Instant.now();
@@ -42,6 +43,15 @@ public class UserSession {
 
     public synchronized void setChatDisplay(String chatDisplay) {
         this.chatDisplay = chatDisplay;
+        touch();
+    }
+
+    public synchronized Integer getTopicId() {
+        return topicId;
+    }
+
+    public synchronized void setTopicId(Integer topicId) {
+        this.topicId = topicId;
         touch();
     }
 
@@ -75,6 +85,7 @@ public class UserSession {
         this.state = State.IDLE;
         this.chatId = null;
         this.chatDisplay = null;
+        this.topicId = null;
         this.fromDate = null;
         this.toDate = null;
         this.lastAccess = Instant.now();
