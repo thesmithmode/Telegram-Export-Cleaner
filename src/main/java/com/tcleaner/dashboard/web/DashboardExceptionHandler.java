@@ -2,6 +2,8 @@ package com.tcleaner.dashboard.web;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -18,8 +20,14 @@ import java.util.Map;
  * Обработчик ошибок JSON API дашборда. Скоуп ограничен пакетом
  * {@code com.tcleaner.dashboard.web}, чтобы не конфликтовать с
  * {@code ApiExceptionHandler} для {@code /api/**}.
+ *
+ * <p>{@code @Order(HIGHEST_PRECEDENCE)} гарантирует, что для исключений из
+ * {@code DashboardApiController} сработает именно этот handler, а не глобальный
+ * {@code ApiExceptionHandler.handleGenericException(Exception.class)}, который
+ * вернул бы 500 вместо 403/400.
  */
 @RestControllerAdvice(basePackages = "com.tcleaner.dashboard.web")
+@Order(Ordered.HIGHEST_PRECEDENCE)
 public class DashboardExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(DashboardExceptionHandler.class);
