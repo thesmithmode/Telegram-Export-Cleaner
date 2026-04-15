@@ -6,6 +6,7 @@ import re
 import os
 import tempfile
 import time
+import unicodedata
 from typing import Optional, Union, AsyncIterator
 
 import httpx
@@ -96,6 +97,26 @@ class JavaBotClient:
                 )
             return False
 
+        # Защита от невидимых non-whitespace символов (BOM, ZWSP, ZWJ, форматирование):
+        # Java-фильтр пропускает их, Telegram отклоняет sendDocument с пустым телом.
+        if not cleaned_text or all(
+            unicodedata.category(c) in ("Cc", "Cf", "Zs", "Zl", "Zp")
+            for c in cleaned_text
+        ):
+            logger.info(
+                f"ℹ️ Task {payload.task_id}: Java returned empty text "
+                f"(actual_count={payload.actual_count}) — notifying user "
+                f"instead of uploading empty document"
+            )
+            if payload.user_chat_id and self.bot_token:
+                await self.notify_empty_export(
+                    payload.user_chat_id,
+                    payload.task_id,
+                    payload.from_date,
+                    payload.to_date,
+                )
+            return True
+
         # 3. Deliver cleaned text to user
         if payload.user_chat_id and self.bot_token:
             filename = self._build_filename(
@@ -137,7 +158,12 @@ class JavaBotClient:
                 
                 f.write(b"]}")
         except Exception:
-            if os.path.exists(tmp_path): os.unlink(tmp_path)
+            try:
+                os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
+            except Exception as cleanup_err:
+                logger.warning(f"Failed to clean up temp file {tmp_path}: {cleanup_err}")
             raise
         return tmp_path
 

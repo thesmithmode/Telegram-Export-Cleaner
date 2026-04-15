@@ -1,7 +1,7 @@
 
 import asyncio
 import logging
-from typing import Any, Dict, Optional, AsyncGenerator, Union
+from typing import Any, Awaitable, Callable, Dict, Optional, AsyncGenerator, Union
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -23,6 +23,74 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
+class ExportCancelled(Exception):
+    """Raised from inside long-running Telegram API waits when the user cancels.
+
+    Propagates up through get_chat_history generators so the caller can
+    clean up, mark the job completed, and notify the user — без того чтобы
+    ждать окончания FloodWait (20+ секунд на больших чатах).
+    """
+
+
+CancelCheck = Callable[[], Awaitable[bool]]
+FloodWaitCallback = Callable[[int], Awaitable[None]]
+
+
+async def cancellable_floodwait_sleep(
+    wait_time: float,
+    on_floodwait: Optional[FloodWaitCallback] = None,
+    is_cancelled_fn: Optional[CancelCheck] = None,
+    tick_seconds: float = 1.0,
+    progress_interval: float = 5.0,
+) -> None:
+    """Sleep для FloodWait, который: (1) сразу бросает ExportCancelled,
+    когда пользователь /cancel-ит; (2) каждые `progress_interval` секунд
+    вызывает `on_floodwait(remaining)` — чтобы UI показывал актуальный
+    countdown вместо замороженного прогресс-бара.
+
+    Единая точка вместо разбросанных `asyncio.sleep(wait_time)` в обеих
+    ветках экспорта (get_chat_history, _get_topic_history) — гарантирует,
+    что любой Pyrogram-залип прерывается одинаково.
+    """
+    remaining = float(wait_time)
+    last_progress_at = 0.0
+
+    if on_floodwait:
+        try:
+            await on_floodwait(int(remaining))
+        except Exception as exc:
+            logger.debug(f"on_floodwait callback failed (initial): {exc}")
+
+    while remaining > 0:
+        if is_cancelled_fn is not None:
+            try:
+                if await is_cancelled_fn():
+                    raise ExportCancelled("cancelled during FloodWait")
+            except ExportCancelled:
+                raise
+            except Exception as exc:
+                # Ошибка проверки отмены не должна ломать весь экспорт,
+                # но логируем — SRE должен видеть проблемы Redis-клиента.
+                logger.warning(f"is_cancelled_fn check failed: {exc}")
+
+        step = min(tick_seconds, remaining)
+        await asyncio.sleep(step)
+        remaining -= step
+        last_progress_at += step
+
+        if (
+            on_floodwait
+            and remaining > 0
+            and last_progress_at >= progress_interval
+        ):
+            try:
+                await on_floodwait(int(remaining))
+            except Exception as exc:
+                logger.debug(f"on_floodwait callback failed (tick): {exc}")
+            last_progress_at = 0.0
+
+
 def ensure_utc(dt: Optional[datetime]) -> Optional[datetime]:
     if dt is None:
         return None
@@ -31,6 +99,9 @@ def ensure_utc(dt: Optional[datetime]) -> Optional[datetime]:
     return dt
 
 class TelegramClient:
+
+    # Check cancel every N messages to reduce Redis round-trips.
+    _CANCEL_CHECK_EVERY: int = 200
 
     def __init__(self):
         self.session_path = Path("session")
@@ -108,8 +179,9 @@ class TelegramClient:
         min_id: int = 0,
         from_date: Optional[datetime] = None,
         to_date: Optional[datetime] = None,
-        on_floodwait: Optional[Any] = None,
+        on_floodwait: Optional[FloodWaitCallback] = None,
         topic_id: Optional[int] = None,
+        is_cancelled_fn: Optional[CancelCheck] = None,
     ) -> AsyncGenerator[ExportedMessage, None]:
         if not self.is_connected:
             raise RuntimeError("Not connected to Telegram")
@@ -123,6 +195,7 @@ class TelegramClient:
                 offset_id=offset_id, min_id=min_id,
                 from_date=from_date, to_date=to_date,
                 on_floodwait=on_floodwait,
+                is_cancelled_fn=is_cancelled_fn,
             ):
                 yield msg
             return
@@ -146,6 +219,23 @@ class TelegramClient:
                         offset_id=last_offset_id,
                     ):
                         try:
+                            if (
+                                is_cancelled_fn is not None
+                                and message_count
+                                and message_count % _CANCEL_CHECK_EVERY == 0
+                            ):
+                                try:
+                                    if await is_cancelled_fn():
+                                        raise ExportCancelled(
+                                            "cancelled during get_chat_history"
+                                        )
+                                except ExportCancelled:
+                                    raise
+                                except Exception as exc:
+                                    logger.warning(
+                                        f"is_cancelled_fn check failed: {exc}"
+                                    )
+
                             # Incremental export: stop when we reach already-exported messages
                             if min_id and message.id <= min_id:
                                 logger.debug(f"Reached already-exported message {message.id} (min_id={min_id}), stopping")
@@ -183,6 +273,8 @@ class TelegramClient:
                             if message_count % 100 == 0:
                                 logger.debug(f"Exported {message_count} messages...")
 
+                        except ExportCancelled:
+                            raise
                         except Exception as e:
                             logger.error(f"Error processing message {message.id}: {e}")
                             # Skip problematic message and continue
@@ -217,12 +309,21 @@ class TelegramClient:
                         f"(have seen {len(seen_message_ids)} unique messages)"
                     )
 
-                    if on_floodwait:
-                        await on_floodwait(wait_time)
-                    await asyncio.sleep(wait_time)
+                    await cancellable_floodwait_sleep(
+                        wait_time,
+                        on_floodwait=on_floodwait,
+                        is_cancelled_fn=is_cancelled_fn,
+                    )
                     # Restart get_chat_history from last_offset_id with deduplication active
 
             logger.info(f"✅ Exported {message_count} messages from chat {chat_id}")
+
+        except ExportCancelled:
+            logger.info(
+                f"🛑 Export cancelled mid-stream for chat {chat_id} "
+                f"({message_count} messages yielded before cancel)"
+            )
+            return
 
         except ChannelPrivate:
             logger.error(f"❌ Channel {chat_id} is private")
@@ -249,7 +350,8 @@ class TelegramClient:
         min_id: int = 0,
         from_date: Optional[datetime] = None,
         to_date: Optional[datetime] = None,
-        on_floodwait: Optional[Any] = None,
+        on_floodwait: Optional[FloodWaitCallback] = None,
+        is_cancelled_fn: Optional[CancelCheck] = None,
     ) -> AsyncGenerator[ExportedMessage, None]:
         """Экспорт сообщений из конкретного forum topic через raw MTProto messages.GetReplies."""
         logger.info(f"Fetching topic {topic_id} history for chat {chat_id} (limit: {limit})")
@@ -264,6 +366,20 @@ class TelegramClient:
 
             retry_count = 0
             while True:
+                # Cancel-проверка перед каждым батч-запросом: дешевле, чем
+                # проверять на каждом сообщении, но достаточно быстро
+                # реагирует (один батч = 100 сообщений).
+                if is_cancelled_fn is not None:
+                    try:
+                        if await is_cancelled_fn():
+                            raise ExportCancelled(
+                                "cancelled before topic batch fetch"
+                            )
+                    except ExportCancelled:
+                        raise
+                    except Exception as exc:
+                        logger.warning(f"is_cancelled_fn check failed: {exc}")
+
                 try:
                     result = await self.client.invoke(
                         functions.messages.GetReplies(
@@ -349,11 +465,20 @@ class TelegramClient:
                         f"Rate limited (FloodWait {e.value}s) in topic export. "
                         f"Retry {retry_count}/{max_retries} after {wait_time}s."
                     )
-                    if on_floodwait:
-                        await on_floodwait(wait_time)
-                    await asyncio.sleep(wait_time)
+                    await cancellable_floodwait_sleep(
+                        wait_time,
+                        on_floodwait=on_floodwait,
+                        is_cancelled_fn=is_cancelled_fn,
+                    )
 
             logger.info(f"✅ Exported {message_count} messages from topic {topic_id} in chat {chat_id}")
+
+        except ExportCancelled:
+            logger.info(
+                f"🛑 Topic export cancelled mid-stream "
+                f"(chat {chat_id}, topic {topic_id})"
+            )
+            return
 
         except ChannelPrivate:
             logger.error(f"❌ Channel {chat_id} is private")

@@ -1,17 +1,26 @@
 #!/usr/bin/env python3
 
+import json
 import logging
 import asyncio
 import signal
 import sys
+import time
 import psutil
 from datetime import date as date_cls, datetime, timedelta, timezone
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Literal, Optional
+
+StageType = Literal["start", "fetch", "convert"]
 
 import redis.asyncio as aioredis
 
 from config import settings
-from pyrogram_client import TelegramClient, create_client as create_telegram_client, ensure_utc
+from pyrogram_client import (
+    TelegramClient,
+    create_client as create_telegram_client,
+    ensure_utc,
+    ExportCancelled,
+)
 from queue_consumer import QueueConsumer, create_queue_consumer
 from java_client import JavaBotClient, ProgressTracker, create_java_client
 from message_cache import MessageCache
@@ -59,6 +68,16 @@ class ExportWorker:
     # 1000 × ~200 B ≈ 200 KB — safe even on 512 MB containers.
     _CACHE_BATCH_SIZE: int = 1_000
 
+    # Check cancel every N messages to reduce Redis round-trips.
+    _CANCEL_CHECK_EVERY: int = 200
+
+    async def _flush_partial_batch(self, job: ExportRequest, batch: list[ExportedMessage]) -> None:
+        """Сбрасывает накопленный батч при отмене — сохраняем частичный прогресс."""
+        if batch:
+            await self.message_cache.store_messages(
+                job.chat_id, batch, topic_id=job.effective_topic_id
+            )
+
     async def is_cancelled(self, task_id: str) -> bool:
         if not self.control_redis:
             return False
@@ -67,6 +86,38 @@ class ExportWorker:
             return val is not None
         except Exception:
             return False
+
+    # TTL = 2×порог: один пропущенный heartbeat не ломает observability.
+    _HEARTBEAT_TTL_SECONDS: int = 120
+
+    async def heartbeat(self, task_id: str, stage: Optional[StageType] = None) -> None:
+        if not self.control_redis:
+            return
+        try:
+            payload = json.dumps({"ts": int(time.time()), "stage": stage or ""})
+            await self.control_redis.set(
+                f"worker:heartbeat:{task_id}",
+                payload,
+                ex=self._HEARTBEAT_TTL_SECONDS,
+            )
+        except Exception as exc:
+            logger.debug(f"heartbeat failed for {task_id}: {exc}")
+
+    async def clear_heartbeat(self, task_id: str) -> None:
+        if not self.control_redis:
+            return
+        try:
+            await self.control_redis.delete(f"worker:heartbeat:{task_id}")
+        except Exception as exc:
+            logger.debug(f"clear_heartbeat failed for {task_id}: {exc}")
+
+    def _make_cancel_checker(self, task_id: str):
+        # Piggyback heartbeat на cancel-poll: cancel вызывается с нужной частотой
+        # (каждые 200 сообщений, каждую секунду в FloodWait) — отдельного таймера не нужно.
+        async def _check() -> bool:
+            await self.heartbeat(task_id, stage="fetch")
+            return await self.is_cancelled(task_id)
+        return _check
 
     async def clear_active_export(self, user_id: int) -> None:
         if self.control_redis:
@@ -112,6 +163,7 @@ class ExportWorker:
     async def _cleanup_job(self, job: ExportRequest) -> None:
         await self.clear_active_export(job.user_id)
         await self.clear_active_processing_job()
+        await self.clear_heartbeat(job.task_id)
 
     async def initialize(self) -> bool:
         try:
@@ -184,6 +236,7 @@ class ExportWorker:
             # Mark job as processing
             await self.queue_consumer.mark_job_processing(job.task_id)
             await self.set_active_processing_job(job.task_id)
+            await self.heartbeat(job.task_id, stage="start")
             # Обновляем active_export чтобы /cancel работал даже после OOM-рестарта.
             # Java-бот ставит этот ключ при постановке в очередь (TTL 60 мин), но после
             # OOM-рестарта воркер восстанавливает задачу из staging — без обновления ключ
@@ -357,6 +410,9 @@ class ExportWorker:
                     f"ℹ️ Job {job.task_id}: 0 messages in selected period — "
                     f"notifying user without Java round-trip"
                 )
+            # Heartbeat перед Java-стадией: fetch закончен, cancel-poll больше
+            # не тикает, а /api/convert на 300k сообщений может жить минутами.
+            await self.heartbeat(job.task_id, stage="convert")
             success = await self.java_client.send_response(
                 SendResponsePayload(
                     task_id=job.task_id,
@@ -385,6 +441,29 @@ class ExportWorker:
                 self.log_memory_usage("JOB_FAILED")
 
             await self._cleanup_job(job)
+            return True
+
+        except ExportCancelled:
+            # Пользователь отменил задачу прямо во время fetch из Telegram.
+            # Завершаем корректно: снимаем маркеры, но НЕ помечаем как failed,
+            # чтобы юзер не увидел "Export failed", и не шлём пустой результат
+            # (частичный контент остался в кэше — следующий экспорт его подхватит).
+            logger.info(
+                f"🛑 Job {job.task_id} cancelled during Telegram fetch — "
+                f"cleanly finalizing"
+            )
+            try:
+                await self.queue_consumer.mark_job_completed(job.task_id)
+            except Exception as mark_err:
+                logger.warning(
+                    f"Failed to mark cancelled job {job.task_id} completed: {mark_err}"
+                )
+            try:
+                await self._cleanup_job(job)
+            except Exception as cleanup_err:
+                logger.warning(
+                    f"Cleanup failed for cancelled {job.task_id}: {cleanup_err}"
+                )
             return True
 
         except Exception as e:
@@ -565,6 +644,7 @@ class ExportWorker:
                     to_date=gap_to_dt,
                     on_floodwait=tracker.on_floodwait if tracker else None,
                     topic_id=job.topic_id,
+                    is_cancelled_fn=self._make_cancel_checker(job.task_id),
                 ):
                     batch.append(msg)
                     fetched_count += 1
@@ -574,6 +654,9 @@ class ExportWorker:
                             return None
                     if tracker:
                         await tracker.track(fetched_count)
+            except ExportCancelled:
+                await self._flush_partial_batch(job, batch)
+                raise
             except Exception as e:
                 logger.warning(f"Failed fetching date gap [{gap_from} - {gap_to}]: {e}")
 
@@ -668,6 +751,7 @@ class ExportWorker:
                 min_id=cache_max_id,
                 on_floodwait=tracker.on_floodwait if tracker else None,
                 topic_id=job.topic_id,
+                is_cancelled_fn=self._make_cancel_checker(job.task_id),
             ):
                 batch.append(msg)
                 fetched_count += 1
@@ -679,6 +763,9 @@ class ExportWorker:
                         return None
                 if tracker:
                     await tracker.track(fetched_count)
+        except ExportCancelled:
+            await self._flush_partial_batch(job, batch)
+            raise
         except Exception as e:
             logger.warning(f"Failed fetching new messages above cache: {e}")
 
@@ -706,6 +793,7 @@ class ExportWorker:
                     min_id=gap_low - 1,
                     on_floodwait=tracker.on_floodwait if tracker else None,
                     topic_id=job.topic_id,
+                    is_cancelled_fn=self._make_cancel_checker(job.task_id),
                 ):
                     batch.append(msg)
                     fetched_count += 1
@@ -715,6 +803,9 @@ class ExportWorker:
                             return None
                     if tracker:
                         await tracker.track(fetched_count)
+            except ExportCancelled:
+                await self._flush_partial_batch(job, batch)
+                raise
             except Exception as e:
                 logger.warning(f"Failed fetching gap [{gap_low}-{gap_high}]: {e}")
 
@@ -739,6 +830,7 @@ class ExportWorker:
                         min_id=0,
                         on_floodwait=tracker.on_floodwait if tracker else None,
                         topic_id=job.topic_id,
+                        is_cancelled_fn=self._make_cancel_checker(job.task_id),
                     ):
                         batch.append(msg)
                         fetched_count += 1
@@ -748,6 +840,9 @@ class ExportWorker:
                                 return None
                         if tracker:
                             await tracker.track(fetched_count)
+                except ExportCancelled:
+                    await self._flush_partial_batch(job, batch)
+                    raise
                 except Exception as e:
                     logger.warning(f"Failed fetching older messages below cache min {cache_min_id}: {e}")
 
@@ -830,6 +925,7 @@ class ExportWorker:
                 to_date=to_date,
                 on_floodwait=tracker.on_floodwait if tracker else None,
                 topic_id=job.topic_id,
+                is_cancelled_fn=self._make_cancel_checker(job.task_id),
             ):
                 count += 1
                 if use_cache:
@@ -849,6 +945,12 @@ class ExportWorker:
                 elif count % 10_000 == 0:
                     logger.info(f"  Exported {count} messages...")
 
+        except ExportCancelled:
+            # Сохраняем частично скачанный батч, чтобы не терять прогресс
+            # при повторном экспорте с той же страртовой точки.
+            if batch and use_cache:
+                await self.message_cache.store_messages(job.chat_id, batch, topic_id=tid)
+            raise
         except Exception as e:
             logger.error(f"❌ Export failed: {e}")
             raise
