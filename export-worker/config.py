@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     # Logging
     LOG_LEVEL: str = "INFO"
 
+    # Redis Stream для статистики (dashboard)
+    STATS_STREAM_KEY: str = "stats:events"
+
     @field_validator("TELEGRAM_API_ID")
     @classmethod
     def validate_api_id(cls, v: int) -> int:
