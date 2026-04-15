@@ -307,11 +307,35 @@ class QueueConsumer:
             logger.debug(f"Marked job failed: {task_id}")
             await self._untrack_staging_job(task_id)
             await self._remove_from_staging(task_id)
+
+            # Публикуем export.failed в stats stream, чтобы Java ingestion-сервис
+            # обновил статус в dashboard.db (at-least-once; идемпотентно по task_id)
+            await self._publish_failed_event(task_id, error)
+
             return True
 
         except Exception as e:
             logger.error(f"Failed to mark job failed: {e}")
             return False
+
+    async def _publish_failed_event(self, task_id: str, error: str) -> None:
+        """XADD export.failed в stats:events. Ошибки здесь не должны ронять основной flow."""
+        try:
+            payload = json.dumps({
+                "type": "export.failed",
+                "task_id": task_id,
+                "status": "failed",
+                "error": error,
+                "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            })
+            await self.redis_client.xadd(
+                settings.STATS_STREAM_KEY,
+                {"payload": payload},
+                maxlen=100_000,
+                approximate=True,
+            )
+        except Exception as e:
+            logger.debug(f"stats xadd failed for {task_id}: {e}")
 
     async def get_pending_jobs(self) -> dict:
         if not self.redis_client:
