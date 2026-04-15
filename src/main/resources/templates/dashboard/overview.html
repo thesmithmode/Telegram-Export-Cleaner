@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{dashboard/layout :: layout(title=#{overview.title}, content=~{::overview-content})}">
+<body>
+
+<!-- Минимальный overview для PR-9: контент страницы наполняется в PR-10. -->
+<div th:fragment="overview-content" class="overview">
+    <h1 th:text="#{overview.heading}">Обзор</h1>
+    <p class="overview-placeholder" th:text="#{overview.loading}">Загрузка…</p>
+</div>
+
+</body>
+</html>

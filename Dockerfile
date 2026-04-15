@@ -5,6 +5,13 @@ COPY pom.xml checkstyle.xml ./
 # Dependencies in separate layer (cached on rebuild)
 RUN mvn dependency:go-offline -q
 COPY src/ ./src/
+# Vendored Chart.js (dashboard). Версия прикручена через ARG для воспроизводимости,
+# файл подкладывается в static/ ДО mvn package, чтобы попасть в JAR.
+ARG CHART_JS_VERSION=4.4.1
+RUN (command -v curl >/dev/null 2>&1 || (apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*)) && \
+    mkdir -p src/main/resources/static/dashboard/vendor && \
+    curl -sfL -o src/main/resources/static/dashboard/vendor/chart.min.js \
+    "https://cdn.jsdelivr.net/npm/chart.js@${CHART_JS_VERSION}/dist/chart.umd.min.js"
 RUN mvn clean package -DskipTests -q
 
 # Stage 2: Runtime
