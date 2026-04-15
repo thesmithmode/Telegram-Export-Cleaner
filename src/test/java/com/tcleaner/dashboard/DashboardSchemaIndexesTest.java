@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
@@ -14,10 +15,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Проверяет, что миграция V1 создала индексы и UNIQUE-ограничения,
+ * Проверяет, что changeset 001 создал индексы и UNIQUE-ограничения,
  * на которые опирается план агрегаций и идемпотентности (см. docs/DASHBOARD.md).
+ * <p>
+ * @Transactional откатывает вставленные в тестах строки — shared in-memory
+ * SQLite не протечёт в другие @SpringBootTest-ы (например, smoke-тест
+ * проверяет пустоту таблиц).
  */
 @SpringBootTest
+@Transactional
 @DisplayName("Dashboard схема — индексы и UNIQUE")
 class DashboardSchemaIndexesTest {
 
@@ -30,6 +36,16 @@ class DashboardSchemaIndexesTest {
     @Test
     @DisplayName("UNIQUE по export_events.task_id (идемпотентный ключ)")
     void taskIdIsUnique() {
+        // FK → bot_users(bot_user_id) и chats(id) заставляют сначала засеять parent-строки
+        jdbcTemplate.update("""
+                INSERT INTO bot_users (bot_user_id, first_seen, last_seen)
+                VALUES (1, '2026-04-15T12:00:00Z', '2026-04-15T12:00:00Z')
+                """);
+        jdbcTemplate.update("""
+                INSERT INTO chats (id, canonical_chat_id, chat_id_raw, first_seen, last_seen)
+                VALUES (1, '-100123', '@chat', '2026-04-15T12:00:00Z', '2026-04-15T12:00:00Z')
+                """);
+
         jdbcTemplate.update("""
                 INSERT INTO export_events (task_id, bot_user_id, chat_ref_id, started_at, status, source)
                 VALUES ('task-1', 1, 1, '2026-04-15T12:00:00Z', 'queued', 'bot')
