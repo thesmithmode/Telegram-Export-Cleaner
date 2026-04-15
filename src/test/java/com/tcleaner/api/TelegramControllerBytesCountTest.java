@@ -13,22 +13,23 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 
-import java.io.Writer;
-import java.nio.file.Path;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.verify;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
  * Проверяет, что TelegramController публикует bytes_measured и export.completed
  * в Stats-стрим после успешной стриминг-конвертации.
- * StreamingResponseBody выполняется синхронно в MockMvc — verify сразу после perform().
+ * StreamingResponseBody выполняется асинхронно — используем asyncDispatch.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -51,11 +52,17 @@ class TelegramControllerBytesCountTest {
                 "file", "result.json", "application/json",
                 "{\"messages\":[]}".getBytes());
 
-        mockMvc.perform(multipart("/api/convert")
+        // Шаг 1: инициировать запрос, Spring запускает async
+        MvcResult asyncResult = mockMvc.perform(multipart("/api/convert")
                         .file(file)
                         .param("taskId", "task-test")
                         .param("botUserId", "42")
                         .param("messagesCount", "100"))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+
+        // Шаг 2: dispatch — дождаться завершения StreamingResponseBody
+        mockMvc.perform(asyncDispatch(asyncResult))
                 .andExpect(status().isOk());
 
         ArgumentCaptor<StatsEventPayload> captor = ArgumentCaptor.forClass(StatsEventPayload.class);
@@ -83,8 +90,10 @@ class TelegramControllerBytesCountTest {
                 "file", "result.json", "application/json",
                 "{\"messages\":[]}".getBytes());
 
-        mockMvc.perform(multipart("/api/convert").file(file))
-                .andExpect(status().isOk());
+        MvcResult asyncResult = mockMvc.perform(multipart("/api/convert").file(file))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+        mockMvc.perform(asyncDispatch(asyncResult)).andExpect(status().isOk());
 
         verify(statsPublisher, org.mockito.Mockito.never()).publish(any());
     }
