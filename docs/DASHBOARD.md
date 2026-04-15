@@ -6,15 +6,18 @@
 
 > **Статус:** в активной разработке. План — `cheeky-mixing-castle.md` (см. ветку
 > `dashboard`). Текущий PR-1 закладывает только инфраструктуру: SQLite-БД,
-> Flyway-миграция со схемой, пустые таблицы. Ни UI, ни авторизации, ни
+> Liquibase-changelog со схемой, пустые таблицы. Ни UI, ни авторизации, ни
 > сборщика событий ещё нет.
 
 ## Архитектура
 
 Модуль живёт внутри того же Spring Boot процесса, что и бот (`telegram-cleaner`),
 по адресу `/dashboard/**`. Хранилище — SQLite в отдельном Docker volume
-`dashboard_data`, файл `/data/stats/dashboard.db`. Миграции схемы — Flyway,
-SQL-файлы в `src/main/resources/db/migration/`.
+`dashboard_data`, файл `/data/stats/dashboard.db`. Миграции схемы — Liquibase
+(formatted SQL), единый changelog `src/main/resources/db/changelog/db.changelog-master.sql`.
+Liquibase выбран вместо Flyway: в OSS Flyway 10+ SQLite-диалект отсутствует
+(вынесен в коммерческий `flyway-database-sqlite`), а Liquibase поддерживает
+SQLite из коробки.
 
 ```
 java-bot (Spring Boot)
@@ -29,9 +32,9 @@ java-bot (Spring Boot)
    └── dashboard_users   — логины веб-UI (роли ADMIN / USER)
 ```
 
-## Схема БД (V1)
+## Схема БД (changeset `001-init-dashboard-schema`)
 
-Полный DDL — `src/main/resources/db/migration/V1__init_dashboard_schema.sql`.
+Полный DDL — `src/main/resources/db/changelog/db.changelog-master.sql`.
 Ключевые контракты:
 
 | Таблица | Назначение | Идентичность |
@@ -52,14 +55,14 @@ java-bot (Spring Boot)
 Production (`application.properties`):
 - `spring.datasource.url=jdbc:sqlite:${DASHBOARD_DB_PATH:./dashboard.db}`
 - `spring.jpa.database-platform=org.hibernate.community.dialect.SQLiteDialect`
-- `spring.jpa.hibernate.ddl-auto=validate` — DDL владеет Flyway, Hibernate только проверяет
-- `spring.flyway.locations=classpath:db/migration`
+- `spring.jpa.hibernate.ddl-auto=validate` — DDL владеет Liquibase, Hibernate только проверяет
+- `spring.liquibase.change-log=classpath:/db/changelog/db.changelog-master.sql`
 - Hikari `connection-init-sql=PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;`
 
 Tests (`src/test/resources/application.properties`):
 - `spring.datasource.url=jdbc:sqlite::memory:`
 - `spring.datasource.hikari.maximum-pool-size=1` — иначе каждое новое
-  соединение получит свою in-memory БД и Flyway/тесты разойдутся.
+  соединение получит свою in-memory БД и Liquibase/тесты разойдутся.
 
 ENV (`docker-compose.yml`):
 - `DASHBOARD_DB_PATH=/data/stats/dashboard.db`
