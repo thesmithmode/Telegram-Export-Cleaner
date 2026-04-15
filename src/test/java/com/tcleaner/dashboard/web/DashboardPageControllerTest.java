@@ -125,7 +125,7 @@ class DashboardPageControllerTest {
                 .andExpect(content().string(containsString("error-wrap")));
     }
 
-    // ─── PR-11: users / user-detail pages ────────────────────────────────────
+    // ─── PR-11: users / user-detail ──────────────────────────────────────────
 
     @Test
     @DisplayName("GET /dashboard/users (anon) — 302 на login")
@@ -160,5 +160,44 @@ class DashboardPageControllerTest {
                 .andExpect(content().contentTypeCompatibleWith("text/html"))
                 .andExpect(content().string(containsString("kpi-grid")))
                 .andExpect(content().string(containsString("dashboard/js/pages/user-detail.js")));
+    }
+
+    // ─── PR-12: chats / events pages ─────────────────────────────────────────
+
+    @Test
+    @DisplayName("GET /dashboard/chats (anon) — 302 на login")
+    void chatsRequiresAuth() throws Exception {
+        mockMvc.perform(get("/dashboard/chats"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrlPattern("**/dashboard/login"));
+    }
+
+    @Test
+    @DisplayName("GET /dashboard/chats (auth) — 200, рендерится таблица чатов + chart")
+    void chatsRendersForAuthenticatedUser() throws Exception {
+        mockMvc.perform(get("/dashboard/chats").with(user(USER)))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith("text/html"))
+                .andExpect(content().string(containsString("data-table")))
+                .andExpect(content().string(containsString("id=\"chart-top-chats\"")))
+                .andExpect(content().string(containsString("dashboard/js/pages/chats.js")));
+    }
+
+    @Test
+    @DisplayName("GET /dashboard/events (anon) — 302 на login")
+    void eventsRequiresAuth() throws Exception {
+        mockMvc.perform(get("/dashboard/events"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrlPattern("**/dashboard/login"));
+    }
+
+    @Test
+    @DisplayName("GET /dashboard/events (auth) — 200, рендерится таблица событий")
+    void eventsRendersForAuthenticatedUser() throws Exception {
+        mockMvc.perform(get("/dashboard/events").with(user(USER)))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith("text/html"))
+                .andExpect(content().string(containsString("data-table")))
+                .andExpect(content().string(containsString("dashboard/js/pages/events.js")));
     }
 }
