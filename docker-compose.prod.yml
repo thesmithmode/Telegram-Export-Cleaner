@@ -1,32 +1,115 @@
-# Продакшн-конфигурация для деплоя через GitHub Actions.
+# Продакшн-конфигурация: Traefik v3 reverse-proxy + java-bot + worker + redis.
 #
-# Переменные окружения со значением ${VAR} берутся из .env файла на сервере.
+# Переменные окружения берутся из .env файла на сервере.
 # CI создаёт /root/telegram-cleaner/.env из GitHub Secrets перед каждым деплоем.
 #
 # Команда деплоя:
 #   docker compose -f docker-compose.prod.yml --env-file .env pull
 #   docker compose -f docker-compose.prod.yml --env-file .env up -d --remove-orphans
+#
+# Проверка сертификата:
+#   curl -I https://${TRAEFIK_DASHBOARD_DOMAIN}/dashboard/login
 
 services:
-  java-bot:
-    image: ghcr.io/thesmithmode/telegram-export-cleaner:latest
-    ports:
-      - "127.0.0.1:8081:8080"
-    # Label для фильтрованного docker prune в CI — чтобы не снести
-    # контейнеры SillyTavern и других сервисов на этом же хосте.
+  # ===========================================================================
+  # Traefik v3: reverse-proxy + TLS (Let's Encrypt HTTP-01)
+  # Слушает :80 (→ редирект на 443) и :443.
+  # /api/** наружу НЕ публикуется — только /dashboard/** через Dashboard-router.
+  # ===========================================================================
+  traefik:
+    image: traefik:v3.0
+    container_name: telegram-cleaner-traefik
     labels:
       - "project=telegram-cleaner"
+    command:
+      # Entrypoints
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      # HTTP → HTTPS глобальный редирект
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      # Docker provider (только явно помеченные сервисы)
+      - --providers.docker=true
+      - --providers.docker.exposedByDefault=false
+      - --providers.docker.network=telegram-cleaner_proxy
+      # ACME / Let's Encrypt
+      - --certificatesresolvers.letsencrypt.acme.httpChallenge=true
+      - --certificatesresolvers.letsencrypt.acme.httpChallenge.entryPoint=web
+      - --certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/acme/acme.json
+      # Dashboard отключён в проде
+      - --api.dashboard=false
+      - --log.level=INFO
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_acme:/acme
+    networks:
+      - proxy
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: '0.1'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===========================================================================
+  # Java Bot: Spring Boot + дашборд
+  # Порт 8080 НЕ выставляется напрямую — только через Traefik.
+  # ===========================================================================
+  java-bot:
+    image: ghcr.io/thesmithmode/telegram-export-cleaner:latest
+    container_name: telegram-export-java-bot
+    labels:
+      - "project=telegram-cleaner"
+      # ── Traefik routing ──────────────────────────────────────────────────
+      - "traefik.enable=true"
+      # Dashboard router: только /dashboard/** — /api/** остаётся internal
+      - "traefik.http.routers.dashboard.rule=Host(`${TRAEFIK_DASHBOARD_DOMAIN}`) && PathPrefix(`/dashboard`)"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.dashboard.middlewares=sec-headers"
+      - "traefik.http.services.java-bot.loadbalancer.server.port=8080"
+      # ── Security headers middleware ───────────────────────────────────────
+      - "traefik.http.middlewares.sec-headers.headers.stsSeconds=31536000"
+      - "traefik.http.middlewares.sec-headers.headers.stsIncludeSubdomains=true"
+      - "traefik.http.middlewares.sec-headers.headers.forceSTSHeader=true"
+      - "traefik.http.middlewares.sec-headers.headers.customFrameOptionsValue=DENY"
+      - "traefik.http.middlewares.sec-headers.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.sec-headers.headers.referrerPolicy=strict-origin-when-cross-origin"
+    depends_on:
+      redis:
+        condition: service_healthy
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_QUEUE_NAME=telegram_export
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_BOT_USERNAME=ExportCleanerBot
+      # Dashboard SQLite
+      - DASHBOARD_DB_PATH=${DASHBOARD_DB_PATH:-/data/stats/dashboard.db}
+      # Dashboard auth bootstrap
+      - DASHBOARD_ENABLE_BOOTSTRAP=${DASHBOARD_ENABLE_BOOTSTRAP:-true}
+      - DASHBOARD_ADMIN_USERNAME=${DASHBOARD_ADMIN_USERNAME:-admin}
+      - DASHBOARD_ADMIN_PASSWORD=${DASHBOARD_ADMIN_PASSWORD}
+      - DASHBOARD_TEST_USERNAME=${DASHBOARD_TEST_USERNAME:-user}
+      - DASHBOARD_TEST_PASSWORD=${DASHBOARD_TEST_PASSWORD}
+      - DASHBOARD_TEST_BOT_USER_ID=${DASHBOARD_TEST_BOT_USER_ID:-0}
+      # Redis Streams для ingestion статистики
+      - STATS_STREAM_KEY=${STATS_STREAM_KEY:-stats:events}
+      - STATS_STREAM_GROUP=${STATS_STREAM_GROUP:-dashboard-writer}
+      - STATS_STREAM_CONSUMER=${STATS_STREAM_CONSUMER:-java-bot-1}
+      - STATS_STREAM_MAXLEN=${STATS_STREAM_MAXLEN:-100000}
     volumes:
       - export-data:/data/export
-    depends_on:
-      redis:
-        condition: service_healthy
+      - dashboard_data:/data/stats
+    networks:
+      - proxy
+      - internal
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/health || exit 1"]
@@ -34,46 +117,50 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
-    # Снижено с 1024M: выровнено с репо-compose. Dockerfile -Xmx640m рассчитан под 768m.
     mem_limit: 768m
+    cpus: '0.5'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
+  # ===========================================================================
+  # Python Worker
+  # ===========================================================================
   python-worker:
     image: ghcr.io/thesmithmode/telegram-export-python-worker:latest
+    container_name: telegram-export-worker
     labels:
       - "project=telegram-cleaner"
     environment:
-      # Telegram API
       - TELEGRAM_API_ID=${TELEGRAM_API_ID}
       - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
       - TELEGRAM_SESSION_STRING=${TELEGRAM_SESSION_STRING}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      # Java Bot API
       - JAVA_API_BASE_URL=http://java-bot:8080
-      # Redis
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_DB=0
       - REDIS_QUEUE_NAME=telegram_export
-      # Worker (подогнано под weak server: 1 core, 3-4GB RAM)
       - WORKER_NAME=export-worker-prod
       - MAX_WORKERS=1
       - JOB_TIMEOUT=1800
       - MAX_RETRIES=3
       - RETRY_BASE_DELAY=1.0
       - RETRY_MAX_DELAY=32.0
-      # SQLite message cache (critical: hdd volume below)
       - CACHE_DB_PATH=/data/cache/messages.db
       - CACHE_ENABLED=true
       - CACHE_MAX_DISK_GB=25
-      # Logging
       - LOG_LEVEL=INFO
       - PYTHONUNBUFFERED=1
     volumes:
-      # SQLite кэш сообщений — должен переживать рестарты контейнера.
       - cache-data:/data/cache
     depends_on:
       java-bot:
         condition: service_healthy
+    networks:
+      - internal
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pgrep -f 'python.*main.py' || exit 1"]
@@ -81,25 +168,51 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    # Увеличено с 512M: выровнено с репо — больше памяти для in-flight батчей и Pyrogram.
     mem_limit: 768m
+    cpus: '0.5'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
+  # ===========================================================================
+  # Redis
+  # ===========================================================================
   redis:
     image: redis:7-alpine
+    container_name: telegram-export-redis
     labels:
       - "project=telegram-cleaner"
-    # noeviction: выбрасывает ошибку при переполнении вместо тихого удаления ключей.
-    # allkeys-lru в проде молча выкидывал ключи очереди и ломал экспорты.
     command: redis-server --appendonly yes --appendfsync everysec --maxmemory 128mb --maxmemory-policy noeviction
     volumes:
       - redis-data:/data
+    networks:
+      - internal
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
+      timeout: 3s
+      retries: 5
     restart: unless-stopped
     mem_limit: 256m
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  # proxy: Traefik ↔ java-bot (внешний трафик)
+  proxy:
+    name: telegram-cleaner_proxy
+  # internal: java-bot ↔ worker ↔ redis (только внутренний трафик)
+  internal:
+    name: telegram-cleaner_internal
 
 volumes:
   redis-data:
   export-data:
   cache-data:
+  dashboard_data:
+  traefik_acme:
