@@ -1,18 +1,15 @@
 package com.tcleaner.dashboard.web;
 
 import com.tcleaner.core.TelegramExporter;
+import com.tcleaner.dashboard.DashboardTestUsers;
 import com.tcleaner.dashboard.auth.DashboardUserDetails;
-import com.tcleaner.dashboard.domain.DashboardRole;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
-
-import java.util.List;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
@@ -38,10 +35,7 @@ class DashboardPageControllerTest {
     @MockitoBean
     private TelegramExporter mockExporter;
 
-    private static final DashboardUserDetails USER = new DashboardUserDetails(
-            "alice", "x",
-            List.of(new SimpleGrantedAuthority("ROLE_USER")),
-            DashboardRole.USER, 1L);
+    private static final DashboardUserDetails USER = DashboardTestUsers.user("alice", 1L);
 
     @Test
     @DisplayName("GET /dashboard/login — 200, рендерится форма с CSRF")

@@ -1,10 +1,10 @@
 package com.tcleaner.dashboard.web;
 
 import com.tcleaner.core.TelegramExporter;
+import com.tcleaner.dashboard.DashboardTestUsers;
 import com.tcleaner.dashboard.auth.DashboardUserDetails;
 import com.tcleaner.dashboard.domain.BotUser;
 import com.tcleaner.dashboard.domain.Chat;
-import com.tcleaner.dashboard.domain.DashboardRole;
 import com.tcleaner.dashboard.domain.ExportEvent;
 import com.tcleaner.dashboard.domain.ExportSource;
 import com.tcleaner.dashboard.domain.ExportStatus;
@@ -17,13 +17,11 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
-import java.util.List;
 
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -57,15 +55,8 @@ class DashboardApiControllerTest {
     @MockitoBean
     private TelegramExporter mockExporter;
 
-    private static final DashboardUserDetails ADMIN = new DashboardUserDetails(
-            "admin", "x",
-            List.of(new SimpleGrantedAuthority("ROLE_ADMIN")),
-            DashboardRole.ADMIN, null);
-
-    private static final DashboardUserDetails USER_1 = new DashboardUserDetails(
-            "alice", "x",
-            List.of(new SimpleGrantedAuthority("ROLE_USER")),
-            DashboardRole.USER, 1L);
+    private static final DashboardUserDetails ADMIN = DashboardTestUsers.admin();
+    private static final DashboardUserDetails USER_1 = DashboardTestUsers.user("alice", 1L);
 
     @BeforeEach
     void seed() {
