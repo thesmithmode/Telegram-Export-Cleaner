@@ -51,6 +51,16 @@ public class DashboardPageController {
         return "dashboard/user-detail";
     }
 
+    @GetMapping("/chats")
+    public String chats() {
+        return "dashboard/chats";
+    }
+
+    @GetMapping("/events")
+    public String events() {
+        return "dashboard/events";
+    }
+
     @GetMapping("/error")
     public String error() {
         return "dashboard/error";
