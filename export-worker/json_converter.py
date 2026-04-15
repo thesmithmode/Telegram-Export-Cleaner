@@ -126,7 +126,7 @@ class MessageConverter:
                 id=message.id,
                 type="message",
                 date=message.date.isoformat() if message.date else "",
-                text=message.text or ""
+                text=message.text or message.caption or ""
             )
 
             # User information
@@ -138,9 +138,10 @@ class MessageConverter:
                 }
 
             # Text entities (formatting)
-            if message.entities:
+            entities = message.entities or message.caption_entities
+            if entities:
                 exported.text_entities = MessageConverter.convert_entities(
-                    message.entities
+                    entities
                 )
 
             # Media
