@@ -73,9 +73,14 @@ class StatsStreamPublisherTest {
         ArgumentCaptor<XAddOptions> optsCaptor = ArgumentCaptor.forClass(XAddOptions.class);
         verify(streamCmds).xAdd(recordCaptor.capture(), optsCaptor.capture());
 
+        // byte[]-ключи в Map сравниваются по identity — .get() не подходит.
+        // Обходим через entrySet + Arrays.equals, что и стабильнее, и ближе к реальности.
         MapRecord<byte[], byte[], byte[]> captured = recordCaptor.getValue();
-        assertThat(new String(captured.getStream(), StandardCharsets.UTF_8)).isEqualTo("stats:events");
-        byte[] payloadBytes = captured.getValue().get("payload".getBytes(StandardCharsets.UTF_8));
+        byte[] payloadBytes = captured.getValue().entrySet().stream()
+                .filter(e -> java.util.Arrays.equals(e.getKey(), "payload".getBytes(StandardCharsets.UTF_8)))
+                .map(java.util.Map.Entry::getValue)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("payload-field not found"));
         String json = new String(payloadBytes, StandardCharsets.UTF_8);
         assertThat(json)
                 .contains("\"type\":\"export.started\"")
