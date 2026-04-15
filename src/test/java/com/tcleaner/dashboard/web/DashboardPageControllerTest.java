@@ -22,7 +22,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * Integration-тесты HTML-страниц дашборда (Thymeleaf + Spring Security).
  * Проверяют: рендер login/error, root-redirect, защищённость overview,
- * наличие CSRF в login-форме.
+ * наличие CSRF в login-форме, RBAC для users/user-detail страниц.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -35,7 +35,8 @@ class DashboardPageControllerTest {
     @MockitoBean
     private TelegramExporter mockExporter;
 
-    private static final DashboardUserDetails USER = DashboardTestUsers.user("alice", 1L);
+    private static final DashboardUserDetails USER  = DashboardTestUsers.user("alice", 1L);
+    private static final DashboardUserDetails ADMIN = DashboardTestUsers.admin();
 
     @Test
     @DisplayName("GET /dashboard/login — 200, рендерится форма с CSRF")
@@ -122,5 +123,42 @@ class DashboardPageControllerTest {
         mockMvc.perform(get("/dashboard/error").with(user(USER)))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("error-wrap")));
+    }
+
+    // ─── PR-11: users / user-detail pages ────────────────────────────────────
+
+    @Test
+    @DisplayName("GET /dashboard/users (anon) — 302 на login")
+    void usersRequiresAuth() throws Exception {
+        mockMvc.perform(get("/dashboard/users"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrlPattern("**/dashboard/login"));
+    }
+
+    @Test
+    @DisplayName("GET /dashboard/users (USER) — 403")
+    void usersBlockedForUser() throws Exception {
+        mockMvc.perform(get("/dashboard/users").with(user(USER)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("GET /dashboard/users (ADMIN) — 200, рендерится таблица пользователей")
+    void usersRendersForAdmin() throws Exception {
+        mockMvc.perform(get("/dashboard/users").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith("text/html"))
+                .andExpect(content().string(containsString("data-table")))
+                .andExpect(content().string(containsString("dashboard/js/pages/users.js")));
+    }
+
+    @Test
+    @DisplayName("GET /dashboard/user/1 (auth USER) — 200, рендерится карточка пользователя")
+    void userDetailRendersForAuthenticatedUser() throws Exception {
+        mockMvc.perform(get("/dashboard/user/1").with(user(USER)))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith("text/html"))
+                .andExpect(content().string(containsString("kpi-grid")))
+                .andExpect(content().string(containsString("dashboard/js/pages/user-detail.js")));
     }
 }

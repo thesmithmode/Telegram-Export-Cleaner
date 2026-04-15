@@ -3,6 +3,7 @@ package com.tcleaner.dashboard.web;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 
@@ -32,10 +33,22 @@ public class DashboardPageController {
         return "dashboard/login";
     }
 
-    /** Заглушка для PR-9: реальный overview наполняется в PR-10. */
     @GetMapping("/overview")
     public String overview() {
         return "dashboard/overview";
+    }
+
+    /** Таблица всех пользователей — только ADMIN (URL-guard в DashboardSecurityConfig). */
+    @GetMapping("/users")
+    public String users() {
+        return "dashboard/users";
+    }
+
+    /** Карточка одного пользователя. RBAC на данные — в /dashboard/api/stats/user/{id}. */
+    @GetMapping("/user/{botUserId}")
+    public String userDetail(@PathVariable long botUserId, Model model) {
+        model.addAttribute("botUserId", botUserId);
+        return "dashboard/user-detail";
     }
 
     @GetMapping("/error")

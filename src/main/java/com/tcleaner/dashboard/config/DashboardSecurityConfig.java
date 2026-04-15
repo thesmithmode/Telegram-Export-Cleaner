@@ -62,7 +62,7 @@ public class DashboardSecurityConfig {
                     "/dashboard/login", "/dashboard/login/**",
                     "/dashboard/assets/**", "/dashboard/css/**",
                     "/dashboard/js/**", "/dashboard/vendor/**").permitAll()
-                .requestMatchers("/dashboard/api/stats/users").hasRole("ADMIN")
+                .requestMatchers("/dashboard/users", "/dashboard/api/stats/users").hasRole("ADMIN")
                 .anyRequest().authenticated()
             )
             .formLogin(form -> form
