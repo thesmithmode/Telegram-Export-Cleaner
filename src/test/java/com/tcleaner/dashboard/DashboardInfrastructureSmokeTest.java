@@ -14,7 +14,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Smoke-тест инфраструктуры дашборда: проверяет, что Spring-контекст
- * поднимается с подключённым SQLite-DataSource, Flyway применяет миграцию V1
+ * поднимается с подключённым SQLite-DataSource, Liquibase применяет changelog
  * и все четыре таблицы статистики доступны для запросов.
  */
 @SpringBootTest
@@ -65,10 +65,11 @@ class DashboardInfrastructureSmokeTest {
     }
 
     @Test
-    @DisplayName("Flyway применил как минимум одну миграцию (V1)")
-    void flywayHistoryHasV1() {
+    @DisplayName("Liquibase применил initial changeset")
+    void liquibaseAppliedInitialChangeset() {
         Integer count = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM flyway_schema_history WHERE version = '1'", Integer.class);
+                "SELECT COUNT(*) FROM DATABASECHANGELOG WHERE ID = '001-init-dashboard-schema'",
+                Integer.class);
         assertThat(count).isEqualTo(1);
     }
 }

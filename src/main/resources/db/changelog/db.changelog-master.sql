@@ -1,5 +1,7 @@
+--liquibase formatted sql
+
 -- =============================================================================
--- V1: Initial dashboard schema (statistics & auth)
+-- 001: Initial dashboard schema (statistics & auth)
 -- See docs/DASHBOARD.md for the rationale and read/write paths.
 --
 -- SQLite-specific notes:
@@ -10,6 +12,8 @@
 --   * Timestamps are stored as ISO-8601 TEXT (UTC) for portability and
 --     human-readable backups.
 -- =============================================================================
+
+--changeset thesmithmode:001-init-dashboard-schema splitStatements:true endDelimiter:;
 
 -- -----------------------------------------------------------------------------
 -- bot_users — Telegram users who interacted with the bot.
@@ -62,14 +66,14 @@ CREATE TABLE export_events (
     chat_ref_id       INTEGER NOT NULL,
     started_at        TEXT NOT NULL,
     finished_at       TEXT,
-    status            TEXT NOT NULL,           -- queued/processing/completed/failed/cancelled
+    status            TEXT NOT NULL,
     messages_count    BIGINT,
     bytes_count       BIGINT,
     from_date         TEXT,
     to_date           TEXT,
     keywords          TEXT,
     exclude_keywords  TEXT,
-    source            TEXT NOT NULL DEFAULT 'bot', -- bot/api
+    source            TEXT NOT NULL DEFAULT 'bot',
     error_message     TEXT,
     created_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -92,7 +96,7 @@ CREATE TABLE dashboard_users (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     username        TEXT NOT NULL UNIQUE,
     password_hash   TEXT NOT NULL,
-    role            TEXT NOT NULL,             -- ADMIN/USER
+    role            TEXT NOT NULL,
     bot_user_id     BIGINT,
     provider        TEXT NOT NULL DEFAULT 'LOCAL',
     created_at      TEXT NOT NULL,
