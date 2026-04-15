@@ -3,10 +3,48 @@
       th:replace="~{dashboard/layout :: layout(title=#{overview.title}, content=~{::overview-content})}">
 <body>
 
-<!-- Минимальный overview для PR-9: контент страницы наполняется в PR-10. -->
+<!--
+  Overview-страница дашборда. SSR рендерит каркас (KPI, period-filter, canvas'ы,
+  заголовки таблиц). Данные подтягиваются js/pages/overview.js через JSON API
+  /dashboard/api/stats/overview + /timeseries.
+-->
 <div th:fragment="overview-content" class="overview">
     <h1 th:text="#{overview.heading}">Обзор</h1>
-    <p class="overview-placeholder" th:text="#{overview.loading}">Загрузка…</p>
+
+    <div th:replace="~{dashboard/fragments/period-filter :: period-filter}"></div>
+
+    <div class="kpi-grid">
+        <div class="kpi" id="kpi-exports">
+            <div class="kpi__label" th:text="#{overview.kpi.exports}">Экспортов</div>
+            <div class="kpi__value" data-kpi="totalExports">—</div>
+        </div>
+        <div class="kpi" id="kpi-messages">
+            <div class="kpi__label" th:text="#{overview.kpi.messages}">Сообщений</div>
+            <div class="kpi__value" data-kpi="totalMessages">—</div>
+        </div>
+        <div class="kpi" id="kpi-bytes">
+            <div class="kpi__label" th:text="#{overview.kpi.bytes}">Объём</div>
+            <div class="kpi__value" data-kpi="totalBytes">—</div>
+        </div>
+        <div class="kpi" id="kpi-users">
+            <div class="kpi__label" th:text="#{overview.kpi.users}">Пользователей</div>
+            <div class="kpi__value" data-kpi="totalUsers">—</div>
+        </div>
+    </div>
+
+    <div th:replace="~{dashboard/fragments/chart-block :: chart(
+            id='chart-timeseries', title=#{overview.chart.timeseries}, height=260)}"></div>
+
+    <div th:replace="~{dashboard/fragments/chart-block :: chart(
+            id='chart-status', title=#{overview.chart.status}, height=240)}"></div>
+
+    <div th:replace="~{dashboard/fragments/chart-block :: chart(
+            id='chart-top-users', title=#{overview.chart.topUsers}, height=260)}"></div>
+
+    <div th:replace="~{dashboard/fragments/chart-block :: chart(
+            id='chart-top-chats', title=#{overview.chart.topChats}, height=260)}"></div>
+
+    <script th:src="@{/dashboard/js/pages/overview.js}" defer></script>
 </div>
 
 </body>

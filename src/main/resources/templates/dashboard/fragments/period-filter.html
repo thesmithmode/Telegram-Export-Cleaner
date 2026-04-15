@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org">
+<body>
+
+<!--
+  Фрагмент фильтра периода. Кнопки перезагружают страницу с ?period=<key>.
+  JS-обработчик кликов — в static/dashboard/js/app.js (initPeriodFilter).
+-->
+<div th:fragment="period-filter" class="period-filter" role="group">
+    <button type="button" class="period-filter__btn" data-period="all"
+            th:text="#{period.all}">Всё время</button>
+    <button type="button" class="period-filter__btn" data-period="year"
+            th:text="#{period.year}">Год</button>
+    <button type="button" class="period-filter__btn" data-period="month"
+            th:text="#{period.month}">Месяц</button>
+    <button type="button" class="period-filter__btn" data-period="week"
+            th:text="#{period.week}">Неделя</button>
+    <button type="button" class="period-filter__btn" data-period="day"
+            th:text="#{period.day}">Сутки</button>
+</div>
+
+</body>
+</html>
