@@ -72,10 +72,7 @@
       "WebFetch(domain:gist.github.com)",
       "WebFetch(domain:core.telegram.org)",
       "Bash(rtk read:*)",
-      "Bash(rtk docker:*)",
-      "mcp__serena__list_memories",
-      "mcp__serena__edit_memory",
-      "mcp__serena__delete_memory"
+      "Bash(rtk docker:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

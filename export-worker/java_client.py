@@ -43,6 +43,30 @@ class JavaBotClient:
                 )
             return True
 
+        # Нет сообщений за выбранный период — отдаём пользователю человеко-
+        # читаемое уведомление через sendMessage и не ходим в Java.
+        # Ранее пустой JSON {"messages":[]} проходил через /api/convert,
+        # но Telegram отклоняет отправку пустого документа, и пользователь
+        # получал "Не удалось отправить файл. Попробуйте снова."
+        if payload.actual_count == 0:
+            # messages может быть async-генератором (из _export_with_date_cache
+            # и т.п.) — при early return он иначе висит открытым и держит
+            # ресурсы (SQLite-курсор, внутренний батч). Закрываем явно.
+            aclose = getattr(payload.messages, "aclose", None)
+            if callable(aclose):
+                try:
+                    await aclose()
+                except Exception as e:
+                    logger.debug(f"aclose() on empty messages iterator raised: {e}")
+            if payload.user_chat_id and self.bot_token:
+                await self.notify_empty_export(
+                    payload.user_chat_id,
+                    payload.task_id,
+                    payload.from_date,
+                    payload.to_date,
+                )
+            return True
+
         # 1. Stream messages directly to a temporary file on disk (Memory O(1))
         tmp_path = await self._stream_to_temp_json(payload.messages, payload.actual_count)
 
@@ -246,6 +270,36 @@ class JavaBotClient:
             await self._http_client.post(url, data={"chat_id": chat_id, "text": text})
         except Exception as e:
             logger.warning(f"Failed to notify user {chat_id} about failure: {e}")
+
+    async def notify_empty_export(self, chat_id, task_id, from_date, to_date):
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        period = self._format_period(from_date, to_date)
+        if period:
+            text = (
+                f"ℹ️ За {period} в чате не найдено ни одного сообщения.\n"
+                f"Попробуйте расширить диапазон дат или выбрать другой чат."
+            )
+        else:
+            # Экспорт без date-фильтра: префикс «За выбранный период» звучит
+            # коряво — убираем его, сообщение короче и честнее.
+            text = (
+                f"ℹ️ В чате не найдено ни одного сообщения.\n"
+                f"Возможно, стоит выбрать другой чат."
+            )
+        try:
+            await self._http_client.post(url, data={"chat_id": chat_id, "text": text})
+        except Exception as e:
+            logger.warning(f"Failed to notify user {chat_id} about empty export: {e}")
+
+    @staticmethod
+    def _format_period(from_date: Optional[str], to_date: Optional[str]) -> Optional[str]:
+        if from_date and to_date:
+            return f"период {from_date[:10]} — {to_date[:10]}"
+        if from_date:
+            return f"период с {from_date[:10]}"
+        if to_date:
+            return f"период до {to_date[:10]}"
+        return None
 
     def create_progress_tracker(self, user_chat_id: int, task_id: str,
                                 topic_name: Optional[str] = None):
