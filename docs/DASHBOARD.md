@@ -4,112 +4,140 @@
 экспорты, какие чаты/топики качал, сколько сообщений и байт было выгружено
 за выбранный период.
 
-> **Статус:** в активной разработке. План — `cheeky-mixing-castle.md` (см. ветку
-> `dashboard`). Текущий PR-1 закладывает только инфраструктуру: SQLite-БД,
-> Liquibase-changelog со схемой, пустые таблицы. Ни UI, ни авторизации, ни
-> сборщика событий ещё нет.
-
 ## Архитектура
 
 Модуль живёт внутри того же Spring Boot процесса, что и бот (`telegram-cleaner`),
 по адресу `/dashboard/**`. Хранилище — SQLite в отдельном Docker volume
 `dashboard_data`, файл `/data/stats/dashboard.db`. Миграции схемы — Liquibase
 (formatted SQL), единый changelog `src/main/resources/db/changelog/db.changelog-master.sql`.
-Liquibase выбран вместо Flyway: в OSS Flyway 10+ SQLite-диалект отсутствует
-(вынесен в коммерческий `flyway-database-sqlite`), а Liquibase поддерживает
-SQLite из коробки.
 
 ```
-java-bot (Spring Boot)
-├── /api/**          — текущий REST API экспорта (без изменений)
-└── /dashboard/**    — веб-UI + /dashboard/api/stats/** (в разработке)
-        │
-        ▼
-   SQLite (dashboard_data volume)
-   ├── bot_users         — пользователи Telegram-бота
-   ├── chats             — экспортируемые чаты/каналы/топики
-   ├── export_events     — каждое событие экспорта (источник правды)
-   └── dashboard_users   — логины веб-UI (роли ADMIN / USER)
+java-bot (Spring Boot :8080)
+├── /api/**              — REST API экспорта (без изменений)
+└── /dashboard/**        — Thymeleaf SSR + JSON API
+        ├── /dashboard/login       — FormLogin
+        ├── /dashboard/overview    — KPI + графики (Chart.js)
+        ├── /dashboard/users       — таблица юзеров (ADMIN only)
+        ├── /dashboard/user/{id}   — карточка юзера
+        ├── /dashboard/chats       — чаты + top-20 chart
+        ├── /dashboard/events      — raw-лог экспортов
+        └── /dashboard/api/stats/** — JSON API для JS-слоя
+                │
+                ▼
+           SQLite (dashboard_data volume)
+           ├── bot_users         — пользователи Telegram-бота
+           ├── chats             — экспортируемые чаты/каналы/топики
+           ├── export_events     — события экспорта (источник правды)
+           └── dashboard_users   — логины веб-UI (роли ADMIN / USER)
+
+    Ingestion: Redis Stream stats:events → StatsStreamConsumer → БД
 ```
 
-## Схема БД (changeset `001-init-dashboard-schema`)
+## Схема БД
 
 Полный DDL — `src/main/resources/db/changelog/db.changelog-master.sql`.
-Ключевые контракты:
 
-| Таблица | Назначение | Идентичность |
-|---------|------------|--------------|
+| Таблица | Назначение | Уникальный ключ |
+|---------|------------|-----------------|
 | `bot_users` | агрегаты по пользователю Telegram-бота (счётчики `total_*`) | PK `bot_user_id` (Telegram user_id) |
 | `chats` | таргеты экспорта; `chat_type` пока NULL | UNIQUE `(canonical_chat_id, COALESCE(topic_id,-1))` |
-| `export_events` | один экспорт = одна строка | UNIQUE `task_id` (идемпотентный ключ из `ExportJobProducer`) |
-| `dashboard_users` | веб-логины; `bot_user_id` связывает USER-роль с Telegram user_id | UNIQUE `username` |
+| `export_events` | один экспорт = одна строка | UNIQUE `task_id` (идемпотентный ключ) |
+| `dashboard_users` | веб-логины; `bot_user_id` связывает USER с Telegram user_id | UNIQUE `username` |
 
-**Индексы для агрегаций** (`export_events`):
-`(bot_user_id, started_at DESC)`, `(chat_ref_id, started_at DESC)`,
-`(started_at DESC)`, `(status)`. Этого достаточно для запросов overview/users/chats
-на ожидаемых объёмах (сотни-тысячи событий в день). Rollup-таблицы добавим
-позже, если индексы перестанут вытягивать.
-
-## Конфигурация
-
-Production (`application.properties`):
-- `spring.datasource.url=jdbc:sqlite:${DASHBOARD_DB_PATH:./dashboard.db}`
-- `spring.jpa.database-platform=org.hibernate.community.dialect.SQLiteDialect`
-- `spring.jpa.hibernate.ddl-auto=none` — DDL владеет Liquibase; `validate` с SQLite ловит false-positive несоответствия типов (TEXT affinity ≠ VARCHAR)
-- `spring.liquibase.change-log=classpath:/db/changelog/db.changelog-master.sql`
-- Hikari `connection-init-sql=PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;`
-
-Tests (`src/test/resources/application.properties`):
-- `spring.datasource.url=jdbc:sqlite::memory:`
-- `spring.datasource.hikari.maximum-pool-size=1` — иначе каждое новое
-  соединение получит свою in-memory БД и Liquibase/тесты разойдутся.
-
-ENV (`docker-compose.yml`):
-- `DASHBOARD_DB_PATH=/data/stats/dashboard.db`
-- volume `dashboard_data:/data/stats`
-
-## REST API (PR-8)
+## REST API
 
 JSON под `/dashboard/api/**`. Все эндпоинты требуют аутентификации (cookie-based
-JSESSIONID, form-login); `/stats/users` — ADMIN-only (URL-guard в `DashboardSecurityConfig`
-+ дубль через `BotUserAccessPolicy` в коде). Пользователь с ролью `USER` видит
-только свой `botUserId`; попытка указать чужой `userId` → 403.
+JSESSIONID, form-login); `/stats/users` — ADMIN-only.
+Пользователь с ролью `USER` видит только свой `botUserId`; чужой `userId` → 403.
 
 | Метод | Path | Доступ | Назначение |
 |---|---|---|---|
-| GET | `/dashboard/api/me` | auth | `{username, role, botUserId}` для фронта |
-| GET | `/dashboard/api/stats/overview?period=&from=&to=&userId=` | auth (USER→свой) | totals + topUsers + topChats + statusBreakdown |
-| GET | `/dashboard/api/stats/users?limit=` | **ADMIN only** | список `UserStatsRow` |
+| GET | `/dashboard/api/me` | auth | `{username, role, botUserId}` |
+| GET | `/dashboard/api/stats/overview` | auth (USER→свой) | KPI + topUsers + topChats + statusBreakdown |
+| GET | `/dashboard/api/stats/users` | **ADMIN only** | список `UserStatsRow` |
 | GET | `/dashboard/api/stats/user/{botUserId}` | auth (USER → только свой) | `UserDetailDto` |
-| GET | `/dashboard/api/stats/chats?period=&from=&to=&userId=&limit=` | auth (USER→свой) | топ чатов по байтам |
-| GET | `/dashboard/api/stats/timeseries?period=&from=&to=&metric=&granularity=&userId=` | auth (USER→свой) | для графиков Chart.js |
-| GET | `/dashboard/api/stats/status-breakdown?period=&from=&to=&userId=` | auth (USER→свой) | `{COMPLETED: n, FAILED: n, ...}` |
-| GET | `/dashboard/api/stats/events?userId=&chatId=&status=&limit=` | auth (USER→свой) | raw-таблица последних N экспортов |
+| GET | `/dashboard/api/stats/chats` | auth (USER→свой) | топ чатов по байтам |
+| GET | `/dashboard/api/stats/timeseries` | auth (USER→свой) | для Chart.js |
+| GET | `/dashboard/api/stats/status-breakdown` | auth | `{COMPLETED: n, FAILED: n, …}` |
+| GET | `/dashboard/api/stats/events` | auth (USER→свой) | raw-лог последних N экспортов |
 
-**`period`:** `day` (today-1d) · `week` (today-7d) · `month` (today-30d) ·
-`year` (today-1y) · `all` (2020-01-01..today) · `custom` (требует `from`+`to`).
-Granularity auto: ≤31d→DAY, ≤365d→WEEK, иначе MONTH (override через `granularity=day|week|month`).
+**Query-параметры (общие):** `period=day|week|month|year|all|custom`, `from=YYYY-MM-DD`,
+`to=YYYY-MM-DD`, `userId=<botUserId>`.
 
-**`metric`** для timeseries: `exports` (COUNT), `messages` (SUM messages_count),
-`bytes` (SUM bytes_count). Бакеты — `strftime('%Y-%m-%d'|'%Y-W%W'|'%Y-%m', started_at)`.
+**`period` → диапазон дат:** `day`=сутки · `week`=7д · `month`=30д · `year`=365д ·
+`all`=с 2020-01-01 · `custom`=требует `from`+`to`.
 
-**Ошибки (`DashboardExceptionHandler`, scoped to `com.tcleaner.dashboard.web`):**
-- `AccessDeniedException` → 403 `{"error":"forbidden"}`
-- `DateTimeParseException` / `MethodArgumentTypeMismatchException` → 400 `{"error":"bad_request"}`
-- `IllegalArgumentException` → 400 (например, `granularity=bogus`)
-- `EmptyResultDataAccessException` → 404
+**`metric`** (для timeseries): `exports` / `messages` / `bytes`.
 
-Юзер-детали (`/stats/user/{id}`) читаются из денорм-счётчиков в `bot_users`,
-а агрегации по периоду — из `export_events` через native SQL (см. `StatsQueryService`).
+**Granularity auto:** ≤31д→DAY · ≤365д→WEEK · иначе MONTH.
 
-## Что дальше
+## Security
 
-Следующие итерации (см. план `cheeky-mixing-castle.md`):
+Два `SecurityFilterChain`:
+- `@Order(1) dashboardFilterChain` — `/dashboard/**`: CSRF on, stateful сессия, FormLogin.
+  Статика и `/dashboard/login` — `permitAll`. `/dashboard/users` — `hasRole('ADMIN')`.
+- `@Order(2) apiFilterChain` — `/api/**`: STATELESS, CSRF off, ApiKeyFilter (без изменений).
 
-- PR-2..PR-8 — готово (инфраструктура, ingestion, stats query, security, REST API)
-- PR-9 — Thymeleaf layout + login + error page + общий CSS/JS + Chart.js vendor
-- PR-10 — Overview page + графики (Chart.js time series + period filter)
-- PR-11 — Users / user-detail pages
-- PR-12 — Chats / events pages
-- PR-13 — Traefik + HTTPS под доменом `tec.example.com`
-- PR-14 — `docs/SERVER_SETUP.md` и финальная инфраструктурная документация
+RBAC дополнительно enforced в коде через `BotUserAccessPolicy.effectiveUserId()`.
+
+**Env-bootstrap** (`EnvUserBootstrap`): при старте upsert двух юзеров — admin (ADMIN) и
+user (USER) — из env-переменных с BCrypt-хэшем. Password обновляется только если
+`matches()` = false.
+
+**Rate-limit login:** in-memory `LoginAttemptService` — блокировка на 5 мин после 5 неудач.
+
+## Frontend
+
+Подход: SSR (Thymeleaf) рендерит каркас страницы сразу; данные и графики догружаются
+через fetch к JSON API.
+
+**Шаблоны** (`src/main/resources/templates/dashboard/`):
+- `layout.html` — базовый layout (head + header + footer)
+- `fragments/header.html` — навигация, username, logout-форма
+- `fragments/period-filter.html` — кнопки All/Year/Month/Week/Day
+- `fragments/chart-block.html` — переиспользуемый `<canvas>` для Chart.js
+- `login.html`, `error.html`, `overview.html`, `users.html`, `user-detail.html`, `chats.html`, `events.html`
+
+**Статика** (`src/main/resources/static/dashboard/`):
+- `css/app.css` — монохромная палитра, компоненты
+- `js/app.js` — `window.Dashboard`: fetchJson, formatNumber, formatBytes, formatDate, period-filter
+- `js/pages/{overview,users,user-detail,chats,events}.js` — Chart.js рендер и данные
+- `vendor/chart.min.js` — Chart.js 4.x (загружается в Dockerfile при сборке образа)
+
+**Chart.js** не поставляется в репозитории (`.gitignore`). Dockerfile скачивает
+`chart.min.js` при сборке образа через `curl` с `ARG CHART_JS_VERSION=4.4.1`.
+
+## Конфигурация
+
+```properties
+# SQLite
+spring.datasource.url=jdbc:sqlite:${DASHBOARD_DB_PATH:./dashboard.db}?date_class=text
+spring.jpa.hibernate.ddl-auto=none
+
+# Прокси (для корректных redirect и Secure-cookie за Traefik)
+server.forward-headers-strategy=NATIVE
+
+# Auth bootstrap
+dashboard.auth.admin.username=${DASHBOARD_ADMIN_USERNAME:admin}
+dashboard.auth.admin.password=${DASHBOARD_ADMIN_PASSWORD:admin}
+dashboard.auth.test.username=${DASHBOARD_TEST_USERNAME:user}
+dashboard.auth.test.password=${DASHBOARD_TEST_PASSWORD:user}
+dashboard.auth.test.bot-user-id=${DASHBOARD_TEST_BOT_USER_ID:0}
+```
+
+## Ingestion (Redis Streams)
+
+Данные пишутся в Redis Stream `stats:events`. Схема — `StatsEventPayload` (JSON в поле
+`payload`). Типы событий: `bot_user.seen`, `export.started`, `export.completed`,
+`export.failed`, `export.cancelled`, `export.bytes_measured`.
+
+`StatsStreamConsumer` читает стрим consumer-group'ой `dashboard-writer`, делает
+idempotent upsert через `ExportEventIngestionService` (UNIQUE `task_id`), XACK'ает.
+Pending-list сообщений переживает рестарты java-bot — at-least-once гарантия.
+
+## Известные ограничения и планы
+
+- Rollup-таблицы не реализованы — индексов достаточно на текущих объёмах
+- Миграция SQLite → PostgreSQL: заменить dialect + docker-compose сервис; API/репозитории не меняются
+- Telegram Login Widget: задел в `dashboard_users.provider` (сейчас только `LOCAL`)
+- Audit log для write-операций UI: отложен до появления мутирующего UI
