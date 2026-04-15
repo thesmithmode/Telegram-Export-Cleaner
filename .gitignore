@@ -104,3 +104,6 @@ env/
 *.env
 # Pyrogram session files
 export-worker/session/
+
+# Dashboard: Chart.js fetched at Docker build-time (see Dockerfile ARG CHART_JS_VERSION)
+src/main/resources/static/dashboard/vendor/chart.min.js

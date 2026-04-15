@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org">
+<body>
+
+<!--
+    Переиспользуемый блок под Chart.js canvas.
+    Параметры:
+      id     — id canvas'а (должен быть уникальным на странице)
+      title  — заголовок блока
+      height — высота в пикселях (опционально, по умолчанию 300)
+-->
+<section th:fragment="chart(id, title, height)" class="chart-block">
+    <h3 class="chart-block__title" th:text="${title}">Chart</h3>
+    <div class="chart-block__canvas-wrap">
+        <canvas th:id="${id}"
+                th:attr="data-height=${height ?: 300}"
+                class="chart-block__canvas"></canvas>
+    </div>
+</section>
+
+</body>
+</html>
