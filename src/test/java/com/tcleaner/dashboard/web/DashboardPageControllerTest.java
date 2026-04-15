@@ -89,13 +89,31 @@ class DashboardPageControllerTest {
     }
 
     @Test
-    @DisplayName("GET /dashboard/overview (auth) — 200, рендерится layout + nav")
+    @DisplayName("GET /dashboard/overview (auth) — 200, KPI + period-filter + chart canvases")
     void overviewRendersForAuthenticatedUser() throws Exception {
         mockMvc.perform(get("/dashboard/overview").with(user(USER)))
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith("text/html"))
                 .andExpect(content().string(containsString("Обзор")))
-                .andExpect(content().string(containsString("alice")));
+                .andExpect(content().string(containsString("alice")))
+                // KPI-grid со всеми четырьмя метриками
+                .andExpect(content().string(containsString("kpi-grid")))
+                .andExpect(content().string(containsString("kpi-exports")))
+                .andExpect(content().string(containsString("kpi-messages")))
+                .andExpect(content().string(containsString("kpi-bytes")))
+                .andExpect(content().string(containsString("kpi-users")))
+                // Период-фильтр (5 кнопок)
+                .andExpect(content().string(containsString("period-filter")))
+                .andExpect(content().string(containsString("data-period=\"all\"")))
+                .andExpect(content().string(containsString("data-period=\"month\"")))
+                .andExpect(content().string(containsString("data-period=\"day\"")))
+                // Chart.js canvas'ы
+                .andExpect(content().string(containsString("id=\"chart-timeseries\"")))
+                .andExpect(content().string(containsString("id=\"chart-status\"")))
+                .andExpect(content().string(containsString("id=\"chart-top-users\"")))
+                .andExpect(content().string(containsString("id=\"chart-top-chats\"")))
+                // Встроенный скрипт страницы
+                .andExpect(content().string(containsString("dashboard/js/pages/overview.js")));
     }
 
     @Test
