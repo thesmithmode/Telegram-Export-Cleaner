@@ -55,7 +55,7 @@ java-bot (Spring Boot)
 Production (`application.properties`):
 - `spring.datasource.url=jdbc:sqlite:${DASHBOARD_DB_PATH:./dashboard.db}`
 - `spring.jpa.database-platform=org.hibernate.community.dialect.SQLiteDialect`
-- `spring.jpa.hibernate.ddl-auto=validate` — DDL владеет Liquibase, Hibernate только проверяет
+- `spring.jpa.hibernate.ddl-auto=none` — DDL владеет Liquibase; `validate` с SQLite ловит false-positive несоответствия типов (TEXT affinity ≠ VARCHAR)
 - `spring.liquibase.change-log=classpath:/db/changelog/db.changelog-master.sql`
 - Hikari `connection-init-sql=PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;`
 
