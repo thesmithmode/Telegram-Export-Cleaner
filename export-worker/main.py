@@ -349,6 +349,14 @@ class ExportWorker:
 
             # Send results to Java API, deliver cleaned text to user
             chat_title = chat_info.get('title') or chat_info.get('username') if chat_info else None
+            if msg_count == 0:
+                # Пустой экспорт: send_response перехватит и отправит пользователю
+                # человекочитаемое "сообщений за период не найдено" вместо попытки
+                # отгрузить пустой документ в Telegram (который бы упал с "Не удалось отправить файл").
+                logger.info(
+                    f"ℹ️ Job {job.task_id}: 0 messages in selected period — "
+                    f"notifying user without Java round-trip"
+                )
             success = await self.java_client.send_response(
                 SendResponsePayload(
                     task_id=job.task_id,
