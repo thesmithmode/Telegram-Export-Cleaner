@@ -115,6 +115,24 @@ curl http://localhost:8080/api/health
 
 ---
 
+## Веб-дашборд статистики
+
+Дашборд доступен по адресу `/dashboard/login`. Показывает:
+- KPI за период (all / year / month / week / day): экспорты, сообщения, байты, пользователи
+- Таблицу топ-пользователей и топ-чатов
+- Динамику экспортов (line chart)
+- Разбивку по статусам (doughnut chart)
+- Raw-лог последних экспортов с фильтром по статусу
+
+Первый вход — admin/admin (сменить пароль через `DASHBOARD_ADMIN_PASSWORD` в `.env`).
+
+В продакшне дашборд проксируется через Traefik + TLS (Let's Encrypt) по адресу
+`https://tec.searchingforgamesforever.online/dashboard/`.
+
+Подробнее: [docs/DASHBOARD.md](docs/DASHBOARD.md) · [docs/SERVER_SETUP.md](docs/SERVER_SETUP.md)
+
+---
+
 ## Документация
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — архитектура и data flow.
@@ -123,4 +141,5 @@ curl http://localhost:8080/api/health
 - [docs/PYTHON_WORKER.md](docs/PYTHON_WORKER.md) — worker, кэш, recovery.
 - [docs/SETUP.md](docs/SETUP.md) — установка, конфиг, troubleshooting.
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — разработка и проверки.
-- [docs/DASHBOARD.md](docs/DASHBOARD.md) — веб-дашборд статистики (в разработке).
+- [docs/DASHBOARD.md](docs/DASHBOARD.md) — веб-дашборд статистики.
+- [docs/SERVER_SETUP.md](docs/SERVER_SETUP.md) — деплой на чистый сервер с HTTPS.
