@@ -1,19 +1,23 @@
 package com.tcleaner.dashboard.events;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tcleaner.dashboard.service.ingestion.ExportEventIngestionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.redis.connection.stream.MapRecord;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.stream.StreamListener;
 import org.springframework.stereotype.Component;
 
 /**
- * Consumer для {@code stats:events}. PR-3 — только приём + XACK;
- * реальная запись в БД подключается в PR-4 через {@code ExportEventIngestionService}.
+ * Consumer для {@code stats:events}. Десериализует payload в {@link StatsEventPayload}
+ * и делегирует обработку {@link ExportEventIngestionService}.
  * <p>
  * Ошибка при обработке одной записи не роняет listener: логируем + XACK
  * (at-least-once на уровне стрима, идемпотентность — на уровне upsert по {@code task_id}).
+ * {@code ObjectProvider} — чтобы в тестах, где ingestion bean нет (@DataJpaTest,
+ * unit-тесты без Spring-контекста), consumer создавался без NPE.
  */
 @Component
 public class StatsStreamConsumer implements StreamListener<String, MapRecord<String, String, String>> {
@@ -24,15 +28,18 @@ public class StatsStreamConsumer implements StreamListener<String, MapRecord<Str
     private final ObjectMapper objectMapper;
     private final StringRedisTemplate redis;
     private final StatsStreamProperties props;
+    private final ObjectProvider<ExportEventIngestionService> ingestionServiceProvider;
 
     public StatsStreamConsumer(
             ObjectMapper objectMapper,
             StringRedisTemplate redis,
-            StatsStreamProperties props
+            StatsStreamProperties props,
+            ObjectProvider<ExportEventIngestionService> ingestionServiceProvider
     ) {
         this.objectMapper = objectMapper;
         this.redis = redis;
         this.props = props;
+        this.ingestionServiceProvider = ingestionServiceProvider;
     }
 
     @Override
@@ -58,11 +65,16 @@ public class StatsStreamConsumer implements StreamListener<String, MapRecord<Str
     }
 
     /**
-     * Временный stub-обработчик: просто логирует событие.
-     * PR-4 заменит тело на вызов ingestion-сервиса.
+     * Делегирует обработку в {@link ExportEventIngestionService}. Если бин ingestion-а
+     * отсутствует (тесты с отключённым stream'ом) — только логируем.
      */
     void handle(StatsEventPayload payload) {
-        log.debug("Получено событие {} (task_id={}, botUserId={})",
-                payload.getType(), payload.getTaskId(), payload.getBotUserId());
+        ExportEventIngestionService service = ingestionServiceProvider.getIfAvailable();
+        if (service != null) {
+            service.ingest(payload);
+            return;
+        }
+        log.debug("Ingestion service отсутствует — событие {} (task_id={}) проигнорировано",
+                payload.getType(), payload.getTaskId());
     }
 }

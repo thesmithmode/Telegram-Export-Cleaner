@@ -1,9 +1,11 @@
 package com.tcleaner.bot;
 
+import com.tcleaner.dashboard.events.StatsStreamPublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.User;
@@ -51,7 +53,10 @@ class ExportBotTest {
         when(jobProducerMock.hasActiveProcessingJob()).thenReturn(false);
         when(messengerMock.sendWithKeyboardGetId(anyLong(), anyString(), any())).thenReturn(42);
 
-        bot = new ExportBot("token", jobProducerMock, messengerMock);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<StatsStreamPublisher> noPublisher = mock(ObjectProvider.class);
+        when(noPublisher.getIfAvailable()).thenReturn(null);
+        bot = new ExportBot("token", jobProducerMock, messengerMock, noPublisher);
     }
 
     @Test
