@@ -66,10 +66,8 @@ public class DashboardApiController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @RequestParam(required = false) Long userId) {
-        StatsPeriod resolved = periodResolver.resolve(period, from, to);
-        long effective = accessPolicy.effectiveUserId(
-                principal.getDashboardRole(), principal.getBotUserId(), userId);
-        return statsQueryService.overview(resolved, effective > 0 ? effective : null);
+        Scope s = scope(principal, period, from, to, userId);
+        return statsQueryService.overview(s.period(), s.botUserId());
     }
 
     // ─── /dashboard/api/stats/users (ADMIN only, URL-guard в security config) ─
@@ -103,11 +101,8 @@ public class DashboardApiController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @RequestParam(required = false) Long userId,
             @RequestParam(defaultValue = "20") int limit) {
-        StatsPeriod resolved = periodResolver.resolve(period, from, to);
-        long effective = accessPolicy.effectiveUserId(
-                principal.getDashboardRole(), principal.getBotUserId(), userId);
-        return statsQueryService.topChats(resolved,
-                effective > 0 ? effective : null, clamp(limit, 200));
+        Scope s = scope(principal, period, from, to, userId);
+        return statsQueryService.topChats(s.period(), s.botUserId(), clamp(limit, 200));
     }
 
     // ─── /dashboard/api/stats/timeseries ─────────────────────────────────────
@@ -121,12 +116,9 @@ public class DashboardApiController {
             @RequestParam(required = false) Long userId,
             @RequestParam(required = false, defaultValue = "exports") String metric,
             @RequestParam(required = false) String granularity) {
-        StatsPeriod base = periodResolver.resolve(period, from, to);
-        StatsPeriod resolved = overrideGranularity(base, granularity);
-        long effective = accessPolicy.effectiveUserId(
-                principal.getDashboardRole(), principal.getBotUserId(), userId);
-        return statsQueryService.timeSeries(resolved, metric,
-                effective > 0 ? effective : null);
+        Scope s = scope(principal, period, from, to, userId);
+        StatsPeriod resolved = overrideGranularity(s.period(), granularity);
+        return statsQueryService.timeSeries(resolved, metric, s.botUserId());
     }
 
     // ─── /dashboard/api/stats/status-breakdown ───────────────────────────────
@@ -138,11 +130,8 @@ public class DashboardApiController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @RequestParam(required = false) Long userId) {
-        StatsPeriod resolved = periodResolver.resolve(period, from, to);
-        long effective = accessPolicy.effectiveUserId(
-                principal.getDashboardRole(), principal.getBotUserId(), userId);
-        return statsQueryService.statusBreakdown(resolved,
-                effective > 0 ? effective : null);
+        Scope s = scope(principal, period, from, to, userId);
+        return statsQueryService.statusBreakdown(s.period(), s.botUserId());
     }
 
     // ─── /dashboard/api/stats/events ─────────────────────────────────────────
@@ -154,13 +143,31 @@ public class DashboardApiController {
             @RequestParam(required = false) Long chatId,
             @RequestParam(required = false) String status,
             @RequestParam(defaultValue = "100") int limit) {
-        long effective = accessPolicy.effectiveUserId(
-                principal.getDashboardRole(), principal.getBotUserId(), userId);
-        return statsQueryService.recentEvents(
-                effective > 0 ? effective : null, chatId, status, clamp(limit, 500));
+        Long effective = effectiveUserId(principal, userId);
+        return statsQueryService.recentEvents(effective, chatId, status, clamp(limit, 500));
     }
 
     // ─── helpers ─────────────────────────────────────────────────────────────
+
+    /**
+     * Разрешает period+from+to в {@link StatsPeriod} и применяет RBAC к userId.
+     * Используется пятью stats-эндпоинтами; выделено для DRY.
+     */
+    private Scope scope(DashboardUserDetails principal, String period,
+                        LocalDate from, LocalDate to, Long userId) {
+        return new Scope(
+                periodResolver.resolve(period, from, to),
+                effectiveUserId(principal, userId));
+    }
+
+    /** RBAC: возвращает {@code null} для «всех» (только ADMIN), либо конкретный id. */
+    private Long effectiveUserId(DashboardUserDetails principal, Long userId) {
+        long eff = accessPolicy.effectiveUserId(
+                principal.getDashboardRole(), principal.getBotUserId(), userId);
+        return eff > 0 ? eff : null;
+    }
+
+    private record Scope(StatsPeriod period, Long botUserId) {}
 
     private static int clamp(int value, int max) {
         return Math.max(1, Math.min(value, max));

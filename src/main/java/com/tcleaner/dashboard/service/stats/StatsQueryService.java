@@ -34,32 +34,31 @@ public class StatsQueryService {
         String from = period.from().toString();
         String to = period.to().toString() + "T23:59:59Z";
 
-        String baseWhere = botUserId != null && botUserId > 0
-                ? " WHERE started_at >= ? AND started_at <= ? AND bot_user_id = ?"
-                : " WHERE started_at >= ? AND started_at <= ?";
+        // Три агрегата одним запросом — экономит 2 round-trip'а к SQLite на каждый /overview.
+        String aggSql = "SELECT COUNT(*) AS exports, " +
+                "COALESCE(SUM(messages_count), 0) AS messages, " +
+                "COALESCE(SUM(bytes_count), 0) AS bytes " +
+                "FROM export_events WHERE started_at >= ? AND started_at <= ?" +
+                (botUserId != null && botUserId > 0 ? " AND bot_user_id = ?" : "");
         Object[] args = botUserId != null && botUserId > 0
                 ? new Object[]{from, to, botUserId}
                 : new Object[]{from, to};
 
-        Long exports = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM export_events" + baseWhere, Long.class, args);
-        Long messages = jdbc.queryForObject(
-                "SELECT COALESCE(SUM(messages_count), 0) FROM export_events" + baseWhere, Long.class, args);
-        Long bytes = jdbc.queryForObject(
-                "SELECT COALESCE(SUM(bytes_count), 0) FROM export_events" + baseWhere, Long.class, args);
-        Long users = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM bot_users", Long.class);
+        long[] totals = jdbc.queryForObject(aggSql,
+                (rs, n) -> new long[]{
+                        rs.getLong("exports"),
+                        rs.getLong("messages"),
+                        rs.getLong("bytes")},
+                args);
 
-        List<UserStatsRow> topUsers = topUsers(10, botUserId);
-        List<ChatStatsRow> topChats = topChats(period, botUserId, 10);
-        Map<String, Long> breakdown = statusBreakdown(period, botUserId);
+        Long users = jdbc.queryForObject("SELECT COUNT(*) FROM bot_users", Long.class);
 
         return new OverviewDto(
-                exports != null ? exports : 0,
-                messages != null ? messages : 0,
-                bytes != null ? bytes : 0,
+                totals[0], totals[1], totals[2],
                 users != null ? users : 0,
-                topUsers, topChats, breakdown);
+                topUsers(10, botUserId),
+                topChats(period, botUserId, 10),
+                statusBreakdown(period, botUserId));
     }
 
     // ─── Users ───────────────────────────────────────────────────────────────

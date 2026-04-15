@@ -68,17 +68,48 @@ ENV (`docker-compose.yml`):
 - `DASHBOARD_DB_PATH=/data/stats/dashboard.db`
 - volume `dashboard_data:/data/stats`
 
+## REST API (PR-8)
+
+JSON под `/dashboard/api/**`. Все эндпоинты требуют аутентификации (cookie-based
+JSESSIONID, form-login); `/stats/users` — ADMIN-only (URL-guard в `DashboardSecurityConfig`
++ дубль через `BotUserAccessPolicy` в коде). Пользователь с ролью `USER` видит
+только свой `botUserId`; попытка указать чужой `userId` → 403.
+
+| Метод | Path | Доступ | Назначение |
+|---|---|---|---|
+| GET | `/dashboard/api/me` | auth | `{username, role, botUserId}` для фронта |
+| GET | `/dashboard/api/stats/overview?period=&from=&to=&userId=` | auth (USER→свой) | totals + topUsers + topChats + statusBreakdown |
+| GET | `/dashboard/api/stats/users?limit=` | **ADMIN only** | список `UserStatsRow` |
+| GET | `/dashboard/api/stats/user/{botUserId}` | auth (USER → только свой) | `UserDetailDto` |
+| GET | `/dashboard/api/stats/chats?period=&from=&to=&userId=&limit=` | auth (USER→свой) | топ чатов по байтам |
+| GET | `/dashboard/api/stats/timeseries?period=&from=&to=&metric=&granularity=&userId=` | auth (USER→свой) | для графиков Chart.js |
+| GET | `/dashboard/api/stats/status-breakdown?period=&from=&to=&userId=` | auth (USER→свой) | `{COMPLETED: n, FAILED: n, ...}` |
+| GET | `/dashboard/api/stats/events?userId=&chatId=&status=&limit=` | auth (USER→свой) | raw-таблица последних N экспортов |
+
+**`period`:** `day` (today-1d) · `week` (today-7d) · `month` (today-30d) ·
+`year` (today-1y) · `all` (2020-01-01..today) · `custom` (требует `from`+`to`).
+Granularity auto: ≤31d→DAY, ≤365d→WEEK, иначе MONTH (override через `granularity=day|week|month`).
+
+**`metric`** для timeseries: `exports` (COUNT), `messages` (SUM messages_count),
+`bytes` (SUM bytes_count). Бакеты — `strftime('%Y-%m-%d'|'%Y-W%W'|'%Y-%m', started_at)`.
+
+**Ошибки (`DashboardExceptionHandler`, scoped to `com.tcleaner.dashboard.web`):**
+- `AccessDeniedException` → 403 `{"error":"forbidden"}`
+- `DateTimeParseException` / `MethodArgumentTypeMismatchException` → 400 `{"error":"bad_request"}`
+- `IllegalArgumentException` → 400 (например, `granularity=bogus`)
+- `EmptyResultDataAccessException` → 404
+
+Юзер-детали (`/stats/user/{id}`) читаются из денорм-счётчиков в `bot_users`,
+а агрегации по периоду — из `export_events` через native SQL (см. `StatsQueryService`).
+
 ## Что дальше
 
 Следующие итерации (см. план `cheeky-mixing-castle.md`):
 
-- PR-2 — JPA-сущности + репозитории
-- PR-3 — Redis Streams event-bus (`stats:events`)
-- PR-4 — Ingestion service + хуки в `ExportBot`/`ExportJobProducer`
-- PR-5 — Измерение `bytes_count` в `TelegramController`
-- PR-6 — Stats query service
-- PR-7 — Security (два SecurityFilterChain, env-bootstrap)
-- PR-8 — REST API дашборда
-- PR-9..12 — Thymeleaf UI
+- PR-2..PR-8 — готово (инфраструктура, ingestion, stats query, security, REST API)
+- PR-9 — Thymeleaf layout + login + error page + общий CSS/JS + Chart.js vendor
+- PR-10 — Overview page + графики (Chart.js time series + period filter)
+- PR-11 — Users / user-detail pages
+- PR-12 — Chats / events pages
 - PR-13 — Traefik + HTTPS под доменом `tec.example.com`
 - PR-14 — `docs/SERVER_SETUP.md` и финальная инфраструктурная документация
