@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.time.format.DateTimeParseException;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -57,7 +57,7 @@ public class DashboardExceptionHandler {
     }
 
     private Map<String, String> error(String message, String code) {
-        Map<String, String> body = new HashMap<>();
+        Map<String, String> body = new LinkedHashMap<>();
         body.put("error", code);
         body.put("message", message != null ? message : "Unknown");
         return body;
