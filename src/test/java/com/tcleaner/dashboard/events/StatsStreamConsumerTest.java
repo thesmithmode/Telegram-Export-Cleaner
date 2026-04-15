@@ -5,6 +5,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.redis.connection.stream.MapRecord;
 import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.connection.stream.StreamRecords;
@@ -48,7 +49,11 @@ class StatsStreamConsumerTest {
         props = new StatsStreamProperties("stats:events", "dashboard-writer", "java-bot-1", 1000, true);
 
         captured = new AtomicReference<>();
-        consumer = new StatsStreamConsumer(mapper, redis, props) {
+        @SuppressWarnings("unchecked")
+        ObjectProvider<com.tcleaner.dashboard.service.ingestion.ExportEventIngestionService> noIngestion =
+                mock(ObjectProvider.class);
+        when(noIngestion.getIfAvailable()).thenReturn(null);
+        consumer = new StatsStreamConsumer(mapper, redis, props, noIngestion) {
             @Override
             void handle(StatsEventPayload payload) {
                 captured.set(payload);
