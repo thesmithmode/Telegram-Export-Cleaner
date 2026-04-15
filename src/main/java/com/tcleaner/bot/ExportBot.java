@@ -52,8 +52,6 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
             • username: @durov
             • ссылка: https://t.me/durov
 
-            Для приватных чатов аккаунт должен быть их участником.
-
             Команды: /cancel (отмена активного экспорта)
             """;
 
