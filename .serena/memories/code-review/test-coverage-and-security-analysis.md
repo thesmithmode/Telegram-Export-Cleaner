@@ -10,6 +10,8 @@
 - Action: Update to psutil==5.11.4 or 6.0.0 (verify compatibility first)
 
 ### 2. Missing Error Path Test Coverage in Python
+**Fixed (2026-04-14):** Topic export date filtering tests added (4 tests in TestGetTopicHistoryDirect).
+**Fixed (2026-04-14):** messages.Search replaced with messages.GetReplies for forum topics — Search returned incomplete results.
 **Locations:**
 - export-worker/tests/test_pyrogram_client.py: No tests for actual message fetch errors
 - export-worker/tests/test_java_client.py: No tests for HTTP retry logic beyond mocks
