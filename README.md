@@ -123,3 +123,4 @@ curl http://localhost:8080/api/health
 - [docs/PYTHON_WORKER.md](docs/PYTHON_WORKER.md) — worker, кэш, recovery.
 - [docs/SETUP.md](docs/SETUP.md) — установка, конфиг, troubleshooting.
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — разработка и проверки.
+- [docs/DASHBOARD.md](docs/DASHBOARD.md) — веб-дашборд статистики (в разработке).
