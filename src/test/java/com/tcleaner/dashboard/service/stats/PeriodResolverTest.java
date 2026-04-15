@@ -108,6 +108,6 @@ class PeriodResolverTest {
         LocalDate from = LocalDate.of(2026, 4, 15);
         LocalDate to = LocalDate.of(2026, 4, 1);
         StatsPeriod p = resolver.resolve("custom", from, to, UTC);
-        assertThat(p.to()).isGreaterThanOrEqualTo(p.from());
+        assertThat(p.to()).isAfterOrEqualTo(p.from());
     }
 }
