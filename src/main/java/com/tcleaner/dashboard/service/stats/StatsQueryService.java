@@ -1,6 +1,7 @@
 package com.tcleaner.dashboard.service.stats;
 
 import com.tcleaner.dashboard.dto.ChatStatsRow;
+import com.tcleaner.dashboard.dto.EventRowDto;
 import com.tcleaner.dashboard.dto.OverviewDto;
 import com.tcleaner.dashboard.dto.TimeSeriesPointDto;
 import com.tcleaner.dashboard.dto.UserDetailDto;
@@ -8,6 +9,7 @@ import com.tcleaner.dashboard.dto.UserStatsRow;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -176,6 +178,57 @@ public class StatsQueryService {
                 "GROUP BY period ORDER BY period",
                 (rs, n) -> new TimeSeriesPointDto(rs.getString("period"), rs.getLong("value")),
                 from, to);
+    }
+
+    // ─── Recent events (raw table) ───────────────────────────────────────────
+
+    /**
+     * Последние N событий с опциональными фильтрами. Используется страницей
+     * {@code events.html}. Чувствительно к RBAC — контроллер обязан передать
+     * эффективный {@code botUserId} (0 = «все», только ADMIN).
+     */
+    public List<EventRowDto> recentEvents(Long botUserId, Long chatRefId,
+                                          String status, int limit) {
+        StringBuilder sql = new StringBuilder(
+                "SELECT e.task_id, e.bot_user_id, u.username, " +
+                "c.chat_title, c.canonical_chat_id, " +
+                "e.started_at, e.finished_at, e.status, " +
+                "e.messages_count, e.bytes_count, e.source, e.error_message " +
+                "FROM export_events e " +
+                "LEFT JOIN bot_users u ON e.bot_user_id = u.bot_user_id " +
+                "LEFT JOIN chats c ON e.chat_ref_id = c.id " +
+                "WHERE 1=1 ");
+        List<Object> args = new ArrayList<>();
+        if (botUserId != null && botUserId > 0) {
+            sql.append("AND e.bot_user_id = ? ");
+            args.add(botUserId);
+        }
+        if (chatRefId != null && chatRefId > 0) {
+            sql.append("AND e.chat_ref_id = ? ");
+            args.add(chatRefId);
+        }
+        if (status != null && !status.isBlank()) {
+            sql.append("AND e.status = ? ");
+            args.add(status);
+        }
+        sql.append("ORDER BY e.started_at DESC LIMIT ?");
+        args.add(Math.max(1, Math.min(limit, 500)));
+
+        return jdbc.query(sql.toString(),
+                (rs, n) -> new EventRowDto(
+                        rs.getString("task_id"), rs.getLong("bot_user_id"),
+                        rs.getString("username"), rs.getString("chat_title"),
+                        rs.getString("canonical_chat_id"),
+                        rs.getString("started_at"), rs.getString("finished_at"),
+                        rs.getString("status"),
+                        nullableLong(rs.getObject("messages_count")),
+                        nullableLong(rs.getObject("bytes_count")),
+                        rs.getString("source"), rs.getString("error_message")),
+                args.toArray());
+    }
+
+    private static Long nullableLong(Object o) {
+        return o == null ? null : ((Number) o).longValue();
     }
 
     // ─── User detail ─────────────────────────────────────────────────────────
