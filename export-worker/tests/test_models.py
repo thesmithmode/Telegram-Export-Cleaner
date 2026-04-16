@@ -132,6 +132,60 @@ class TestExportRequest:
         assert json_data["task_id"] == "export_12345"
         assert json_data["limit"] == 1000
 
+    def test_topic_id_defaults_to_none(self):
+        req = ExportRequest(
+            task_id="export_12345",
+            user_id=123456789,
+            chat_id=-1001234567890
+        )
+        assert req.topic_id is None
+
+    def test_topic_id_valid(self):
+        req = ExportRequest(
+            task_id="export_12345",
+            user_id=123456789,
+            chat_id=-1001234567890,
+            topic_id=148220
+        )
+        assert req.topic_id == 148220
+
+    def test_topic_id_one_valid(self):
+        req = ExportRequest(
+            task_id="export_12345",
+            user_id=123456789,
+            chat_id=-1001234567890,
+            topic_id=1
+        )
+        assert req.topic_id == 1
+
+    def test_topic_id_zero_rejected(self):
+        with pytest.raises(ValidationError):
+            ExportRequest(
+                task_id="export_12345",
+                user_id=123456789,
+                chat_id=-1001234567890,
+                topic_id=0
+            )
+
+    def test_topic_id_negative_rejected(self):
+        with pytest.raises(ValidationError):
+            ExportRequest(
+                task_id="export_12345",
+                user_id=123456789,
+                chat_id=-1001234567890,
+                topic_id=-5
+            )
+
+    def test_topic_id_in_json_serialization(self):
+        req = ExportRequest(
+            task_id="export_12345",
+            user_id=123456789,
+            chat_id=-1001234567890,
+            topic_id=148220
+        )
+        json_data = req.model_dump()
+        assert json_data["topic_id"] == 148220
+
 class TestMessageEntity:
 
     def test_simple_entity(self):

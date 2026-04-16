@@ -40,12 +40,17 @@ class ExportRequest(BaseModel):
     user_id: int = Field(..., description="Telegram user ID requesting export")
     user_chat_id: Optional[int] = Field(None, description="Telegram chat ID to send result back (bot sends here)")
     chat_id: Union[int, str] = Field(..., description="Telegram chat ID or username to export")
+    topic_id: Optional[int] = Field(None, gt=0, description="Forum topic ID (message_thread_id) for topic-specific export")
     limit: int = Field(default=0, description="Max messages (0=all)")
     offset_id: int = Field(default=0, description="Start from message ID")
     from_date: Optional[str] = Field(None, description="ISO date filter (YYYY-MM-DD, YYYY-MM-DDTHH:MM or YYYY-MM-DDTHH:MM:SS)")
     to_date: Optional[str] = Field(None, description="ISO date filter (YYYY-MM-DD, YYYY-MM-DDTHH:MM or YYYY-MM-DDTHH:MM:SS)")
     keywords: Optional[str] = Field(None, description="Comma-separated keywords to include")
     exclude_keywords: Optional[str] = Field(None, description="Comma-separated keywords to exclude")
+
+    @property
+    def effective_topic_id(self) -> int:
+        return self.topic_id or 0
 
     @field_validator("chat_id", mode="before")
     @classmethod

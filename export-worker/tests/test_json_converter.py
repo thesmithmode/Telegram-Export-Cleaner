@@ -290,8 +290,10 @@ class TestMessageConversion:
         message.id = 129
         message.date = datetime(2025, 6, 24, 15, 36, 0)
         message.text = None
+        message.caption = None
         message.from_user = None
         message.entities = None
+        message.caption_entities = None
         message.media = None
         message.forward_from = None
         message.forward_sender_name = None
@@ -302,6 +304,111 @@ class TestMessageConversion:
         result = MessageConverter.convert_message(message)
 
         assert result.text == ""
+
+    def test_media_message_with_caption(self):
+        photo = Mock()
+        photo.__class__.__name__ = "Photo"
+        photo.file_name = "photo.jpg"
+        photo.width = 800
+        photo.height = 600
+
+        message = Mock()
+        message.id = 130
+        message.date = datetime(2025, 6, 24, 15, 37, 0)
+        message.text = None
+        message.caption = "Подпись к фото"
+        message.from_user = None
+        message.entities = None
+        message.caption_entities = None
+        message.media = photo
+        message.forward_from = None
+        message.forward_sender_name = None
+        message.forward_date = None
+        message.edit_date = None
+        message.reply_to_message_id = None
+
+        result = MessageConverter.convert_message(message)
+
+        assert result.text == "Подпись к фото"
+        assert result.media_type == "photo"
+
+    def test_media_message_without_caption(self):
+        photo = Mock()
+        photo.__class__.__name__ = "Photo"
+        photo.file_name = "photo.jpg"
+        photo.width = 800
+        photo.height = 600
+
+        message = Mock()
+        message.id = 131
+        message.date = datetime(2025, 6, 24, 15, 38, 0)
+        message.text = None
+        message.caption = None
+        message.from_user = None
+        message.entities = None
+        message.caption_entities = None
+        message.media = photo
+        message.forward_from = None
+        message.forward_sender_name = None
+        message.forward_date = None
+        message.edit_date = None
+        message.reply_to_message_id = None
+
+        result = MessageConverter.convert_message(message)
+
+        assert result.text == ""
+        assert result.media_type == "photo"
+
+    def test_media_message_with_caption_entities(self):
+        photo = Mock()
+        photo.__class__.__name__ = "Photo"
+        photo.file_name = "photo.jpg"
+        photo.width = 800
+        photo.height = 600
+
+        caption_entity = Mock(type="bold", offset=0, length=7)
+
+        message = Mock()
+        message.id = 132
+        message.date = datetime(2025, 6, 24, 15, 39, 0)
+        message.text = None
+        message.caption = "Жирный текст"
+        message.from_user = None
+        message.entities = None
+        message.caption_entities = [caption_entity]
+        message.media = photo
+        message.forward_from = None
+        message.forward_sender_name = None
+        message.forward_date = None
+        message.edit_date = None
+        message.reply_to_message_id = None
+
+        result = MessageConverter.convert_message(message)
+
+        assert result.text == "Жирный текст"
+        assert result.text_entities is not None
+        assert len(result.text_entities) == 1
+        assert result.text_entities[0].type == "bold"
+
+    def test_text_message_ignores_caption(self):
+        message = Mock()
+        message.id = 133
+        message.date = datetime(2025, 6, 24, 15, 40, 0)
+        message.text = "Обычный текст"
+        message.caption = "Этот caption должен быть проигнорирован"
+        message.from_user = None
+        message.entities = None
+        message.caption_entities = None
+        message.media = None
+        message.forward_from = None
+        message.forward_sender_name = None
+        message.forward_date = None
+        message.edit_date = None
+        message.reply_to_message_id = None
+
+        result = MessageConverter.convert_message(message)
+
+        assert result.text == "Обычный текст"
 
     def test_convert_messages_batch(self):
         messages = []
