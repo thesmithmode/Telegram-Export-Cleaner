@@ -13,8 +13,18 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 
 /**
- * Фильтр для проверки API ключа в заголовке X-API-Key.
- * Если ключ настроен в api.key, он будет проверяться для всех запросов к /api/**.
+ * Spring Security фильтр для валидации API ключа в заголовке X-API-Key.
+ *
+ * Проверяет наличие и корректность API ключа для всех защищённых endpoints вида /api/**.
+ * Endpoint /api/health исключена из проверки (public health check).
+ *
+ * Режимы работы:
+ * - С ключом (production): возвращает 401 Unauthorized если ключ отсутствует или неверен
+ * - Без ключа (development): логирует warning и пропускает все запросы
+ *
+ * Интегрируется в Spring Security filter chain до {@link UsernamePasswordAuthenticationFilter}.
+ *
+ * @see org.springframework.web.filter.OncePerRequestFilter
  */
 @Component
 public class ApiKeyFilter extends OncePerRequestFilter {
@@ -23,6 +33,12 @@ public class ApiKeyFilter extends OncePerRequestFilter {
 
     private final String expectedKey;
 
+    /**
+     * Конструктор с инъекцией API ключа из конфигурации.
+     *
+     * @param expectedKey значение из ${api.key} в application.properties
+     *                    (пусто или null = режим без аутентификации)
+     */
     public ApiKeyFilter(@Value("${api.key:}") String expectedKey) {
         this.expectedKey = expectedKey;
         if (expectedKey == null || expectedKey.isEmpty()) {
@@ -31,6 +47,21 @@ public class ApiKeyFilter extends OncePerRequestFilter {
         }
     }
 
+    /**
+     * Фильтрует запрос, проверяя наличие валидного API ключа.
+     *
+     * Перехватывает запросы к /api/**, проверяет заголовок X-API-Key и сравнивает
+     * с ожидаемым ключом. Если ключ не совпадает, возвращает 401 Unauthorized.
+     *
+     * /api/health исключена из проверки и всегда доступна.
+     *
+     * @param request HTTP запрос
+     * @param response HTTP ответ
+     * @param filterChain цепь фильтров
+     *
+     * @throws ServletException если ошибка в фильтрации
+     * @throws IOException если ошибка ввода/вывода
+     */
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
@@ -39,13 +70,16 @@ public class ApiKeyFilter extends OncePerRequestFilter {
 
         // Проверяем ключ только для API endpoints, кроме /api/health
         if (path.startsWith("/api/") && !path.equals("/api/health")) {
-            String providedKey = request.getHeader("X-API-Key");
-            
-            if (expectedKey == null || expectedKey.isEmpty() || !expectedKey.equals(providedKey)) {
-                log.warn("Попытка доступа к API без корректного ключа: path={}, provided={}", path, providedKey);
-                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                response.getWriter().write("Invalid or missing API Key");
-                return;
+            // Если ключ настроен в application.properties, проверяем его.
+            // Если не настроен — пропускаем (режим без аутентификации).
+            if (expectedKey != null && !expectedKey.isEmpty()) {
+                String providedKey = request.getHeader("X-API-Key");
+                if (!expectedKey.equals(providedKey)) {
+                    log.warn("Попытка доступа к API с неверным ключом: path={}, provided={}", path, providedKey);
+                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                    response.getWriter().write("Invalid API Key");
+                    return;
+                }
             }
         }
 

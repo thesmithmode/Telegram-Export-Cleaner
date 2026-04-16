@@ -789,3 +789,47 @@ class TestProgressTracker:
             call_args = mock_java_client.send_progress_update.call_args_list[-1]
             assert call_args[1]["message_count"] == 110
             assert call_args[1]["total"] == 110  # max(100, 110) = 110
+
+    async def test_send_progress_update_with_zero_total_shows_progress_bar(self):
+        """total=0 should still render as a 0% progress bar, not a generic message."""
+        with patch('java_client.settings') as mock_settings:
+            mock_settings.TELEGRAM_BOT_TOKEN = "test_token"
+
+            client = JavaBotClient()
+            client._http_client = AsyncMock()
+            client._http_client.post = AsyncMock(return_value=MagicMock(status_code=200))
+
+            await client.send_progress_update(
+                user_chat_id=123,
+                task_id="task_1",
+                message_count=0,
+                total=0,
+                started=True
+            )
+
+            call_args = client._http_client.post.call_args
+            post_data = call_args[1]["data"]
+            assert "0%" in post_data["text"]
+            assert "(0/0)" in post_data["text"]
+
+    async def test_set_total_updates_existing_progress_message(self):
+        """set_total() should edit existing message instead of sending a new one."""
+        from java_client import ProgressTracker
+
+        mock_java_client = AsyncMock()
+        mock_java_client.send_progress_update = AsyncMock(side_effect=[777, 777])
+
+        tracker = ProgressTracker(
+            client=mock_java_client,
+            user_chat_id=123,
+            task_id="task_1"
+        )
+
+        await tracker.start()
+        await tracker.set_total(42)
+
+        assert mock_java_client.send_progress_update.call_count == 2
+        second_call = mock_java_client.send_progress_update.call_args_list[1]
+        assert second_call[1]["message_count"] == 0
+        assert second_call[1]["total"] == 42
+        assert second_call[1]["progress_message_id"] == 777

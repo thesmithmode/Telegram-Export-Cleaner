@@ -63,10 +63,11 @@ opencode
 *.kilo.db
 .kilocode/
 AGENTS.md
-CLAUDE.md
 QWEN.md
-.claude/
-.qwen/
+# Gemini CLI
+.gemini/
+GEMINI.md
+
 
 # Личные данные для тестирования (real Telegram exports)
 Development_context*/

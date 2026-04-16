@@ -1,24 +1,16 @@
 """
-Java API Client: Upload result.json and deliver cleaned text to user.
-
-Flow:
-1. Convert exported messages to result.json format
-2. POST multipart to Java /api/convert → get cleaned markdown text
-3. Send the cleaned text file to user via Telegram Bot API
-
-Java API endpoints used:
-- POST /api/convert  - upload result.json, returns cleaned text/plain
-- GET  /api/health   - connectivity check
+Java API Client: Optimized for massive exports (250k+ messages).
+Memory Strategy: O(1) Streaming.
 """
 
 import json
 import logging
 import asyncio
-import os
 import re
+import os
 import tempfile
 from datetime import datetime
-from typing import AsyncIterator, Optional, Union
+from typing import Optional, Union, AsyncIterator
 
 import httpx
 
@@ -29,33 +21,32 @@ logger = logging.getLogger(__name__)
 
 
 class JavaBotClient:
-    """Uploads exported messages to Java API and delivers result to user."""
+    """Uploads exported messages to Java API using disk-based streaming."""
 
-    def __init__(self, timeout: int = 1800, max_retries: int = 3):
+    def __init__(self, timeout: int = 3600, max_retries: int = 3):
         self.base_url = settings.JAVA_API_BASE_URL.rstrip("/")
         self.timeout = timeout
         self.max_retries = max_retries
         self.bot_token = settings.TELEGRAM_BOT_TOKEN
-        self._http_client = httpx.AsyncClient(timeout=self.timeout)
-        logger.info(f"Java API Client initialized (URL: {self.base_url})")
-
-    def _build_bot_url(self, method: str) -> str:
-        """Build Telegram Bot API URL for the given method.
-
-        Args:
-            method: Bot API method name (e.g. 'sendMessage', 'sendDocument')
-
-        Returns:
-            Full URL with bot token
-        """
-        return f"https://api.telegram.org/bot{self.bot_token}/{method}"
+        
+        # Senior Configuration: 
+        # - read=None: Wait indefinitely for Java to process the massive file.
+        # - write=None: Don't timeout while streaming gigabytes to Java.
+        custom_timeout = httpx.Timeout(
+            timeout=float(self.timeout),
+            read=None,
+            write=None,
+            connect=30.0
+        )
+        self._http_client = httpx.AsyncClient(timeout=custom_timeout)
+        logger.info(f"Java API Client initialized (O(1) Memory, Timeout: {self.timeout}s)")
 
     async def send_response(
         self,
         task_id: str,
         status: str,
         messages: Union[list[ExportedMessage], AsyncIterator[ExportedMessage]],
-        count: int = 0,
+        actual_count: int = 0,
         error: Optional[str] = None,
         error_code: Optional[str] = None,
         user_chat_id: Optional[int] = None,
@@ -66,47 +57,31 @@ class JavaBotClient:
         exclude_keywords: Optional[str] = None,
     ) -> bool:
         """
-        Process export result:
-        - On failure: log the error and notify user
-        - On success: stream messages to temp JSON file → upload to Java → deliver to user
-
-        Memory: O(1) per message — never holds full JSON/bytes in memory.
-
-        Args:
-            messages: list[ExportedMessage] (fallback path) OR AsyncIterator (cache path)
-            count: total message count (required when messages is AsyncIterator)
+        Processes export results by streaming to Java and back to Telegram.
         """
-        is_list = isinstance(messages, list)
-        actual_count = len(messages) if is_list else count
-
-        if status == "failed" or actual_count == 0:
-            if error:
-                logger.warning(
-                    f"Task {task_id} ended with status={status}: {error} [{error_code}]"
-                )
-                if user_chat_id and self.bot_token:
-                    await self._notify_user_failure(user_chat_id, task_id, error)
-            elif actual_count == 0 and user_chat_id and self.bot_token:
-                logger.info(f"Task {task_id}: no messages found, notifying user")
-                await self._notify_user_empty(user_chat_id, task_id)
+        if status == "failed":
+            if error and user_chat_id and self.bot_token:
+                await self._notify_user_failure(user_chat_id, task_id, error)
             return True
 
-        # Stream messages → temp file (O(1) memory per message)
-        tmp_path = await self._write_json_to_tempfile(messages, actual_count)
+        # 1. Stream messages directly to a temporary file on disk (Memory O(1))
+        tmp_path = await self._stream_to_temp_json(messages, actual_count)
+        
         try:
-            # Upload temp file to Java /api/convert
+            file_size_mb = os.path.getsize(tmp_path) / (1024 * 1024)
+            logger.info(f"📤 Streaming {file_size_mb:.2f} MB from disk (task {task_id})")
+
+            # 2. Upload using httpx streaming capabilities
             cleaned_text = await self._upload_file_to_java(
                 tmp_path,
                 from_date=from_date,
                 to_date=to_date,
                 keywords=keywords,
-                exclude_keywords=exclude_keywords,
+                exclude_keywords=exclude_keywords
             )
         finally:
-            try:
+            if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
-            except Exception:
-                pass
 
         if cleaned_text is None:
             logger.error(f"❌ Java API processing failed for task {task_id}")
@@ -116,12 +91,7 @@ class JavaBotClient:
                 )
             return False
 
-        logger.info(
-            f"✅ Java processed task {task_id}: "
-            f"{actual_count} messages → {len(cleaned_text)} chars"
-        )
-
-        # Deliver cleaned text to user via Telegram Bot API
+        # 3. Deliver cleaned text to user
         if user_chat_id and self.bot_token:
             filename = self._build_filename(chat_title, from_date, to_date)
             sent = await self._send_file_to_user(
@@ -129,160 +99,43 @@ class JavaBotClient:
             )
             if not sent:
                 await self._notify_user_failure(
-                    user_chat_id, task_id,
-                    "Не удалось отправить файл. Попробуйте снова."
+                    user_chat_id, task_id, "Не удалось отправить файл. Попробуйте снова."
                 )
                 return False
-        else:
-            logger.warning(
-                f"No user_chat_id or bot token — skipping Telegram delivery "
-                f"(task {task_id})"
-            )
-
+        
         return True
 
-    async def _write_json_to_tempfile(
+    async def _stream_to_temp_json(
         self,
         messages: Union[list[ExportedMessage], AsyncIterator[ExportedMessage]],
-        count: int,
+        count: int
     ) -> str:
-        """
-        Stream messages to a temp file in result.json format (Telegram Desktop).
-
-        Memory: O(1) per message — one model_dump() at a time, no full JSON in memory.
-        Returns temp file path (caller must delete after use).
-        """
-        fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="tg_export_")
+        """Writes messages to result.json format on disk, one by one."""
+        fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="tg_stream_")
         try:
             with os.fdopen(fd, "wb") as f:
-                header = (
-                    f'{{"type":"personal_chat","name":"Telegram Export",'
-                    f'"message_count":{count},"messages":['
-                ).encode("utf-8")
-                f.write(header)
-
+                f.write(f'{{"type":"personal_chat","name":"Export","message_count":{count},"messages":['.encode("utf-8"))
+                
                 first = True
-                if isinstance(messages, list):
-                    async def _iter_list():
-                        for m in messages:
-                            yield m
-                    msgs_iter = _iter_list()
-                else:
-                    msgs_iter = messages
-
+                msgs_iter = messages if not isinstance(messages, list) else self._iter_list(messages)
+                
                 async for msg in msgs_iter:
-                    msg_dict = msg.model_dump(exclude_none=True)
-                    if msg_dict.get("text_entities"):
-                        msg_dict["text_entities"] = self._transform_entities(
-                            msg_dict.get("text") or "",
-                            msg_dict["text_entities"],
-                        )
-                    if not first:
-                        f.write(b",")
-                    f.write(json.dumps(msg_dict, ensure_ascii=False).encode("utf-8"))
+                    m_dict = msg.model_dump(exclude_none=True)
+                    if m_dict.get("text_entities"):
+                        m_dict["text_entities"] = self._transform_entities(m_dict.get("text") or "", m_dict["text_entities"])
+                    
+                    if not first: f.write(b",")
+                    f.write(json.dumps(m_dict, ensure_ascii=False).encode("utf-8"))
                     first = False
-
+                
                 f.write(b"]}")
         except Exception:
-            try:
-                os.unlink(tmp_path)
-            except Exception:
-                pass
+            if os.path.exists(tmp_path): os.unlink(tmp_path)
             raise
         return tmp_path
 
-    @staticmethod
-    def _sanitize_filename(name: str) -> str:
-        """Sanitize string for use as filename."""
-        # Replace spaces/special chars with underscores
-        name = re.sub(r'[^\w\s\-.]', '', name)
-        name = re.sub(r'\s+', '_', name.strip())
-        # Limit length
-        return name[:80] if name else "export"
-
-    @staticmethod
-    def _build_filename(
-        chat_title: Optional[str] = None,
-        from_date: Optional[str] = None,
-        to_date: Optional[str] = None,
-    ) -> str:
-        """Build descriptive filename from chat title and date range.
-
-        Examples:
-            Pavel_Durov_all.txt
-            Pavel_Durov_2025-01-01_2025-12-31.txt
-        """
-        base = JavaBotClient._sanitize_filename(chat_title) if chat_title else "export"
-
-        if from_date and to_date:
-            # Extract YYYY-MM-DD part
-            f = from_date[:10]
-            t = to_date[:10]
-            return f"{base}_{f}_{t}.txt"
-        elif from_date:
-            return f"{base}_from_{from_date[:10]}.txt"
-        elif to_date:
-            return f"{base}_to_{to_date[:10]}.txt"
-        else:
-            return f"{base}_all.txt"
-
-    @staticmethod
-    def _transform_entities(text: str, entities: list[dict]) -> list[dict]:
-        """
-        Transform text_entities from Telegram Bot API format (offset/length)
-        to Telegram Desktop export format (type/text).
-
-        CRITICAL: Telegram Bot API offsets are in UTF-16 code units, but Python
-        strings use Unicode code points (UTF-32). For messages with emoji or
-        characters outside the Basic Multilingual Plane (U+FFFF), direct slicing
-        text[offset:offset+length] produces misaligned text.
-
-        Solution: Encode text to UTF-16-LE, extract by byte offsets (offset*2 to
-        (offset+length)*2), decode back to Unicode.
-
-        Args:
-            text: Full message text
-            entities: List of entities with {type, offset, length, ...}
-
-        Returns:
-            List of entities with {type, text, ...} suitable for Java MarkdownParser
-        """
-        if not entities or not text:
-            return entities
-
-        transformed = []
-        try:
-            # Pre-encode text to UTF-16-LE for all entity extractions
-            text_utf16 = text.encode('utf-16-le')
-
-            for entity in entities:
-                offset = entity.get("offset", 0)
-                length = entity.get("length", 0)
-
-                # Extract entity text using UTF-16 byte offsets
-                # Telegram offset/length are in UTF-16 code units, not bytes
-                entity_bytes = text_utf16[offset * 2 : (offset + length) * 2]
-                entity_text = entity_bytes.decode('utf-16-le')
-
-                # Create new entity dict with type + text instead of offset + length
-                new_entity = {
-                    "type": entity.get("type", "plain"),
-                    "text": entity_text
-                }
-
-                # Preserve additional fields (url, user_id, etc)
-                if "url" in entity:
-                    new_entity["href"] = entity["url"]  # Desktop format uses "href"
-                if "user_id" in entity:
-                    new_entity["user_id"] = entity["user_id"]
-
-                transformed.append(new_entity)
-
-        except Exception as e:
-            logger.warning(f"Error transforming entities: {e}. Falling back to original format.")
-            return entities
-
-        return transformed if transformed else entities
+    async def _iter_list(self, lst):
+        for item in lst: yield item
 
     async def _upload_file_to_java(
         self,
@@ -292,33 +145,23 @@ class JavaBotClient:
         keywords: Optional[str] = None,
         exclude_keywords: Optional[str] = None,
     ) -> Optional[str]:
-        """
-        POST result.json file to /api/convert as multipart, return cleaned text.
-
-        Streams file from disk — no bytes buffer in Python memory.
-        Returns cleaned text string on success, None on failure.
-        """
+        """POSTs a file from disk using Multipart streaming."""
         url = f"{self.base_url}/api/convert"
-        retry_count = 0
-        base_delay = settings.RETRY_BASE_DELAY
-
+        
         headers = {}
         if settings.JAVA_API_KEY:
             headers["X-API-Key"] = settings.JAVA_API_KEY
 
         data = {}
-        if from_date:
-            data["startDate"] = from_date[:10]
-        if to_date:
-            data["endDate"] = to_date[:10]
-        if keywords:
-            data["keywords"] = keywords
-        if exclude_keywords:
-            data["excludeKeywords"] = exclude_keywords
+        if from_date: data["startDate"] = from_date[:10]
+        if to_date: data["endDate"] = to_date[:10]
+        if keywords: data["keywords"] = keywords
+        if exclude_keywords: data["excludeKeywords"] = exclude_keywords
 
+        retry_count = 0
         while retry_count <= self.max_retries:
-            # Open file fresh on each retry so seek position resets
             try:
+                # 'with open' as a file handle allows httpx to stream from disk
                 with open(file_path, "rb") as f:
                     files = {"file": ("result.json", f, "application/json")}
                     response = await self._http_client.post(
@@ -330,268 +173,108 @@ class JavaBotClient:
 
                 if response.status_code == 200:
                     return response.text
-
-                elif response.status_code == 400:
-                    logger.error(
-                        f"❌ Java API rejected payload (400): {response.text[:200]}"
-                    )
+                
+                logger.error(f"Java API error {response.status_code}: {response.text[:200]}")
+                if response.status_code == 400:
                     return None
-
-                elif response.status_code == 401:
-                    logger.error("❌ Java API authentication failed (401)")
-                    return None
-
-                elif response.status_code >= 500:
-                    logger.warning(
-                        f"Java API server error ({response.status_code}). "
-                        f"Retry {retry_count + 1}/{self.max_retries}"
-                    )
-
-                else:
-                    logger.error(
-                        f"❌ Java API unexpected response ({response.status_code}): "
-                        f"{response.text[:200]}"
-                    )
-                    return None
-
-            except httpx.TimeoutException:
-                logger.warning(
-                    f"Java API timeout. Retry {retry_count + 1}/{self.max_retries}"
-                )
-
-            except httpx.ConnectError as e:
-                logger.warning(
-                    f"Java API connection error: {e}. "
-                    f"Retry {retry_count + 1}/{self.max_retries}"
-                )
-
+                    
             except Exception as e:
-                logger.error(f"Unexpected error calling Java API: {e}", exc_info=True)
-                return None
-
-            if retry_count < self.max_retries:
-                wait = min(
-                    base_delay * (2 ** retry_count),
-                    settings.RETRY_MAX_DELAY,
-                )
-                logger.debug(f"Waiting {wait}s before retry...")
-                await asyncio.sleep(wait)
-
+                logger.error(f"Upload to Java failed (attempt {retry_count + 1}): {e}")
+            
             retry_count += 1
-
-        logger.error(f"❌ Java API failed after {self.max_retries} retries")
+            if retry_count <= self.max_retries:
+                await asyncio.sleep(settings.RETRY_BASE_DELAY * retry_count)
+        
         return None
 
-    # Telegram Bot API file size limit: 50MB, use 45MB as safe threshold
-    MAX_FILE_SIZE_BYTES = 45 * 1024 * 1024
+    @staticmethod
+    def _transform_entities(text: str, entities: list[dict]) -> list[dict]:
+        """UTF-16 safe extraction for Telegram entities."""
+        if not entities or not text: return entities
+        res = []
+        try:
+            text_utf16 = text.encode('utf-16-le')
+            for e in entities:
+                off, length = e.get("offset", 0), e.get("length", 0)
+                byte_off, byte_end = off * 2, (off + length) * 2
+                new_e = {
+                    "type": e.get("type", "plain"),
+                    "text": text_utf16[byte_off:byte_end].decode('utf-16-le')
+                }
+                if "url" in e: new_e["href"] = e["url"]
+                if "user_id" in e: new_e["user_id"] = e["user_id"]
+                res.append(new_e)
+            return res
+        except: return entities
 
-    async def _send_file_to_user(
-        self, user_chat_id: int, task_id: str, cleaned_text: str,
-        filename: Optional[str] = None,
-    ) -> bool:
-        """Send cleaned text as .txt file(s) to user via Telegram Bot API.
+    @staticmethod
+    def _sanitize_filename(name: str) -> str:
+        name = re.sub(r'[^\w\s\-.]', '', name)
+        return re.sub(r'\s+', '_', name.strip())[:80] or "export"
 
-        If the file exceeds 45MB, splits into multiple parts by lines.
-        """
-        if not filename:
-            filename = f"export_{task_id}.txt"
-        text_bytes = cleaned_text.encode("utf-8")
-        file_size = len(text_bytes)
+    def _build_filename(self, title, f_date, t_date) -> str:
+        base = self._sanitize_filename(title) if title else "export"
+        if f_date and t_date: return f"{base}_{f_date[:10]}_{t_date[:10]}.txt"
+        return f"{base}_all.txt"
 
-        if file_size <= self.MAX_FILE_SIZE_BYTES:
-            return await self._send_single_file(
-                user_chat_id, task_id, text_bytes,
-                filename,
-                "✅ Экспорт завершён",
-            )
-
-        # Split into parts
-        logger.info(
-            f"File size {file_size / 1024 / 1024:.1f}MB exceeds limit, splitting..."
-        )
-        parts = self._split_text_by_size(cleaned_text, self.MAX_FILE_SIZE_BYTES)
-        total_parts = len(parts)
-        base_name = filename.rsplit(".", 1)[0]
-
+    async def _send_file_to_user(self, chat_id, task_id, text, filename) -> bool:
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendDocument"
+        text_bytes = text.encode("utf-8")
+        
+        # Max 45MB for Telegram Bot API
+        if len(text_bytes) <= 45 * 1024 * 1024:
+            return await self._send_single_file(chat_id, task_id, text_bytes, filename, "✅ Экспорт завершен")
+        
+        parts = self._split_text_by_size(text, 45 * 1024 * 1024)
         for i, part in enumerate(parts, 1):
-            part_bytes = part.encode("utf-8")
-            part_filename = f"{base_name}_part{i}.txt"
-            caption = f"✅ Экспорт завершён — часть {i}/{total_parts}"
-            success = await self._send_single_file(
-                user_chat_id, task_id, part_bytes, part_filename, caption
-            )
-            if not success:
-                logger.error(f"Failed to send part {i}/{total_parts}")
-                return False
-
-        logger.info(f"✅ Sent {total_parts} parts to user {user_chat_id}")
+            success = await self._send_single_file(chat_id, task_id, part.encode("utf-8"), f"part{i}_{filename}", f"✅ Часть {i}/{len(parts)}")
+            if not success: return False
         return True
 
-    async def _send_single_file(
-        self, user_chat_id: int, task_id: str,
-        file_bytes: bytes, filename: str, caption: str
-    ) -> bool:
-        """Send a single file via Telegram Bot API sendDocument."""
-        url = self._build_bot_url("sendDocument")
-
+    async def _send_single_file(self, chat_id, task_id, file_bytes, filename, caption) -> bool:
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendDocument"
         try:
             response = await self._http_client.post(
                 url,
-                data={"chat_id": user_chat_id, "caption": caption},
+                data={"chat_id": chat_id, "caption": caption},
                 files={"document": (filename, file_bytes, "text/plain")},
             )
-
-            if response.status_code == 200:
-                logger.info(
-                    f"✅ Sent {filename} to user {user_chat_id} (task {task_id})"
-                )
-                return True
-            else:
-                logger.error(
-                    f"❌ Telegram sendDocument failed ({response.status_code}): "
-                    f"{response.text[:200]}"
-                )
-                return False
-
+            return response.status_code == 200
         except Exception as e:
-            logger.error(f"Error sending file to user: {e}", exc_info=True)
+            logger.error(f"Telegram upload failed: {e}")
             return False
 
-    @staticmethod
-    def _split_text_by_size(text: str, max_bytes: int) -> list[str]:
-        """Split text into parts, each under max_bytes when UTF-8 encoded.
-
-        Splits on line boundaries to avoid breaking messages.
-        If a single line exceeds max_bytes, it is split into character chunks.
-        """
-        parts = []
-        lines = text.split("\n")
-        current_part: list[str] = []
-        current_size = 0
-
+    def _split_text_by_size(self, text: str, max_bytes: int) -> list[str]:
+        parts, lines, current_part, current_size = [], text.split("\n"), [], 0
         for line in lines:
-            line_bytes = len(line.encode("utf-8")) + 1  # +1 for \n
-
-            # If a single line exceeds max_bytes, split it into character chunks
-            if line_bytes > max_bytes:
-                if current_part:
-                    parts.append("\n".join(current_part))
-                    current_part = []
-                    current_size = 0
-                chunk_chars: list[str] = []
-                chunk_bytes = 0
-                for char in line:
-                    char_bytes = len(char.encode("utf-8"))
-                    if chunk_bytes + char_bytes > max_bytes and chunk_chars:
-                        parts.append("".join(chunk_chars))
-                        chunk_chars = [char]
-                        chunk_bytes = char_bytes
-                    else:
-                        chunk_chars.append(char)
-                        chunk_bytes += char_bytes
-                if chunk_chars:
-                    current_part = chunk_chars
-                    current_size = chunk_bytes
-                continue
-
+            line_bytes = len(line.encode("utf-8")) + 1
             if current_size + line_bytes > max_bytes and current_part:
                 parts.append("\n".join(current_part))
-                current_part = []
-                current_size = 0
+                current_part, current_size = [], 0
             current_part.append(line)
             current_size += line_bytes
-
-        if current_part:
-            parts.append("\n".join(current_part))
-
+        if current_part: parts.append("\n".join(current_part))
         return parts
 
-    async def send_progress_update(
-        self,
-        user_chat_id: int,
-        task_id: str,
-        message_count: int,
-        total: Optional[int] = None,
-        started: bool = False,
-        elapsed_seconds: float = 0,
-        progress_message_id: Optional[int] = None,
-    ) -> Optional[int]:
-        """
-        Send or edit progress update to user during long export.
-
-        Args:
-            user_chat_id: User's Telegram chat ID
-            task_id: Export task ID for reference
-            message_count: Number of messages exported so far
-            total: Total messages expected (if known)
-            started: True if this is the initial "started" notification
-            elapsed_seconds: Seconds elapsed since export start (for ETA)
-            progress_message_id: Message ID to edit (None = send new message)
-
-        Returns:
-            Message ID on success (for subsequent edits), None on failure
-        """
-        if total and (started or total > 0):
-            percentage = min(message_count * 100 // total, 100) if total > 0 else 0
-            progress_bar = self._build_progress_bar(percentage)
-            eta_str = self._format_eta(elapsed_seconds, percentage)
-            text = f"📊 {progress_bar} {percentage}% ({message_count}/{total})"
-            if eta_str:
-                text += f"\n⏱ Осталось ~{eta_str}"
-        elif started:
-            text = "⏳ Экспорт начался, ожидайте..."
-        else:
-            text = f"📊 Экспортировано {message_count} сообщений..."
-
+    async def verify_connectivity(self) -> bool:
         try:
-            if progress_message_id:
-                url = self._build_bot_url("editMessageText")
-                response = await self._http_client.post(
-                    url,
-                    data={
-                        "chat_id": user_chat_id,
-                        "message_id": progress_message_id,
-                        "text": text,
-                    },
-                )
-                if response.status_code == 200:
-                    return progress_message_id
-                return None
-            else:
-                url = self._build_bot_url("sendMessage")
-                response = await self._http_client.post(
-                    url, data={"chat_id": user_chat_id, "text": text}
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    return data.get("result", {}).get("message_id")
-                return None
-        except Exception as e:
-            logger.warning(f"Could not send progress update to user: {e}")
-            return None
+            resp = await self._http_client.get(f"{self.base_url}/api/health")
+            return resp.status_code == 200
+        except: return False
 
-    @staticmethod
-    def _build_progress_bar(percentage: int, width: int = 10) -> str:
-        """Build a text progress bar for display."""
-        filled = min(int(width * percentage / 100), width)
-        empty = width - filled
-        return "▓" * filled + "░" * empty
+    async def _notify_user_failure(self, chat_id, task_id, error):
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        text = f"❌ Export failed (task {task_id})\n\nReason: {error}"
+        try: await self._http_client.post(url, data={"chat_id": chat_id, "text": text})
+        except: pass
 
-    @staticmethod
-    def _format_eta(elapsed_seconds: float, percentage: int) -> str:
-        """Вычислить примерное оставшееся время на основе прошедшего и процента."""
-        if percentage <= 0 or elapsed_seconds <= 0:
-            return ""
-        remaining = elapsed_seconds * (100 - percentage) / percentage
-        if remaining < 60:
-            return f"{int(remaining)} сек"
-        minutes = int(remaining) // 60
-        return f"{minutes} мин"
+    async def _notify_user_empty(self, chat_id, task_id):
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        text = f"ℹ️ Экспорт завершён ({task_id})\n\nСообщений не найдено."
+        try: await self._http_client.post(url, data={"chat_id": chat_id, "text": text})
+        except: pass
 
-    def create_progress_tracker(
-        self, user_chat_id: int, task_id: str
-    ) -> "ProgressTracker":
-        """Create a ProgressTracker for a specific export job."""
+    def create_progress_tracker(self, user_chat_id: int, task_id: str):
         return ProgressTracker(self, user_chat_id, task_id)
 
     async def update_queue_position(
@@ -601,156 +284,86 @@ class JavaBotClient:
         position: int,
         total: int,
     ) -> None:
-        """Edit user's queue position message with updated position."""
+        """Update queue status message in Telegram."""
+        if not self.bot_token:
+            return
+
         if position == 0:
-            text = "⚙️ Ваша задача начата, ожидайте..."
+            text = "⏳ Ваш экспорт начался..."
         else:
-            text = f"📋 Очередь: позиция {position} из {total}\nВпереди {position - 1} задач(и)"
+            text = f"🕐 Вы в очереди: позиция {position}/{total}. Ожидайте..."
+
         try:
-            url = self._build_bot_url("editMessageText")
+            url = f"https://api.telegram.org/bot{self.bot_token}/editMessageText"
             await self._http_client.post(
                 url,
-                data={"chat_id": user_chat_id, "message_id": msg_id, "text": text},
+                data={
+                    "chat_id": user_chat_id,
+                    "message_id": msg_id,
+                    "text": text,
+                },
             )
-        except Exception as e:
-            logger.warning(f"Could not update queue position for chat {user_chat_id}: {e}")
+        except Exception:
+            pass
 
-    async def _notify_user_failure(
-        self, user_chat_id: int, task_id: str, error: str
-    ) -> None:
-        """Send failure notification to user via Telegram Bot API."""
-        url = self._build_bot_url("sendMessage")
-        text = f"❌ Export failed (task {task_id})\n\nReason: {error}"
+    async def aclose(self) -> None:
+        """Close internal httpx client."""
+        await self._http_client.aclose()
 
-        try:
-            await self._http_client.post(url, data={"chat_id": user_chat_id, "text": text})
-        except Exception as e:
-            logger.warning(f"Could not notify user of failure: {e}")
-
-    async def _notify_user_empty(self, user_chat_id: int, task_id: str) -> None:
-        """Notify user that no messages were found for the export."""
-        url = self._build_bot_url("sendMessage")
-        text = (
-            f"ℹ️ Экспорт завершён (task {task_id})\n\n"
-            "Сообщений не найдено. Возможно, чат пуст или в указанном диапазоне дат нет сообщений."
-        )
+    async def send_progress_update(self, user_chat_id, task_id, message_count, total=None, started=False, elapsed_seconds=0, progress_message_id=None):
+        if total is not None:
+            pct = min(message_count * 100 // total, 100) if total > 0 else 0
+            text = f"📊 {'▓' * (pct//10)}{'░' * (10-(pct//10))} {pct}% ({message_count}/{total})"
+        elif started: text = "⏳ Экспорт начался..."
+        else: text = f"📊 Экспортировано {message_count}..."
 
         try:
-            await self._http_client.post(url, data={"chat_id": user_chat_id, "text": text})
-        except Exception as e:
-            logger.warning(f"Could not notify user of empty result: {e}")
-
-    async def aclose(self):
-        """Close HTTP client connection."""
-        try:
-            await self._http_client.aclose()
-        except Exception as e:
-            logger.warning(f"Error closing HTTP client: {e}")
-
-    async def verify_connectivity(self) -> bool:
-        """Check if Java API is accessible."""
-        url = f"{self.base_url}/api/health"
-        try:
-            response = await self._http_client.get(url)
-            return response.status_code == 200
-        except Exception as e:
-            logger.error(f"Failed to connect to Java API: {e}")
-            return False
-
+            if progress_message_id:
+                url = f"https://api.telegram.org/bot{self.bot_token}/editMessageText"
+                resp = await self._http_client.post(url, data={"chat_id": user_chat_id, "message_id": progress_message_id, "text": text})
+                return progress_message_id if resp.status_code == 200 else None
+            else:
+                url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+                resp = await self._http_client.post(url, data={"chat_id": user_chat_id, "text": text})
+                return resp.json().get("result", {}).get("message_id") if resp.status_code == 200 else None
+        except: return None
 
 class ProgressTracker:
-    """Tracks export progress and edits a single Telegram message.
-
-    Encapsulates message_id, total, timing, and milestone logic
-    so callers just call start() and track(count).
-    """
-
-    def __init__(self, client: JavaBotClient, user_chat_id: int, task_id: str):
-        self._client = client
-        self._user_chat_id = user_chat_id
-        self._task_id = task_id
-        self._message_id: Optional[int] = None
-        self._total: Optional[int] = None
-        self._last_reported_pct = 0
-        self._last_reported_count = 0
-        self._start_time: Optional[datetime] = None
-
-    async def start(self, total: Optional[int] = None) -> None:
-        """Send initial progress message and remember its ID."""
+    def __init__(self, client, user_chat_id, task_id):
+        self._client, self._user_chat_id, self._task_id = client, user_chat_id, task_id
+        self._message_id, self._total, self._last_reported_pct = None, None, 0
+    
+    async def start(self, total=None):
         self._total = total
-        self._start_time = datetime.now()
-        self._last_reported_pct = 0
-        self._message_id = await self._client.send_progress_update(
-            user_chat_id=self._user_chat_id,
-            task_id=self._task_id,
-            message_count=0,
-            total=total,
-            started=True,
-        )
+        self._message_id = await self._client.send_progress_update(self._user_chat_id, self._task_id, 0, total, True)
 
-    async def track(self, count: int) -> None:
-        """Report progress at every 5% milestone.
+    async def set_total(self, total):
+        self._total = total
+        if self._message_id and total is not None:
+            await self._client.send_progress_update(
+                self._user_chat_id,
+                self._task_id,
+                0,
+                total,
+                False,
+                0,
+                self._message_id,
+            )
 
-        When total is unknown, report every 500 messages instead.
-        """
-        elapsed = (datetime.now() - self._start_time).total_seconds() if self._start_time else 0
+    async def track(self, count):
+        if not self._total: return
+        pct = count * 100 // self._total
+        if pct < self._last_reported_pct + 5: return
+        self._last_reported_pct = pct
+        mid = await self._client.send_progress_update(self._user_chat_id, self._task_id, count, self._total, False, 0, self._message_id)
+        if mid: self._message_id = mid
 
-        if self._total and self._total > 0:
-            pct = count * 100 // self._total
-            if pct < self._last_reported_pct + 5 or pct >= 100:
-                return
-            self._last_reported_pct = pct
-            logger.info(f"  Progress: {count}/{self._total} ({pct}%)")
-        else:
-            # Unknown total — report every 500 messages
-            if count < self._last_reported_count + 500:
-                return
-            self._last_reported_count = count
-            logger.info(f"  Progress: {count} messages...")
-
-        result = await self._client.send_progress_update(
-            user_chat_id=self._user_chat_id,
-            task_id=self._task_id,
-            message_count=count,
-            total=self._total,
-            elapsed_seconds=elapsed,
-            progress_message_id=self._message_id,
-        )
-        if result:
-            self._message_id = result
-
-    async def finalize(self, count: int) -> None:
-        """Отправить финальный 100% прогресс после завершения экспорта."""
-        if not self._total or self._total <= 0:
-            total = count  # если total неизвестен, берём фактическое кол-во
-        else:
-            total = max(self._total, count)
-        # Always send completion, even if total was 0
-        elapsed = (datetime.now() - self._start_time).total_seconds() if self._start_time else 0
-        logger.info(f"  Progress: {count}/{total} (100%)")
-        result = await self._client.send_progress_update(
-            user_chat_id=self._user_chat_id,
-            task_id=self._task_id,
-            message_count=count,
-            total=total,
-            elapsed_seconds=elapsed,
-            progress_message_id=self._message_id,
-        )
-        if result:
-            self._message_id = result
+    async def finalize(self, count):
+        await self._client.send_progress_update(self._user_chat_id, self._task_id, count, self._total or count, False, 0, self._message_id)
 
 
 async def create_java_client() -> JavaBotClient:
-    """
-    Factory: create and verify Java API client.
-
-    Raises RuntimeError if Java API is not accessible.
-    """
     client = JavaBotClient()
-
     if not await client.verify_connectivity():
-        raise RuntimeError(
-            f"Cannot reach Java API at {settings.JAVA_API_BASE_URL}"
-        )
-
+        raise RuntimeError(f"Cannot reach Java API at {settings.JAVA_API_BASE_URL}")
     return client

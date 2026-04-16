@@ -9,19 +9,31 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 
 import java.io.IOException;
 import java.time.format.DateTimeParseException;
+import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Глобальный обработчик исключений REST API.
+ * Глобальный обработчик исключений для REST API.
  *
- * <p>Маппинг исключений на HTTP-статусы:</p>
- * <ul>
- *   <li>{@link DateTimeParseException} → 400 (невалидный формат даты)</li>
- *   <li>{@link IllegalArgumentException} → 400 (невалидный диапазон дат)</li>
- *   <li>{@link TelegramExporterException} → 400 с кодом ошибки</li>
- *   <li>{@link IOException} → 500</li>
- *   <li>Любое другое → 500</li>
- * </ul>
+ * Spring @ControllerAdvice для перехвата исключений со всех контроллеров
+ * и преобразования их в правильные HTTP коды ответа и JSON-структуры.
+ *
+ * Обрабатывает следующие типы ошибок:
+ * - DateTimeParseException → 400 Bad Request (неверный формат даты)
+ * - IllegalArgumentException → 400 Bad Request (неверные параметры)
+ * - TelegramExporterException → 400 Bad Request (ошибка обработки)
+ * - Exception (generic) → 500 Internal Server Error (неожиданная ошибка)
+ *
+ * Формат ошибки JSON:
+ * {
+ *   "message": "Описание ошибки для пользователя",
+ *   "type": "ИмяИсключения",
+ *   "details": "Детали (если есть)",
+ *   "error": "Код ошибки (если есть)"
+ * }
+ *
+ * @see org.springframework.web.bind.annotation.ControllerAdvice
+ * @see com.tcleaner.core.TelegramExporterException
  */
 @ControllerAdvice
 public class ApiExceptionHandler {
@@ -29,67 +41,83 @@ public class ApiExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
 
     /**
-     * Обрабатывает ошибку парсинга формата даты.
+     * Обработчик ошибок парсинга даты.
      *
-     * @param ex исключение при невалидном формате даты
-     * @return ResponseEntity с статусом 400 и сообщением об ошибке формата даты
+     * Возвращает 400 Bad Request при невалидном формате даты.
+     * Ожидается формат: YYYY-MM-DD (ISO 8601).
+     *
+     * @param ex исключение DateTimeParseException
+     * @return ResponseEntity с 400 статусом и описанием ошибки
      */
     @ExceptionHandler(DateTimeParseException.class)
     public ResponseEntity<Map<String, String>> handleDateTimeParse(DateTimeParseException ex) {
-        log.warn("Невалидный формат даты в запросе: {}", ex.getParsedString());
-        return ResponseEntity.badRequest()
-                .body(Map.of("error", "Невалидный формат даты. Используйте YYYY-MM-DD"));
+        log.warn("Date parse error: {}", ex.getMessage());
+        return ResponseEntity.badRequest().body(makeError("Невалидный формат даты. Используйте YYYY-MM-DD", ex));
     }
 
     /**
-     * Обрабатывает ошибку валидации аргументов.
+     * Обработчик ошибок валидации параметров.
      *
-     * @param ex исключение при невалидных аргументах (например, неверный диапазон дат)
-     * @return ResponseEntity с статусом 400 и сообщением об ошибке
+     * Возвращает 400 Bad Request при нарушении ограничений.
+     * Примеры: пустой файл, startDate > endDate, неверные параметры.
+     *
+     * @param ex исключение IllegalArgumentException
+     * @return ResponseEntity с 400 статусом и описанием ошибки
      */
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, String>> handleIllegalArgument(IllegalArgumentException ex) {
-        log.warn("Ошибка валидации: {}", ex.getMessage());
-        return ResponseEntity.badRequest()
-                .body(Map.of("error", ex.getMessage()));
+        log.warn("Validation error: {}", ex.getMessage());
+        return ResponseEntity.badRequest().body(makeError(ex.getMessage(), ex));
     }
 
     /**
-     * Обрабатывает ошибки экспортирования Telegram данных.
+     * Обработчик ошибок экспорта Telegram.
      *
-     * @param ex исключение с машиночитаемым кодом ошибки (FILE_NOT_FOUND, INVALID_JSON и т.д.)
-     * @return ResponseEntity с статусом 400, кодом ошибки и сообщением
+     * Возвращает 400 Bad Request с кодом ошибки для ошибок обработки.
+     * Это позволяет клиенту определить конкретную причину сбоя.
+     *
+     * @param ex исключение TelegramExporterException (содержит error code)
+     * @return ResponseEntity с 400 статусом, описанием и кодом ошибки
+     *
+     * @see com.tcleaner.core.TelegramExporterException#getErrorCode()
      */
     @ExceptionHandler(TelegramExporterException.class)
     public ResponseEntity<Map<String, String>> handleExporterException(TelegramExporterException ex) {
-        log.error("Ошибка экспортера [{}]: {}", ex.getErrorCode(), ex.getMessage());
-        return ResponseEntity.badRequest()
-                .body(Map.of("error", ex.getErrorCode(), "message", ex.getMessage()));
+        log.error("Exporter error [{}]: {}", ex.getErrorCode(), ex.getMessage());
+        Map<String, String> error = makeError(ex.getMessage(), ex);
+        error.put("error", ex.getErrorCode());
+        return ResponseEntity.badRequest().body(error);
     }
 
     /**
-     * Обрабатывает ошибки ввода/вывода при работе с файлами.
+     * Обработчик неожиданных ошибок.
      *
-     * @param ex исключение при операциях с файлами или потоками
-     * @return ResponseEntity с статусом 500 и сообщением об ошибке сервера
-     */
-    @ExceptionHandler(IOException.class)
-    public ResponseEntity<Map<String, String>> handleIoException(IOException ex) {
-        log.error("Ошибка ввода/вывода при конвертации", ex);
-        return ResponseEntity.internalServerError()
-                .body(Map.of("error", "Внутренняя ошибка сервера"));
-    }
-
-    /**
-     * Обрабатывает любые неожиданные исключения, не перехваченные более специфичными обработчиками.
+     * Fallback для любых незаняных исключений. Возвращает 500 Internal Server Error
+     * и логирует full stack trace для отладки.
      *
-     * @param ex любое исключение, которое не было явно обработано выше
-     * @return ResponseEntity с статусом 500 и сообщением об ошибке сервера
+     * @param ex неожиданное исключение
+     * @return ResponseEntity с 500 статусом и описанием ошибки (без деталей)
      */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, String>> handleGenericException(Exception ex) {
-        log.error("Неожиданная ошибка при конвертации", ex);
-        return ResponseEntity.internalServerError()
-                .body(Map.of("error", "Внутренняя ошибка сервера"));
+        log.error("CRITICAL ERROR: {} - {}", ex.getClass().getName(), ex.getMessage(), ex);
+        return ResponseEntity.internalServerError().body(makeError("Внутренняя ошибка сервера", ex));
+    }
+
+    /**
+     * Создаёт стандартный JSON-объект ошибки.
+     *
+     * @param message описание ошибки для пользователя (обязательное)
+     * @param ex исключение (для извлечения типа и деталей)
+     * @return Map с полями message, type, details
+     */
+    private Map<String, String> makeError(String message, Exception ex) {
+        Map<String, String> body = new HashMap<>();
+        body.put("message", message != null ? message : "Unknown error");
+        body.put("type", ex.getClass().getSimpleName());
+        if (ex.getMessage() != null) {
+            body.put("details", ex.getMessage());
+        }
+        return body;
     }
 }

@@ -44,10 +44,25 @@ logger = logging.getLogger(__name__)
 
 
 class ExportWorker:
-    """Main worker that processes export jobs."""
+    """Main worker that processes export jobs from Redis queue.
+
+    Handles:
+    - Redis queue consumption (BLPOP pattern)
+    - Telegram API communication (Pyrogram async client)
+    - Export processing with 3-path caching strategy (date/id/fallback)
+    - Message caching in Redis sorted sets
+    - Job cancellation support
+    - Progress tracking via Java Bot API
+    - Graceful shutdown on SIGTERM/SIGINT
+
+    Example:
+        worker = ExportWorker()
+        await worker.initialize()
+        await worker.run()
+    """
 
     def __init__(self):
-        """Initialize worker."""
+        """Initialize worker instance with empty client references."""
         self.telegram_client: Optional[TelegramClient] = None
         self.queue_consumer: Optional[QueueConsumer] = None
         self.java_client: Optional[JavaBotClient] = None
@@ -58,24 +73,50 @@ class ExportWorker:
         self.jobs_processed = 0
         self.jobs_failed = 0
 
-    async def _check_cancel_and_save(
-        self, job: ExportRequest, all_messages: list[ExportedMessage], count: int
+    async def _flush_batch_and_check_cancel(
+        self,
+        job: ExportRequest,
+        batch: list[ExportedMessage],
     ) -> bool:
-        """Check cancellation every 100 messages, save ALL accumulated messages to cache if cancelled.
-        Returns True if cancelled."""
-        if count % 100 != 0:
-            return False
+        """Flush current batch to cache, then check if job was cancelled.
+
+        Called every _CACHE_BATCH_SIZE messages during fetch loops.
+        By flushing before checking, we ensure partial progress is always saved.
+
+        Args:
+            job:   Current export job.
+            batch: Messages accumulated since last flush (will be cleared on flush).
+
+        Returns:
+            True if job was cancelled (batch is already stored), False otherwise.
+        """
+        if self.message_cache and self.message_cache.enabled and batch:
+            await self.message_cache.store_messages(job.chat_id, batch)
+            batch.clear()
+
         if not await self.is_cancelled(job.task_id):
             return False
-        logger.info(f"🛑 Export {job.task_id} cancelled by user at {count} messages")
-        if self.message_cache and self.message_cache.enabled and all_messages:
-            await self.message_cache.store_messages(job.chat_id, all_messages)
-            logger.info(f"  Saved {len(all_messages)} messages to cache before cancel")
+
+        logger.info(f"🛑 Export {job.task_id} cancelled by user")
         await self.clear_active_export(job.user_id)
         return True
 
+    # Maximum messages buffered in RAM before writing to cache.
+    # 1000 × ~200 B ≈ 200 KB — safe even on 512 MB containers.
+    _CACHE_BATCH_SIZE: int = 1_000
+
     async def is_cancelled(self, task_id: str) -> bool:
-        """Check if export was cancelled by user."""
+        """Check if export was cancelled by user via Redis flag.
+
+        Args:
+            task_id: Task identifier to check cancellation status
+
+        Returns:
+            True if cancel_export:{task_id} flag exists in Redis
+
+        Raises:
+            None (exceptions caught and return False)
+        """
         if not self.control_redis:
             return False
         try:
@@ -84,24 +125,51 @@ class ExportWorker:
         except Exception:
             return False
 
-    async def clear_active_export(self, user_id: int):
-        """Clear active export marker for user."""
+    async def clear_active_export(self, user_id: int) -> None:
+        """Clear active export marker for user from Redis.
+
+        Args:
+            user_id: Telegram user ID
+
+        Returns:
+            None
+
+        Raises:
+            None (exceptions caught and logged internally)
+        """
         if self.control_redis:
             try:
                 await self.control_redis.delete(f"active_export:{user_id}")
             except Exception:
                 pass
 
-    async def set_active_processing_job(self, task_id: str):
-        """Сообщаем Java-боту что воркер сейчас занят этой задачей."""
+    async def set_active_processing_job(self, task_id: str) -> None:
+        """Mark worker as actively processing a specific job in Redis.
+
+        Args:
+            task_id: Task identifier being processed
+
+        Returns:
+            None
+
+        Raises:
+            None (exceptions caught and logged internally)
+        """
         if self.control_redis:
             try:
                 await self.control_redis.set("active_processing_job", task_id, ex=3600)
             except Exception:
                 pass
 
-    async def clear_active_processing_job(self):
-        """Сбрасываем флаг занятости воркера."""
+    async def clear_active_processing_job(self) -> None:
+        """Clear active processing job flag from Redis.
+
+        Returns:
+            None
+
+        Raises:
+            None (exceptions caught and logged internally)
+        """
         if self.control_redis:
             try:
                 await self.control_redis.delete("active_processing_job")
@@ -109,15 +177,32 @@ class ExportWorker:
                 pass
 
     def _create_tracker(self, job: ExportRequest) -> Optional[ProgressTracker]:
-        """Create a ProgressTracker if user notifications are possible."""
+        """Create a ProgressTracker for user notifications if possible.
+
+        Args:
+            job: Export job containing user_chat_id and task_id
+
+        Returns:
+            ProgressTracker instance or None if cannot create
+        """
         if job.user_chat_id and self.java_client:
             return self.java_client.create_progress_tracker(
                 job.user_chat_id, job.task_id
             )
         return None
 
-    def log_memory_usage(self, stage: str):
-        """Log current memory usage for monitoring weak server resources."""
+    def log_memory_usage(self, stage: str) -> None:
+        """Log current memory and CPU usage for resource monitoring.
+
+        Args:
+            stage: Description of current processing stage
+
+        Returns:
+            None
+
+        Raises:
+            None (exceptions caught and logged)
+        """
         try:
             mem = psutil.virtual_memory()
             cpu_percent = psutil.cpu_percent(interval=None)
@@ -129,8 +214,18 @@ class ExportWorker:
         except Exception as e:
             logger.warning(f"Could not get resource stats: {e}")
 
-    async def cleanup_temp_files(self, task_id: str):
-        """Delete temporary files for a task to prevent disk fill."""
+    async def cleanup_temp_files(self, task_id: str) -> None:
+        """Delete temporary files for a task to prevent disk fill.
+
+        Args:
+            task_id: Task identifier for temp file cleanup
+
+        Returns:
+            None
+
+        Raises:
+            None (exceptions caught and logged)
+        """
         try:
             temp_dir = Path(f"/tmp/export_{task_id}")
             if temp_dir.exists():
@@ -139,18 +234,33 @@ class ExportWorker:
         except Exception as e:
             logger.warning(f"Failed to cleanup temp files for {task_id}: {e}")
 
-    async def _cleanup_job(self, job: ExportRequest):
-        """Общий cleanup после завершения задачи (успех, ошибка, отмена)."""
+    async def _cleanup_job(self, job: ExportRequest) -> None:
+        """Cleanup after job completion (success, error, or cancellation).
+
+        Args:
+            job: Completed export job
+
+        Returns:
+            None
+        """
         await self.cleanup_temp_files(job.task_id)
         await self.clear_active_export(job.user_id)
         await self.clear_active_processing_job()
 
     async def initialize(self) -> bool:
-        """
-        Initialize all components.
+        """Initialize all components (Redis, Telegram, Java API, message cache).
+
+        Connects to:
+        1. Redis queue for job consumption
+        2. Telegram API via Pyrogram
+        3. Java Bot API for responses
+        4. Message cache layer
 
         Returns:
-            True if all components initialized successfully
+            True if all components initialized successfully, False otherwise
+
+        Raises:
+            None (exceptions logged as ERROR and return False)
         """
         try:
             logger.info("🚀 Initializing Export Worker...")
@@ -190,21 +300,21 @@ class ExportWorker:
             # Передаём Redis-клиент в Telegram-клиент для canonical-маппинга
             self.telegram_client.redis_client = self.control_redis
 
-            # 5. Initialize message cache
-            logger.info("4️⃣  Initializing message cache...")
-            # cache_redis — байты (сериализованные Pydantic-объекты в Redis sorted sets)
-            cache_redis = aioredis.Redis(
-                decode_responses=False,
-                **_redis_kwargs,
-            )
+            # 5. Initialize message cache (SQLite on disk)
+            logger.info("4️⃣  Initializing message cache (SQLite)...")
             self.message_cache = MessageCache(
-                redis_client=cache_redis,
-                ttl_seconds=settings.CACHE_TTL_SECONDS,
-                max_memory_mb=settings.CACHE_MAX_MEMORY_MB,
+                db_path=settings.CACHE_DB_PATH,
+                max_disk_bytes=int(settings.CACHE_MAX_DISK_GB * 1024 ** 3),
                 max_messages_per_chat=settings.CACHE_MAX_MESSAGES_PER_CHAT,
+                ttl_seconds=settings.CACHE_TTL_SECONDS,
                 enabled=settings.CACHE_ENABLED,
             )
-            logger.info(f"  Cache: enabled={settings.CACHE_ENABLED}, TTL={settings.CACHE_TTL_SECONDS}s, max_memory={settings.CACHE_MAX_MEMORY_MB}MB")
+            await self.message_cache.initialize()
+            logger.info(
+                f"  Cache: enabled={settings.CACHE_ENABLED}, "
+                f"db={settings.CACHE_DB_PATH}, "
+                f"max_disk={settings.CACHE_MAX_DISK_GB}GB"
+            )
 
             logger.info("✅ All components initialized successfully")
             return True
@@ -308,19 +418,21 @@ class ExportWorker:
                 # чтобы Java-бот мог резолвить числовые ID из пикера в username.
                 if self.control_redis and canonical_id:
                     try:
-                        await self.control_redis.set(
+                        # Пишем оба маппинга одним pipeline (2 RTT → 1 RTT)
+                        pipe = self.control_redis.pipeline()
+                        pipe.set(
                             f"canonical:{original_chat_input}",
                             str(canonical_id),
                             ex=86400 * 30,
                         )
-                        # Обратный маппинг: по numeric_id находим username
                         chat_username = chat_info.get("username")
                         if chat_username:
-                            await self.control_redis.set(
+                            pipe.set(
                                 f"canonical:{canonical_id}",
                                 chat_username,
                                 ex=86400 * 30,
                             )
+                        await pipe.execute()
                     except Exception:
                         pass
 
@@ -354,19 +466,13 @@ class ExportWorker:
 
             # Fallback: кэш отключён или cache path завершился с ошибкой (не отменой)
             if messages_for_send is None:
-                fallback = await self._fetch_all_messages(job)
-                if fallback is None:
+                fallback_result = await self._fetch_all_messages(job)
+                if fallback_result is None:
                     return True
-                # Сохраняем в кэш — следующий запрос пойдёт через cache path
-                if fallback and self.message_cache and self.message_cache.enabled:
-                    try:
-                        await self.message_cache.store_messages(job.chat_id, fallback)
-                        await self.message_cache.evict_if_needed()
-                        logger.info(f"  Cached {len(fallback)} messages for chat {job.chat_id} (fallback path)")
-                    except Exception as e:
-                        logger.warning(f"Failed to cache messages after fallback fetch: {e}")
-                messages_for_send = fallback
-                msg_count = len(fallback)
+                # _fetch_all_messages уже записал сообщения в кэш батчами
+                msg_count, messages_for_send = fallback_result
+                if self.message_cache and self.message_cache.enabled:
+                    await self.message_cache.evict_if_needed()
 
             # Финальная проверка отмены перед отправкой в Java
             if await self.is_cancelled(job.task_id):
@@ -381,7 +487,7 @@ class ExportWorker:
                 task_id=job.task_id,
                 status="completed",
                 messages=messages_for_send,
-                count=msg_count,
+                actual_count=msg_count,
                 user_chat_id=job.user_chat_id,
                 chat_title=chat_title,
                 from_date=job.from_date,
@@ -453,7 +559,7 @@ class ExportWorker:
         Date-range export with cache support. Returns (count, AsyncGenerator) or None.
 
         1. Check which date sub-ranges are already cached
-        2. Fetch only missing date ranges from Telegram (accumulate in memory — small gaps only)
+        2. Fetch only missing date ranges from Telegram (accumulate in memory - small gaps only)
         3. Store fresh messages in cache
         4. Count via ZCOUNT (O(1)), stream via iter_messages_by_date (O(chunk) memory)
         """
@@ -502,6 +608,10 @@ class ExportWorker:
             f"  Cache MISS (частичный) для чата {job.chat_id}: missing={missing}"
         )
 
+        tracker = self._create_tracker(job)
+        if tracker:
+            await tracker.start()
+
         # Получаем total для прогресса (запрашиваем у Telegram для всего диапазона)
         from_dt = datetime.fromisoformat(from_date_str + "T00:00:00+00:00")
         to_dt = datetime.fromisoformat(to_date_str + "T23:59:59+00:00")
@@ -514,20 +624,19 @@ class ExportWorker:
             job.chat_id, from_date_str, to_date_str
         )
 
-        tracker = self._create_tracker(job)
         if tracker:
-            await tracker.start(total)
+            await tracker.set_total(total)
             if cached_count:
                 await tracker.track(cached_count)
 
-        # Fetch only missing gaps from Telegram, store in cache immediately
+        # Fetch only missing gaps from Telegram, store in cache in batches of 1000
         fetched_count = cached_count
-        all_fetched: list[ExportedMessage] = []
         for gap_from, gap_to in missing:
             gap_from_dt = datetime.fromisoformat(gap_from + "T00:00:00+00:00")
             gap_to_dt = datetime.fromisoformat(gap_to + "T23:59:59+00:00")
 
-            gap_msgs: list[ExportedMessage] = []
+            batch: list[ExportedMessage] = []
+            gap_fetched = 0
             try:
                 async for msg in self.telegram_client.get_chat_history(
                     chat_id=job.chat_id,
@@ -537,19 +646,22 @@ class ExportWorker:
                     from_date=gap_from_dt,
                     to_date=gap_to_dt,
                 ):
-                    gap_msgs.append(msg)
-                    all_fetched.append(msg)
+                    batch.append(msg)
                     fetched_count += 1
-                    if await self._check_cancel_and_save(job, all_fetched, fetched_count):
-                        return None
+                    gap_fetched += 1
+                    if len(batch) >= self._CACHE_BATCH_SIZE:
+                        if await self._flush_batch_and_check_cancel(job, batch):
+                            return None
                     if tracker:
                         await tracker.track(fetched_count)
             except Exception as e:
                 logger.warning(f"Failed fetching date gap [{gap_from} - {gap_to}]: {e}")
 
-            if gap_msgs:
-                logger.info(f"  Fetched {len(gap_msgs)} messages for [{gap_from} - {gap_to}]")
-                await self.message_cache.store_messages(job.chat_id, gap_msgs)
+            # Flush remaining batch for this gap
+            if batch:
+                await self.message_cache.store_messages(job.chat_id, batch)
+            if gap_fetched:
+                logger.info(f"  Fetched {gap_fetched} messages for [{gap_from} - {gap_to}]")
 
         # After storing all gaps, count final total from cache (authoritative)
         count = await self.message_cache.count_messages_by_date(
@@ -587,27 +699,29 @@ class ExportWorker:
             if messages:
                 await self.message_cache.store_messages(job.chat_id, messages)
                 await self.message_cache.evict_if_needed()
-            return messages
+            return (len(messages) if messages else 0, messages) if messages is not None else None
 
         cache_max_id = max(r[1] for r in cached_ranges)
         logger.info(f"  Cache HIT для чата {job.chat_id}: ranges={cached_ranges}, cache_max_id={cache_max_id}")
+
+        # Прогресс-трекер
+        tracker = self._create_tracker(job)
+        if tracker:
+            await tracker.start()
 
         # Получаем total для прогресс-репортинга
         total = await self.telegram_client.get_messages_count(job.chat_id)
         if job.limit and job.limit > 0 and (total is None or job.limit < total):
             total = job.limit
-
-        # Прогресс-трекер
-        tracker = self._create_tracker(job)
         if tracker:
-            await tracker.start(total)
+            await tracker.set_total(total)
 
-        fresh_messages: list[ExportedMessage] = []
         fetched_count = 0
+        fresh_count = 0
+        latest_new_id = cache_max_id
 
-        # Step 1: fetch messages NEWER than cache
-        # all_fetched accumulates ALL messages across all fetch phases for cancel-save
-        all_fetched: list[ExportedMessage] = list(fresh_messages)
+        # Step 1: fetch messages NEWER than cache, store in batches of 1000
+        batch: list[ExportedMessage] = []
         try:
             async for msg in self.telegram_client.get_chat_history(
                 chat_id=job.chat_id,
@@ -615,30 +729,35 @@ class ExportWorker:
                 offset_id=0,
                 min_id=cache_max_id,
             ):
-                fresh_messages.append(msg)
-                all_fetched.append(msg)
+                batch.append(msg)
                 fetched_count += 1
-                if await self._check_cancel_and_save(job, all_fetched, fetched_count):
-                    return None
+                fresh_count += 1
+                if msg.id > latest_new_id:
+                    latest_new_id = msg.id
+                if len(batch) >= self._CACHE_BATCH_SIZE:
+                    if await self._flush_batch_and_check_cancel(job, batch):
+                        return None
                 if tracker:
                     await tracker.track(fetched_count)
         except Exception as e:
             logger.warning(f"Failed fetching new messages above cache: {e}")
 
-        if fresh_messages:
-            logger.info(f"  Fetched {len(fresh_messages)} new messages above cache max {cache_max_id}")
-            await self.message_cache.store_messages(job.chat_id, fresh_messages)
+        if batch:
+            await self.message_cache.store_messages(job.chat_id, batch)
+        if fresh_count:
+            logger.info(f"  Fetched {fresh_count} new messages above cache max {cache_max_id}")
 
         # Step 2: fill ID gaps
         logger.info(f"  Step 2: Computing missing ID ranges...")
         full_min = min(r[0] for r in cached_ranges)
-        full_max = max(cache_max_id, fresh_messages[0].id if fresh_messages else cache_max_id)
+        full_max = max(cache_max_id, latest_new_id)
         logger.info(f"    Range to check: [{full_min}, {full_max}]")
         missing = await self.message_cache.get_missing_ranges(job.chat_id, full_min, full_max)
         logger.info(f"    Found {len(missing)} gaps: {missing}")
 
         for gap_low, gap_high in missing:
-            gap_msgs: list[ExportedMessage] = []
+            batch = []
+            gap_count = 0
             try:
                 async for msg in self.telegram_client.get_chat_history(
                     chat_id=job.chat_id,
@@ -646,20 +765,21 @@ class ExportWorker:
                     offset_id=gap_high + 1,
                     min_id=gap_low - 1,
                 ):
-                    gap_msgs.append(msg)
+                    batch.append(msg)
                     fetched_count += 1
-                    all_fetched.append(gap_msgs[-1])
-                    if await self._check_cancel_and_save(job, all_fetched, fetched_count):
-                        return None
+                    gap_count += 1
+                    if len(batch) >= self._CACHE_BATCH_SIZE:
+                        if await self._flush_batch_and_check_cancel(job, batch):
+                            return None
                     if tracker:
                         await tracker.track(fetched_count)
             except Exception as e:
                 logger.warning(f"Failed fetching gap [{gap_low}-{gap_high}]: {e}")
 
-            if gap_msgs:
-                logger.info(f"  Filled gap [{gap_low}-{gap_high}]: {len(gap_msgs)} messages")
-                await self.message_cache.store_messages(job.chat_id, gap_msgs)
-                fresh_messages.extend(gap_msgs)
+            if batch:
+                await self.message_cache.store_messages(job.chat_id, batch)
+            if gap_count:
+                logger.info(f"  Filled gap [{gap_low}-{gap_high}]: {gap_count} messages")
 
         # Step 3: fetch messages OLDER than cache minimum
         logger.info(f"  Step 3: Fetching older messages...")
@@ -667,7 +787,8 @@ class ExportWorker:
             cache_min_id = min(r[0] for r in cached_ranges)
             logger.info(f"    Cache min ID: {cache_min_id}")
             if cache_min_id > 1:
-                older_msgs: list[ExportedMessage] = []
+                batch = []
+                older_count = 0
                 try:
                     async for msg in self.telegram_client.get_chat_history(
                         chat_id=job.chat_id,
@@ -675,23 +796,21 @@ class ExportWorker:
                         offset_id=cache_min_id,
                         min_id=0,
                     ):
-                        older_msgs.append(msg)
+                        batch.append(msg)
                         fetched_count += 1
-                        all_fetched.append(older_msgs[-1])
-                        if await self._check_cancel_and_save(job, all_fetched, fetched_count):
-                            return None
+                        older_count += 1
+                        if len(batch) >= self._CACHE_BATCH_SIZE:
+                            if await self._flush_batch_and_check_cancel(job, batch):
+                                return None
                         if tracker:
                             await tracker.track(fetched_count)
                 except Exception as e:
                     logger.warning(f"Failed fetching older messages below cache min {cache_min_id}: {e}")
 
-                if older_msgs:
-                    logger.info(f"  Fetched {len(older_msgs)} older messages below cache min {cache_min_id}")
-                    await self.message_cache.store_messages(job.chat_id, older_msgs)
-                    fresh_messages.extend(older_msgs)
-
-        # Освобождаем fresh_messages — они уже сохранены в кэш выше.
-        del fresh_messages
+                if batch:
+                    await self.message_cache.store_messages(job.chat_id, batch)
+                if older_count:
+                    logger.info(f"  Fetched {older_count} older messages below cache min {cache_min_id}")
 
         # Считаем итоговое кол-во через ZCOUNT (O(1), без загрузки в память).
         actual_min = 0 if (not job.limit or job.limit <= 0) else full_min
@@ -713,15 +832,15 @@ class ExportWorker:
         # не держа все 252K объектов в памяти одновременно.
         return count, self.message_cache.iter_messages(job.chat_id, actual_min, full_max)
 
-    async def _fetch_all_messages(self, job: ExportRequest) -> Optional[list[ExportedMessage]]:
-        """
-        Fetch all messages from Telegram API with progress reporting.
+    async def _fetch_all_messages(
+        self, job: ExportRequest
+    ) -> Optional[tuple[int, object]]:
+        """Fetch all messages from Telegram, writing to cache in batches.
 
-        Returns list of messages, or None if export failed (error already reported).
+        Returns (count, messages_iterable) or None if cancelled/failed.
+        Messages are stored in SQLite during fetch (O(_CACHE_BATCH_SIZE) RAM peak).
         """
-        messages: list[ExportedMessage] = []
-
-        # Parse date filters (ensure UTC-aware для корректного сравнения с Pyrogram)
+        # Parse date filters
         from_date = None
         to_date = None
         if job.from_date:
@@ -737,17 +856,23 @@ class ExportWorker:
             except ValueError:
                 pass
 
-        # Получаем total — ВСЕГДА перед экспортом
+        tracker = self._create_tracker(job)
+        if tracker:
+            await tracker.start()
+
         total = await self.telegram_client.get_messages_count(
             job.chat_id, from_date, to_date
         )
         if job.limit and job.limit > 0 and (total is None or job.limit < total):
             total = job.limit
-
-        # Прогресс-трекер
-        tracker = self._create_tracker(job)
         if tracker:
-            await tracker.start(total)
+            await tracker.set_total(total)
+
+        use_cache = bool(self.message_cache and self.message_cache.enabled)
+        batch: list[ExportedMessage] = []
+        # Fallback list only used when cache is disabled (edge case)
+        nocache_messages: list[ExportedMessage] = []
+        count = 0
 
         try:
             async for message in self.telegram_client.get_chat_history(
@@ -758,28 +883,48 @@ class ExportWorker:
                 from_date=from_date,
                 to_date=to_date,
             ):
-                messages.append(message)
-                count = len(messages)
-
-                if await self._check_cancel_and_save(job, messages, count):
-                    return None
+                count += 1
+                if use_cache:
+                    batch.append(message)
+                    if len(batch) >= self._CACHE_BATCH_SIZE:
+                        if await self._flush_batch_and_check_cancel(job, batch):
+                            return None
+                else:
+                    nocache_messages.append(message)
+                    if count % self._CACHE_BATCH_SIZE == 0:
+                        if await self.is_cancelled(job.task_id):
+                            await self.clear_active_export(job.user_id)
+                            return None
 
                 if tracker:
                     await tracker.track(count)
-                elif count % 10000 == 0:
+                elif count % 10_000 == 0:
                     logger.info(f"  Exported {count} messages...")
 
         except Exception as e:
-            error = f"Export failed: {str(e)}"
-            logger.error(f"❌ {error}")
-            # Re-raise so the caller (process_job) handles notification consistently,
-            # avoiding duplicate failure messages to the user.
+            logger.error(f"❌ Export failed: {e}")
             raise
 
-        if tracker:
-            await tracker.finalize(len(messages))
+        # Flush remaining batch
+        if batch and use_cache:
+            await self.message_cache.store_messages(job.chat_id, batch)
 
-        return messages
+        if tracker:
+            await tracker.finalize(count)
+
+        if use_cache:
+            from_date_str = job.from_date[:10] if job.from_date else None
+            to_date_str   = job.to_date[:10]   if job.to_date   else None
+            if from_date_str and to_date_str:
+                gen = self.message_cache.iter_messages_by_date(
+                    job.chat_id, from_date_str, to_date_str
+                )
+            else:
+                # No date filter: return all messages for this chat from cache
+                gen = self.message_cache.iter_messages(job.chat_id, 0, 2 ** 62)
+            return count, gen
+
+        return count, nocache_messages
 
     async def _update_all_queue_positions(self, current_task_id: str) -> None:
         """
@@ -788,30 +933,44 @@ class ExportWorker:
         Called right before processing a job: the job being processed gets
         position=0 ("started"), the rest get their 1-based queue position.
         """
-        if not self.control_redis or not self.java_client:
+        if not self.control_redis or not self.java_client or not self.queue_consumer:
             return
         try:
             pending_result = await self.queue_consumer.get_pending_jobs()
             pending = pending_result["jobs"]
             total = pending_result["total_count"]
-            # Notify the job that is about to start
-            val = await self.control_redis.get(f"queue_msg:{current_task_id}")
-            if val:
-                user_chat_id_str, msg_id_str = val.split(":", 1)
-                await self.java_client.update_queue_position(
-                    int(user_chat_id_str), int(msg_id_str), 0, total
-                )
-            # Notify remaining queued jobs of their new position
-            for i, job in enumerate(pending):
-                val = await self.control_redis.get(f"queue_msg:{job.task_id}")
-                if not val:
-                    continue
-                user_chat_id_str, msg_id_str = val.split(":", 1)
-                await self.java_client.update_queue_position(
-                    int(user_chat_id_str), int(msg_id_str), i + 1, total
-                )
+            # Notify all jobs in parallel (one HTTP call per user, no sequential waiting)
+            await asyncio.gather(
+                self._notify_queue_position(current_task_id, 0, total),
+                *[
+                    self._notify_queue_position(job.task_id, i + 1, total)
+                    for i, job in enumerate(pending)
+                ],
+                return_exceptions=True,
+            )
         except Exception as e:
             logger.warning(f"Could not update queue positions: {e}")
+
+    async def _notify_queue_position(
+        self, task_id: str, position: int, total: int
+    ) -> None:
+        """Notify one queued user of queue position if queue message metadata exists."""
+        if not self.control_redis or not self.java_client:
+            return
+
+        raw_value = await self.control_redis.get(f"queue_msg:{task_id}")
+        if not raw_value:
+            return
+
+        try:
+            user_chat_id_str, msg_id_str = raw_value.split(":", 1)
+            user_chat_id = int(user_chat_id_str)
+            msg_id = int(msg_id_str)
+        except (ValueError, AttributeError):
+            logger.warning(f"Skipping malformed queue message metadata for task {task_id}")
+            return
+
+        await self.java_client.update_queue_position(user_chat_id, msg_id, position, total)
 
     async def run(self):
         """
@@ -867,6 +1026,9 @@ class ExportWorker:
 
         if self.java_client:
             await self.java_client.aclose()
+
+        if self.message_cache:
+            await self.message_cache.close()
 
         logger.info(
             f"📊 Final stats: {self.jobs_processed} processed, "
