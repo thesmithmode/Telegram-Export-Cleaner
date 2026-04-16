@@ -6,9 +6,7 @@ REST API для синхронной конвертации Telegram JSON export
 
 **Base URL:** `http://localhost:8080`
 
-**Authentication:** Required (except `/api/health`)
-- Header: `X-API-Key: your-secret-key`
-- From environment: `JAVA_API_KEY`
+**Authentication:** Not required (API доступен только внутри Docker сети)
 
 ---
 
@@ -23,7 +21,6 @@ REST API для синхронной конвертации Telegram JSON export
 ```http
 POST /api/convert HTTP/1.1
 Host: localhost:8080
-X-API-Key: your-secret-key
 Content-Type: multipart/form-data
 
 --boundary
@@ -92,7 +89,6 @@ Content-Type: application/json
 |------|---------|--------|
 | 200 | OK | File converted successfully |
 | 400 | Bad Request | Invalid parameters (date format, date range) |
-| 401 | Unauthorized | Missing or invalid X-API-Key |
 | 413 | Payload Too Large | File exceeds 2GB limit |
 | 500 | Internal Server Error | Unexpected error during conversion |
 
@@ -101,7 +97,6 @@ Content-Type: application/json
 **cURL - Basic export:**
 ```bash
 curl -X POST http://localhost:8080/api/convert \
-  -H "X-API-Key: your-secret-key" \
   -F "file=@result.json" \
   -o output.txt
 ```
@@ -109,7 +104,6 @@ curl -X POST http://localhost:8080/api/convert \
 **cURL - With date filter:**
 ```bash
 curl -X POST http://localhost:8080/api/convert \
-  -H "X-API-Key: your-secret-key" \
   -F "file=@result.json" \
   -F "startDate=2024-01-01" \
   -F "endDate=2024-12-31" \
@@ -119,7 +113,6 @@ curl -X POST http://localhost:8080/api/convert \
 **cURL - With keywords filter:**
 ```bash
 curl -X POST http://localhost:8080/api/convert \
-  -H "X-API-Key: your-secret-key" \
   -F "file=@result.json" \
   -F "keywords=telegram,export" \
   -F "excludeKeywords=spam,bot" \
@@ -138,9 +131,7 @@ data = {
     'endDate': '2024-12-31',
     'keywords': 'telegram,export',
 }
-headers = {
-    'X-API-Key': 'your-secret-key'
-}
+headers = {}
 
 response = requests.post(
     'http://localhost:8080/api/convert',
@@ -241,42 +232,6 @@ httpSecurity
 # - Redis-based rate limiter (e.g., Bucket4j)
 # - Per-API-key limits
 # - Sliding window for fairness
-```
-
----
-
-## Authentication
-
-### API Key Setup
-
-1. **Generate API Key:**
-   ```bash
-   # Linux/Mac:
-   echo $RANDOM | md5sum | head -c 32
-   # or
-   openssl rand -hex 16
-   ```
-
-2. **Set Environment Variable:**
-   ```bash
-   export JAVA_API_KEY="your-generated-key"
-   ```
-
-3. **Use in Requests:**
-   ```bash
-   curl -H "X-API-Key: $JAVA_API_KEY" http://localhost:8080/api/convert ...
-   ```
-
-### Missing/Invalid Key
-
-```json
-HTTP/1.1 401 Unauthorized
-Content-Type: application/json
-
-{
-  "error": "Unauthorized",
-  "message": "Missing or invalid X-API-Key header"
-}
 ```
 
 ---

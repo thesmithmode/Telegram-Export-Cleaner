@@ -229,9 +229,6 @@ spring.redis.db=0
 # Multipart uploads
 spring.servlet.multipart.max-file-size=2GB
 spring.servlet.multipart.max-request-size=2GB
-
-# API Key
-api.key=${JAVA_API_KEY}
 ```
 
 ## Testing
