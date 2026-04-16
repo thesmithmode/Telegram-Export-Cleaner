@@ -3,6 +3,8 @@ import com.tcleaner.core.TelegramExporter;
 import com.tcleaner.core.TelegramExporterException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.tcleaner.core.MessageProcessor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -23,11 +25,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @DisplayName("TelegramExporter - Error Handling")
 class TelegramExporterErrorHandlingTest {
 
-    private ObjectMapper objectMapper;
+    private TelegramExporter exporter;
 
     @BeforeEach
     void setUp() {
-        objectMapper = new ObjectMapper();
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.registerModule(new JavaTimeModule());
+        exporter = new TelegramExporter(mapper, new MessageProcessor());
     }
 
     @TempDir
@@ -41,7 +45,6 @@ class TelegramExporterErrorHandlingTest {
         @DisplayName("Выбрасывает IOException для несуществующего файла")
         void throwsExceptionForNonExistentFile() {
             Path nonExistent = tempDir.resolve("nonexistent.json");
-            TelegramExporter exporter = new TelegramExporter();
 
             assertThatThrownBy(() -> exporter.processFile(nonExistent))
                     .isInstanceOf(TelegramExporterException.class)
@@ -54,8 +57,6 @@ class TelegramExporterErrorHandlingTest {
             Path invalidJson = tempDir.resolve("invalid.json");
             Files.writeString(invalidJson, "{ invalid json }");
 
-            TelegramExporter exporter = new TelegramExporter();
-
             assertThatThrownBy(() -> exporter.processFile(invalidJson))
                     .isInstanceOf(TelegramExporterException.class)
                     .hasFieldOrPropertyWithValue("errorCode", "INVALID_JSON");
@@ -67,7 +68,6 @@ class TelegramExporterErrorHandlingTest {
             Path emptyJson = tempDir.resolve("empty.json");
             Files.writeString(emptyJson, "{}");
 
-            TelegramExporter exporter = new TelegramExporter();
             List<String> result = exporter.processFile(emptyJson);
 
             assertThat(result).isEmpty();
@@ -81,7 +81,6 @@ class TelegramExporterErrorHandlingTest {
                 {"name": "Test", "type": "private"}
                 """);
 
-            TelegramExporter exporter = new TelegramExporter();
             List<String> result = exporter.processFile(noMessages);
 
             assertThat(result).isEmpty();
@@ -95,7 +94,6 @@ class TelegramExporterErrorHandlingTest {
                 {"name": "Test", "messages": null}
                 """);
 
-            TelegramExporter exporter = new TelegramExporter();
             List<String> result = exporter.processFile(nullMessages);
 
             assertThat(result).isEmpty();
@@ -121,7 +119,6 @@ class TelegramExporterErrorHandlingTest {
             Path inputFile = tempDir.resolve("result.json");
             Files.writeString(inputFile, sb.toString());
 
-            TelegramExporter exporter = new TelegramExporter();
             List<String> result = exporter.processFile(inputFile);
 
             assertThat(result).hasSize(100);
@@ -142,7 +139,6 @@ class TelegramExporterErrorHandlingTest {
             Path inputFile = tempDir.resolve("result.json");
             Files.writeString(inputFile, json);
 
-            TelegramExporter exporter = new TelegramExporter();
             List<String> result = exporter.processFile(inputFile);
 
             assertThat(result).hasSize(2);

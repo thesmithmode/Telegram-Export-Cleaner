@@ -1,6 +1,9 @@
 package com.tcleaner;
 
 import com.tcleaner.core.TelegramExporter;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.tcleaner.core.MessageProcessor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -29,7 +32,9 @@ class IntegrationTest {
 
     @BeforeEach
     void setUp() {
-        exporter = new TelegramExporter();
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.registerModule(new JavaTimeModule());
+        exporter = new TelegramExporter(mapper, new MessageProcessor());
     }
 
     @Test

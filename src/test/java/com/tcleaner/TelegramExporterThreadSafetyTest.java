@@ -1,6 +1,9 @@
 package com.tcleaner;
 import com.tcleaner.core.TelegramExporter;
-
+import com.tcleaner.core.MessageProcessor;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -27,6 +30,15 @@ class TelegramExporterThreadSafetyTest {
     @TempDir
     Path tempDir;
 
+    private TelegramExporter exporter;
+
+    @BeforeEach
+    void setUp() {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.registerModule(new JavaTimeModule());
+        exporter = new TelegramExporter(mapper, new MessageProcessor());
+    }
+
     @Test
     @DisplayName("Параллельная обработка одного файла несколькими потоками даёт одинаковый результат")
     void concurrentProcessingProducesSameResult() throws Exception {
@@ -43,7 +55,6 @@ class TelegramExporterThreadSafetyTest {
         Path inputFile = tempDir.resolve("result.json");
         Files.writeString(inputFile, json);
 
-        TelegramExporter exporter = new TelegramExporter();
         List<String> referenceResult = exporter.processFile(inputFile);
 
         int threadCount = 10;
@@ -74,7 +85,6 @@ class TelegramExporterThreadSafetyTest {
     @Test
     @DisplayName("Параллельная обработка разных файлов не вызывает коллизий")
     void concurrentProcessingOfDifferentFilesIsIsolated() throws Exception {
-        TelegramExporter exporter = new TelegramExporter();
         int threadCount = 5;
         ExecutorService executor = Executors.newFixedThreadPool(threadCount);
         List<Future<Integer>> futures = new ArrayList<>();

@@ -1,6 +1,6 @@
 package com.tcleaner;
-import com.tcleaner.core.MessageFilter;
 
+import com.tcleaner.core.MessageFilter;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -8,307 +8,174 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
-import java.time.LocalDate;
-import java.util.List;
-
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-@DisplayName("MessageFilter - Фильтрация сообщений")
+/**
+ * Тесты для MessageFilter.
+ */
+@DisplayName("MessageFilter")
 class MessageFilterTest {
 
     private ObjectMapper objectMapper;
-    private JsonNode message1;
-    private JsonNode message2;
-    private JsonNode serviceMessage;
 
     @BeforeEach
-    void setUp() throws Exception {
+    void setUp() {
         objectMapper = new ObjectMapper();
-        
-        message1 = objectMapper.readTree("""
-            {"id": 1, "type": "message", "date": "2025-06-24T10:00:00", "text": "Hello world"}
-            """);
-        
-        message2 = objectMapper.readTree("""
-            {"id": 2, "type": "message", "date": "2025-07-15T15:30:00", "text": "Goodbye world"}
-            """);
-        
-        serviceMessage = objectMapper.readTree("""
-            {"id": 3, "type": "service", "date": "2025-06-25T10:00:00", "text": "User left the group"}
-            """);
+    }
+
+    private JsonNode msg(String date, String text) throws Exception {
+        return objectMapper.readTree(
+            String.format("{\"id\":1,\"type\":\"message\",\"date\":\"%s\",\"text\":\"%s\"}", date, text)
+        );
     }
 
     @Nested
-    @DisplayName("Фильтрация по дате")
-    class DateFilterTests {
+    @DisplayName("Метод fromParameters возвращает null при отсутствии параметров")
+    class NullWhenNoFilters {
 
         @Test
-        @DisplayName("Фильтрует по начальной дате")
-        void filterByStartDate() {
-            MessageFilter filter = new MessageFilter()
-                    .withStartDate(LocalDate.of(2025, 7, 1));
-
-            assertThat(filter.matches(message1)).isFalse();
-            assertThat(filter.matches(message2)).isTrue();
+        @DisplayName("Все параметры null → null")
+        void allNullReturnsNull() {
+            assertThat(MessageFilter.fromParameters(null, null, null, null)).isNull();
         }
 
         @Test
-        @DisplayName("Фильтрует по конечной дате")
-        void filterByEndDate() {
-            MessageFilter filter = new MessageFilter()
-                    .withEndDate(LocalDate.of(2025, 6, 30));
-
-            assertThat(filter.matches(message1)).isTrue();
-            assertThat(filter.matches(message2)).isFalse();
-        }
-
-        @Test
-        @DisplayName("Фильтрует по диапазону дат")
-        void filterByDateRange() {
-            MessageFilter filter = new MessageFilter()
-                    .withStartDate(LocalDate.of(2025, 6, 1))
-                    .withEndDate(LocalDate.of(2025, 6, 30));
-
-            assertThat(filter.matches(message1)).isTrue();
-            assertThat(filter.matches(message2)).isFalse();
+        @DisplayName("Все параметры пустые → null")
+        void allBlankReturnsNull() {
+            assertThat(MessageFilter.fromParameters("", "  ", "", "")).isNull();
         }
     }
 
     @Nested
-    @DisplayName("Фильтрация по ключевым словам")
-    class KeywordFilterTests {
+    @DisplayName("Создаёт фильтр по дате")
+    class DateFilters {
 
         @Test
-        @DisplayName("Фильтрует по ключевому слову (включая)")
-        void filterByKeyword() {
-            MessageFilter filter = new MessageFilter()
-                    .withKeyword("hello");
-
-            assertThat(filter.matches(message1)).isTrue();
-            assertThat(filter.matches(message2)).isFalse();
+        @DisplayName("startDate — сообщения до даты отсеиваются")
+        void setsStartDate() throws Exception {
+            MessageFilter filter = MessageFilter.fromParameters("2025-07-01", null, null, null);
+            assertThat(filter.matches(msg("2025-06-30T23:59:59", "before"))).isFalse();
+            assertThat(filter.matches(msg("2025-07-01T00:00:00", "on start"))).isTrue();
+            assertThat(filter.matches(msg("2025-08-01T00:00:00", "after"))).isTrue();
         }
 
         @Test
-        @DisplayName("Фильтрует по ключевым словам (несколько)")
-        void filterByMultipleKeywords() {
-            MessageFilter filter = new MessageFilter()
-                    .withKeyword("hello")
-                    .withKeyword("goodbye");
-
-            assertThat(filter.matches(message1)).isTrue();
-            assertThat(filter.matches(message2)).isTrue();
+        @DisplayName("endDate — сообщения после даты отсеиваются")
+        void setsEndDate() throws Exception {
+            MessageFilter filter = MessageFilter.fromParameters(null, "2025-06-30", null, null);
+            assertThat(filter.matches(msg("2025-06-30T23:59:59", "on end"))).isTrue();
+            assertThat(filter.matches(msg("2025-07-01T00:00:00", "after"))).isFalse();
         }
 
         @Test
-        @DisplayName("Фильтрует по ключевым словам (исключая)")
-        void filterByExcludeKeyword() {
-            MessageFilter filter = new MessageFilter()
-                    .withExcludeKeyword("goodbye");
-
-            assertThat(filter.matches(message1)).isTrue();
-            assertThat(filter.matches(message2)).isFalse();
-        }
-
-        @Test
-        @DisplayName("Фильтрует без учета регистра")
-        void filterCaseInsensitive() {
-            MessageFilter filter = new MessageFilter()
-                    .withKeyword("HELLO");
-
-            assertThat(filter.matches(message1)).isTrue();
+        @DisplayName("Невалидная дата → исключение DateTimeParseException")
+        void invalidDateThrows() {
+            assertThatThrownBy(() -> MessageFilter.fromParameters("not-a-date", null, null, null))
+                    .isInstanceOf(java.time.format.DateTimeParseException.class);
         }
     }
 
     @Nested
-    @DisplayName("Фильтрация по типу сообщения")
-    class TypeFilterTests {
+    @DisplayName("Создаёт фильтр по ключевым словам")
+    class KeywordFilters {
 
         @Test
-        @DisplayName("Фильтрует по типу (включая)")
-        void filterByIncludeType() {
-            MessageFilter filter = new MessageFilter()
-                    .withIncludeType("service");
-
-            assertThat(filter.matches(serviceMessage)).isTrue();
-            assertThat(filter.matches(message1)).isFalse();
+        @DisplayName("Одно ключевое слово — проходят совпадающие, отсеиваются несовпадающие")
+        void singleKeyword() throws Exception {
+            MessageFilter filter = MessageFilter.fromParameters(null, null, "hello", null);
+            assertThat(filter.matches(msg("2025-01-01T00:00:00", "Hello world"))).isTrue();
+            assertThat(filter.matches(msg("2025-01-01T00:00:00", "Goodbye"))).isFalse();
         }
 
         @Test
-        @DisplayName("Фильтрует по типу (исключая)")
-        void filterByExcludeType() {
-            MessageFilter filter = new MessageFilter()
-                    .withExcludeType("service");
-
-            assertThat(filter.matches(serviceMessage)).isFalse();
-            assertThat(filter.matches(message1)).isTrue();
-        }
-    }
-
-    @Nested
-    @DisplayName("Комбинированные фильтры")
-    class CombinedFilterTests {
-
-        @Test
-        @DisplayName("Комбинирует дату и ключевые слова")
-        void combineDateAndKeyword() {
-            MessageFilter filter = new MessageFilter()
-                    .withStartDate(LocalDate.of(2025, 6, 1))
-                    .withKeyword("hello");
-
-            assertThat(filter.matches(message1)).isTrue();
-            assertThat(filter.matches(message2)).isFalse();
+        @DisplayName("Несколько ключевых слов через запятую — совпадение по любому из них (OR)")
+        void multipleKeywordsCommaSeparated() throws Exception {
+            MessageFilter filter = MessageFilter.fromParameters(null, null, "java,spring", null);
+            assertThat(filter.matches(msg("2025-01-01T00:00:00", "java rocks"))).isTrue();
+            assertThat(filter.matches(msg("2025-01-01T00:00:00", "spring boot"))).isTrue();
+            assertThat(filter.matches(msg("2025-01-01T00:00:00", "python rules"))).isFalse();
         }
 
         @Test
-        @DisplayName("Фильтрует список сообщений")
-        void filterMessageList() throws Exception {
-            JsonNode msg1 = objectMapper.readTree("""
-                {"id": 1, "type": "message", "date": "2025-06-24T10:00:00", "text": "Hello"}
-                """);
-            JsonNode msg2 = objectMapper.readTree("""
-                {"id": 2, "type": "message", "date": "2025-07-01T10:00:00", "text": "World"}
-                """);
-            JsonNode msg3 = objectMapper.readTree("""
-                {"id": 3, "type": "message", "date": "2025-07-15T10:00:00", "text": "Test"}
-                """);
+        @DisplayName("Пробелы вокруг ключевых слов обрезаются — фильтрация работает корректно")
+        void keywordsAreTrimmed() throws Exception {
+            MessageFilter filter = MessageFilter.fromParameters(null, null, " java , spring ", null);
+            assertThat(filter.matches(msg("2025-01-01T00:00:00", "java code"))).isTrue();
+            assertThat(filter.matches(msg("2025-01-01T00:00:00", "spring framework"))).isTrue();
+        }
 
-            List<JsonNode> messages = List.of(msg1, msg2, msg3);
-            
-            MessageFilter filter = new MessageFilter()
-                    .withStartDate(LocalDate.of(2025, 7, 1))
-                    .withEndDate(LocalDate.of(2025, 7, 10));
-
-            List<JsonNode> result = filter.filter(messages);
-
-            assertThat(result).hasSize(1);
-            assertThat(result.get(0).get("id").asInt()).isEqualTo(2);
+        @Test
+        @DisplayName("excludeKeywords — сообщения с исключённым словом отсеиваются")
+        void setsExcludeKeywords() throws Exception {
+            MessageFilter filter = MessageFilter.fromParameters(null, null, null, "spam");
+            assertThat(filter.matches(msg("2025-01-01T00:00:00", "buy cheap spam now"))).isFalse();
+            assertThat(filter.matches(msg("2025-01-01T00:00:00", "normal message"))).isTrue();
         }
     }
 
     @Nested
-    @DisplayName("Кастомные предикаты")
-    class CustomPredicates {
+    @DisplayName("Комбинированные параметры")
+    class CombinedParams {
 
         @Test
-        @DisplayName("Пропускает сообщения по кастомному предикату (by author)")
-        void filterByCustomPredicateAuthor() throws Exception {
-            JsonNode msg = objectMapper.readTree("""
-                    {"id": 1, "type": "message", "date": "2025-06-24T10:00:00",
-                     "from": "Alice", "text": "Hello"}
-                    """);
-            MessageFilter filter = new MessageFilter()
-                    .withPredicate(node -> "Alice".equals(
-                            node.has("from") ? node.get("from").asText() : ""));
-
-            assertThat(filter.matches(msg)).isTrue();
-        }
-
-        @Test
-        @DisplayName("Отсеивает сообщения по кастомному предикату (wrong author)")
-        void rejectsByCustomPredicateWrongAuthor() throws Exception {
-            JsonNode msg = objectMapper.readTree("""
-                    {"id": 1, "type": "message", "date": "2025-06-24T10:00:00",
-                     "from": "Bob", "text": "Hello"}
-                    """);
-            MessageFilter filter = new MessageFilter()
-                    .withPredicate(node -> "Alice".equals(
-                            node.has("from") ? node.get("from").asText() : ""));
-
-            assertThat(filter.matches(msg)).isFalse();
-        }
-
-        @Test
-        @DisplayName("Несколько предикатов комбинируются через AND")
-        void multiplePredicatesCombineAsAnd() throws Exception {
-            JsonNode msg = objectMapper.readTree("""
-                    {"id": 1, "type": "message", "date": "2025-06-24T10:00:00",
-                     "from": "Alice", "text": "important news"}
-                    """);
-            MessageFilter filter = new MessageFilter()
-                    .withPredicate(node -> "Alice".equals(
-                            node.has("from") ? node.get("from").asText() : ""))
-                    .withPredicate(node -> node.has("text")
-                            && node.get("text").asText().contains("important"));
-
-            assertThat(filter.matches(msg)).isTrue();
+        @DisplayName("Дата + ключевое слово — оба условия применяются (AND)")
+        void dateAndKeywordCombineAsAnd() throws Exception {
+            MessageFilter filter = MessageFilter.fromParameters(
+                    "2025-06-01", "2025-06-30", "java", null);
+            // Дата в диапазоне + keyword совпадает → проходит
+            assertThat(filter.matches(msg("2025-06-15T00:00:00", "learning java"))).isTrue();
+            // Дата в диапазоне, но keyword не совпадает → не проходит
+            assertThat(filter.matches(msg("2025-06-15T00:00:00", "learning python"))).isFalse();
+            // Keyword совпадает, но дата вне диапазона → не проходит
+            assertThat(filter.matches(msg("2025-07-15T00:00:00", "learning java"))).isFalse();
         }
     }
 
     @Nested
-    @DisplayName("Граничные случаи")
-    class EdgeCases {
+    @DisplayName("Валидация диапазона дат")
+    class DateRangeValidation {
 
         @Test
-        @DisplayName("Возвращает false для null сообщения")
-        void returnsFalseForNull() {
-            MessageFilter filter = new MessageFilter();
-            assertThat(filter.matches(null)).isFalse();
+        @DisplayName("startDate раньше endDate — OK")
+        void startBeforeEndIsOk() {
+            MessageFilter filter = MessageFilter.fromParameters(
+                    "2025-01-01", "2025-12-31", null, null);
+            assertThat(filter).isNotNull();
         }
 
         @Test
-        @DisplayName("Возвращает пустой список для null входных данных")
-        void returnsEmptyForNullInput() {
-            MessageFilter filter = new MessageFilter();
-            assertThat(filter.filter(null)).isEmpty();
+        @DisplayName("startDate равен endDate — OK")
+        void startEqualsEndIsOk() {
+            MessageFilter filter = MessageFilter.fromParameters(
+                    "2025-06-15", "2025-06-15", null, null);
+            assertThat(filter).isNotNull();
         }
 
         @Test
-        @DisplayName("Пустой фильтр пропускает все сообщения")
-        void emptyFilterPassesAll() {
-            MessageFilter filter = new MessageFilter();
-            assertThat(filter.matches(message1)).isTrue();
-            assertThat(filter.matches(message2)).isTrue();
-            assertThat(filter.matches(serviceMessage)).isTrue();
-        }
-    }
-
-    @Nested
-    @DisplayName("Фильтрация по тексту в виде массива (entities)")
-    class ArrayTextFilterTests {
-
-        @Test
-        @DisplayName("Keyword-фильтр находит слово в массиве entities")
-        void keywordFoundInArrayText() throws Exception {
-            JsonNode msg = objectMapper.readTree("""
-                {"id": 10, "type": "message", "date": "2025-06-24T10:00:00",
-                 "text": [
-                   {"type": "plain", "text": "Check out "},
-                   {"type": "bold", "text": "important"},
-                   {"type": "plain", "text": " news"}
-                 ]}
-                """);
-
-            MessageFilter filter = new MessageFilter().withKeyword("important");
-            assertThat(filter.matches(msg)).isTrue();
+        @DisplayName("startDate позже endDate — исключение")
+        void startAfterEndThrows() {
+            assertThatThrownBy(() -> MessageFilter.fromParameters(
+                    "2025-12-31", "2025-01-01", null, null))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("startDate")
+                    .hasMessageContaining("endDate");
         }
 
         @Test
-        @DisplayName("Keyword-фильтр не находит отсутствующее слово в массиве entities")
-        void keywordNotFoundInArrayText() throws Exception {
-            JsonNode msg = objectMapper.readTree("""
-                {"id": 11, "type": "message", "date": "2025-06-24T10:00:00",
-                 "text": [
-                   {"type": "plain", "text": "Just a regular message"}
-                 ]}
-                """);
-
-            MessageFilter filter = new MessageFilter().withKeyword("important");
-            assertThat(filter.matches(msg)).isFalse();
+        @DisplayName("Только startDate задан — OK (нечего сравнивать)")
+        void onlyStartDateIsOk() {
+            MessageFilter filter = MessageFilter.fromParameters(
+                    "2025-06-01", null, null, null);
+            assertThat(filter).isNotNull();
         }
 
         @Test
-        @DisplayName("Exclude-фильтр исключает сообщение с нужным словом в массиве entities")
-        void excludeKeywordWorksInArrayText() throws Exception {
-            JsonNode msg = objectMapper.readTree("""
-                {"id": 12, "type": "message", "date": "2025-06-24T10:00:00",
-                 "text": [
-                   {"type": "plain", "text": "spam "},
-                   {"type": "link", "text": "https://spam.com"}
-                 ]}
-                """);
-
-            MessageFilter filter = new MessageFilter().withExcludeKeyword("spam");
-            assertThat(filter.matches(msg)).isFalse();
+        @DisplayName("Только endDate задан — OK (нечего сравнивать)")
+        void onlyEndDateIsOk() {
+            MessageFilter filter = MessageFilter.fromParameters(
+                    null, "2025-06-30", null, null);
+            assertThat(filter).isNotNull();
         }
     }
 }

@@ -8,8 +8,8 @@ import java.time.Instant;
  * <p>Хранится in-memory в {@code ConcurrentHashMap<Long, UserSession>} внутри {@link ExportBot}.
  * Сбрасывается при рестарте — допустимо, пользователь просто начнёт заново.</p>
  *
- * <p>Содержит временну́ю метку последнего обращения ({@link #getLastAccess()}) для
- * периодического вытеснения неактивных сессий и предотвращения утечки памяти.</p>
+ * <p>Все методы синхронизированы для обеспечения потокобезопасности при параллельной обработке
+ * нескольких обновлений от одного и того же пользователя.</p>
  */
 public class UserSession {
 
@@ -27,71 +27,71 @@ public class UserSession {
         AWAITING_TO_DATE
     }
 
-    private volatile State state = State.IDLE;
-    private volatile String chatId;
-    private volatile String chatDisplay;
-    private volatile String fromDate;
-    private volatile String toDate;
-    private volatile Instant lastAccess = Instant.now();
+    private State state = State.IDLE;
+    private String chatId;
+    private String chatDisplay;
+    private String fromDate;
+    private String toDate;
+    private Instant lastAccess = Instant.now();
 
-    public State getState() {
+    public synchronized State getState() {
         return state;
     }
 
-    public void setState(State state) {
+    public synchronized void setState(State state) {
         this.state = state;
+        touch();
     }
 
-    public String getChatId() {
+    public synchronized String getChatId() {
         return chatId;
     }
 
-    public void setChatId(String chatId) {
+    public synchronized void setChatId(String chatId) {
         this.chatId = chatId;
+        touch();
     }
 
-    public String getChatDisplay() {
+    public synchronized String getChatDisplay() {
         return chatDisplay;
     }
 
-    public void setChatDisplay(String chatDisplay) {
+    public synchronized void setChatDisplay(String chatDisplay) {
         this.chatDisplay = chatDisplay;
+        touch();
     }
 
-    public String getFromDate() {
+    public synchronized String getFromDate() {
         return fromDate;
     }
 
-    public void setFromDate(String fromDate) {
+    public synchronized void setFromDate(String fromDate) {
         this.fromDate = fromDate;
+        touch();
     }
 
-    public String getToDate() {
+    public synchronized String getToDate() {
         return toDate;
     }
 
-    public void setToDate(String toDate) {
+    public synchronized void setToDate(String toDate) {
         this.toDate = toDate;
+        touch();
     }
 
-    /**
-     * Возвращает метку времени последнего обращения к сессии.
-     *
-     * @return {@link Instant} последнего обращения
-     */
-    public Instant getLastAccess() {
+    public synchronized Instant getLastAccess() {
         return lastAccess;
     }
 
     /** Обновляет метку последнего обращения до текущего момента. */
-    public void touch() {
+    public synchronized void touch() {
         this.lastAccess = Instant.now();
     }
 
     /**
      * Сбрасывает сессию в начальное состояние.
      */
-    public void reset() {
+    public synchronized void reset() {
         this.state = State.IDLE;
         this.chatId = null;
         this.chatDisplay = null;
