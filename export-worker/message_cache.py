@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 
 _FETCH_CHUNK = 1_000   # rows per fetchmany — O(1000) RAM peak
 _STORE_BATCH = 1_000   # rows per executemany INSERT
-
 class MessageCache:
 
     def __init__(
@@ -59,7 +58,7 @@ class MessageCache:
                 PRIMARY KEY (chat_id, msg_id)
             );
             CREATE INDEX IF NOT EXISTS idx_msg_ts
-                ON messages(chat_id, msg_ts);
+                ON messages(chat_id, msg_ts, msg_id);
 
             CREATE TABLE IF NOT EXISTS chat_id_ranges (
                 chat_id  INTEGER NOT NULL,
@@ -143,12 +142,16 @@ class MessageCache:
             if dates:
                 await self._add_date_range(chat_id_int, dates[0], dates[-1])
 
-            # Upsert metadata
+            # Upsert metadata — size_bytes пересчитывается из реальных данных,
+            # а не аккумулируется (иначе INSERT OR REPLACE раздувает счётчик)
             async with self._db.execute(
-                "SELECT COUNT(*) FROM messages WHERE chat_id=?", (chat_id_int,)
+                "SELECT COUNT(*), COALESCE(SUM(LENGTH(data)), 0)"
+                " FROM messages WHERE chat_id=?",
+                (chat_id_int,),
             ) as cur:
                 row = await cur.fetchone()
                 actual_count = row[0] if row else len(messages)
+                actual_bytes = row[1] if row else total_bytes
 
             await self._db.execute(
                 """
@@ -157,9 +160,9 @@ class MessageCache:
                 ON CONFLICT(chat_id) DO UPDATE SET
                     last_accessed = excluded.last_accessed,
                     msg_count     = excluded.msg_count,
-                    size_bytes    = chat_meta.size_bytes + excluded.size_bytes
+                    size_bytes    = excluded.size_bytes
                 """,
-                (chat_id_int, now, actual_count, total_bytes),
+                (chat_id_int, now, actual_count, actual_bytes),
             )
 
             # Единственный commit — атомарно фиксирует ВСЁ или НИЧЕГО
@@ -289,7 +292,7 @@ class MessageCache:
 
         chat_id_int = int(chat_id)
         ts_from = int(self._date_str_to_timestamp(from_date))
-        ts_to   = int(self._date_str_to_timestamp(to_date)) + 86400 - 1
+        ts_to   = int(self._date_str_to_timestamp(to_date)) + 86400
         await self._touch(chat_id_int)
 
         async with self._db.execute(
@@ -322,7 +325,7 @@ class MessageCache:
         if not self.enabled or self._db is None:
             return 0
         ts_from = int(self._date_str_to_timestamp(from_date))
-        ts_to   = int(self._date_str_to_timestamp(to_date)) + 86400 - 1
+        ts_to   = int(self._date_str_to_timestamp(to_date)) + 86400
         async with self._db.execute(
             "SELECT COUNT(*) FROM messages"
             " WHERE chat_id=? AND msg_ts BETWEEN ? AND ?",
@@ -445,6 +448,7 @@ class MessageCache:
     # ------------------------------------------------------------------ #
 
     async def _touch(self, chat_id: int):
+        """Обновляет last_accessed и сразу фиксирует изменение в БД."""
         if self._db is None:
             return
         await self._db.execute(
@@ -474,28 +478,37 @@ class MessageCache:
             candidates = await cur.fetchall()
 
         evicted = 0
-        for chat_id, size in candidates:
-            if total_bytes <= target:
-                break
-            await self._db.execute(
-                "DELETE FROM messages WHERE chat_id=?", (chat_id,)
-            )
-            await self._db.execute(
-                "DELETE FROM chat_id_ranges WHERE chat_id=?", (chat_id,)
-            )
-            await self._db.execute(
-                "DELETE FROM chat_date_ranges WHERE chat_id=?", (chat_id,)
-            )
-            await self._db.execute(
-                "DELETE FROM chat_meta WHERE chat_id=?", (chat_id,)
-            )
+        try:
+            for chat_id, size in candidates:
+                if total_bytes <= target:
+                    break
+                await self._db.execute(
+                    "DELETE FROM messages WHERE chat_id=?", (chat_id,)
+                )
+                await self._db.execute(
+                    "DELETE FROM chat_id_ranges WHERE chat_id=?", (chat_id,)
+                )
+                await self._db.execute(
+                    "DELETE FROM chat_date_ranges WHERE chat_id=?", (chat_id,)
+                )
+                await self._db.execute(
+                    "DELETE FROM chat_meta WHERE chat_id=?", (chat_id,)
+                )
+                total_bytes -= size
+                evicted += 1
+                logger.info(
+                    f"Evicted LRU cache for chat {chat_id} "
+                    f"({size // 1024} KB freed, remaining ~{total_bytes // 1024 // 1024} MB)"
+                )
+            # Один атомарный commit — либо все evict'ы, либо ни одного.
+            # Не оставляет "phantom ranges" без messages при прерывании.
             await self._db.commit()
-            total_bytes -= size
-            evicted += 1
-            logger.info(
-                f"Evicted LRU cache for chat {chat_id} "
-                f"({size // 1024} KB freed, remaining ~{total_bytes // 1024 // 1024} MB)"
-            )
+        except Exception:
+            try:
+                await self._db.rollback()
+            except Exception:
+                pass
+            raise
 
         return evicted
 
@@ -510,6 +523,7 @@ class MessageCache:
             dt = ensure_utc(dt)
             return dt.timestamp()
         except (ValueError, TypeError):
+            logger.warning(f"Невалидная дата при кэшировании: {date_str!r}")
             return None
 
     @staticmethod
