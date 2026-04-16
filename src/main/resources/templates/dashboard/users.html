@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{dashboard/layout :: layout(title=#{users.title}, content=~{::users-content})}">
+<body>
+
+<!--
+  Страница "Пользователи" — только ADMIN (URL-guard в DashboardSecurityConfig).
+  Таблица загружается через GET /dashboard/api/stats/users из js/pages/users.js.
+-->
+<div th:fragment="users-content" class="users">
+    <h1 th:text="#{users.heading}">Пользователи</h1>
+
+    <div th:replace="~{dashboard/fragments/period-filter :: period-filter}"></div>
+
+    <div class="table-wrap">
+        <table class="data-table" id="users-table">
+            <thead>
+            <tr>
+                <th th:text="#{users.col.user}">Пользователь</th>
+                <th th:text="#{users.col.exports}">Экспортов</th>
+                <th th:text="#{users.col.messages}">Сообщений</th>
+                <th th:text="#{users.col.bytes}">Объём</th>
+                <th th:text="#{users.col.lastSeen}">Последний визит</th>
+            </tr>
+            </thead>
+            <tbody id="users-tbody">
+            <tr>
+                <td colspan="5" style="text-align:center;color:var(--muted)"
+                    th:text="#{overview.loading}">Загрузка…</td>
+            </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <script th:src="@{/dashboard/js/pages/users.js}" defer></script>
+</div>
+
+</body>
+</html>

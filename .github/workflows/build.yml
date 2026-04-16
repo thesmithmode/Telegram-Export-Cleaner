@@ -165,7 +165,7 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           source: docker-compose.prod.yml
-          target: /root/telegram-cleaner/
+          target: ${{ secrets.SERVER_DEPLOY_PATH }}/
           strip_components: 0
 
       - name: SSH Deploy
@@ -177,7 +177,7 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           envs: GH_TOKEN,GH_ACTOR
           script: |
-            cd /root/telegram-cleaner
+            cd ${{ secrets.SERVER_DEPLOY_PATH }}
 
             # ── Секреты в .env (не коммитится) ──────────────────────────────
             # Структура сервисов — в docker-compose.prod.yml (в репо).
@@ -187,6 +187,11 @@ jobs:
             TELEGRAM_API_ID=${{ secrets.TELEGRAM_API_ID }}
             TELEGRAM_API_HASH=${{ secrets.TELEGRAM_API_HASH }}
             TELEGRAM_SESSION_STRING=${{ secrets.TELEGRAM_SESSION_STRING }}
+            DASHBOARD_ADMIN_PASSWORD=${{ secrets.DASHBOARD_ADMIN_PASSWORD }}
+            DASHBOARD_TEST_PASSWORD=${{ secrets.DASHBOARD_TEST_PASSWORD }}
+            TRAEFIK_DASHBOARD_DOMAIN=${{ secrets.TRAEFIK_DASHBOARD_DOMAIN }}
+            TRAEFIK_ACME_EMAIL=${{ secrets.TRAEFIK_ACME_EMAIL }}
+            TRAEFIK_DATA_PATH=${{ secrets.TRAEFIK_DATA_PATH }}
             ENVEOF
 
             echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
@@ -202,7 +207,7 @@ jobs:
             echo "⏳ Ждём /api/health (до 90 сек)..."
             HEALTH_OK=""
             for i in $(seq 1 30); do
-              if curl -fsS --max-time 3 http://127.0.0.1:8081/api/health >/dev/null 2>&1; then
+              if docker exec telegram-export-java-bot wget -qO/dev/null http://localhost:8080/api/health 2>/dev/null; then
                 HEALTH_OK=1
                 echo "✅ java-bot жив после $((i*3)) сек"
                 break
@@ -222,7 +227,7 @@ jobs:
 
             # Clean up only our project images (avoid deleting other containers on server).
             # Фильтруем по label=project=telegram-cleaner (задан в Dockerfile), чтобы НЕ снести образы
-            # external-service и других сервисов, живущих на том же хосте.
+            # других сервисов, живущих на том же хосте.
             # until=24h убран намеренно: деплой каждые 2-4 часа, dangling образы моложе 24ч
             # не попадали под фильтр — отсюда накопление до 20+ образов (~6 GB).
             docker image prune --filter "label=project=telegram-cleaner" -f

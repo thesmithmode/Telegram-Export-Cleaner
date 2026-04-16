@@ -209,8 +209,12 @@ class TestQueueConsumerJobManagement:
 
             with patch('queue_consumer.redis.from_url', new_callable=AsyncMock) as mock_redis:
                 mock_client = AsyncMock()
-                mock_client.delete = AsyncMock(return_value=1)
-                mock_client.setex = AsyncMock(return_value=True)
+                mock_client.get = AsyncMock(return_value=None)
+
+                mock_pipe = MagicMock()
+                mock_pipe.execute = AsyncMock(return_value=[1, 1, 1, 1])
+                mock_client.pipeline = MagicMock(return_value=mock_pipe)
+
                 mock_redis.return_value = mock_client
 
                 consumer = QueueConsumer()
@@ -219,13 +223,17 @@ class TestQueueConsumerJobManagement:
                 result = await consumer.mark_job_failed("test_123", "Network timeout")
 
                 assert result is True
-                mock_client.delete.assert_called_once()
-                mock_client.setex.assert_called_once()
-                # Verify error is stored as JSON
-                call_args = mock_client.setex.call_args
-                json_value = json.loads(call_args[0][2])
+                mock_client.pipeline.assert_called_once_with(transaction=True)
+                mock_pipe.delete.assert_any_call("job:processing:test_123")
+                # Verify error is stored as JSON via pipeline setex
+                assert any(
+                    call.args[0] == "job:failed:test_123"
+                    for call in mock_pipe.setex.call_args_list
+                )
+                json_value = json.loads(mock_pipe.setex.call_args_list[0].args[2])
                 assert json_value['error'] == "Network timeout"
                 assert 'timestamp' in json_value
+                mock_pipe.execute.assert_awaited_once()
 
     async def test_get_queue_stats_returns_count(self):
         with patch('queue_consumer.settings') as mock_settings:
@@ -698,12 +706,16 @@ class TestStagingDurability:
         })
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=staging_meta)
-        mock_client.lrem = AsyncMock()
-        mock_client.delete = AsyncMock()
+
+        mock_pipe = MagicMock()
+        mock_pipe.execute = AsyncMock(return_value=[1, 1, 1, 1, 1])
+        mock_client.pipeline = MagicMock(return_value=mock_pipe)
+
         consumer = self._make_consumer(mock_client)
         await consumer.mark_job_failed("task_123", "some error")
 
-        mock_client.srem.assert_called_with("staging:jobs", "task_123")
-        mock_client.lrem.assert_called_once_with(
+        mock_client.pipeline.assert_called_once_with(transaction=True)
+        mock_pipe.srem.assert_called_with("staging:jobs", "task_123")
+        mock_pipe.lrem.assert_called_once_with(
             "telegram_export_processing", 1, '{"task_id":"task_123"}'
         )

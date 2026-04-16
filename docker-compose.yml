@@ -62,9 +62,13 @@ services:
       - REDIS_QUEUE_NAME=${REDIS_QUEUE_NAME:-telegram_export}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_BOT_USERNAME=${TELEGRAM_BOT_USERNAME:-ExportCleanerBot}
+      # Dashboard SQLite — путь внутри контейнера, файл живёт в volume dashboard_data
+      - DASHBOARD_DB_PATH=${DASHBOARD_DB_PATH:-/data/stats/dashboard.db}
     volumes:
       - java_import:/data/import
       - java_export:/data/export
+      # Dashboard БД (статистика, логины) — переживает рестарты контейнера
+      - dashboard_data:/data/stats
     # Снижено с 1024m: кэш сообщений больше не в JVM, достаточно 768m.
     mem_limit: 768m
     cpus: '0.5'
@@ -169,11 +173,9 @@ volumes:
     driver: local
   java_export:
     driver: local
-  # SQLite кэш сообщений на диске (HDD/SSD).
-  # Для монтирования конкретного HDD пути используйте:
-  #   driver_opts:
-  #     type: none
-  #     o: bind
-  #     device: /mnt/hdd/telegram-cache
   cache_data:
+    driver: local
+  # Dashboard SQLite (статистика бота, логины веб-UI). Маленький объём,
+  # активные write — предпочтительно SSD.
+  dashboard_data:
     driver: local

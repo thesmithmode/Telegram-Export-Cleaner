@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title th:text="#{login.title}">Login — Dashboard</title>
+    <link rel="stylesheet" th:href="@{/dashboard/css/app.css}">
+</head>
+<body class="login-body">
+<main class="login-wrap">
+    <form class="login-form" th:action="@{/dashboard/login}" method="post">
+        <h1 class="login-form__title" th:text="#{login.heading}">Вход в дашборд</h1>
+
+        <div th:if="${loginError}" class="login-form__error"
+             th:text="#{login.error}">Неверный логин или пароль</div>
+        <div th:if="${loggedOut}" class="login-form__notice"
+             th:text="#{login.loggedOut}">Вы вышли из системы</div>
+
+        <label class="login-form__field">
+            <span th:text="#{login.username}">Имя пользователя</span>
+            <input type="text" name="username" autocomplete="username"
+                   required autofocus>
+        </label>
+
+        <label class="login-form__field">
+            <span th:text="#{login.password}">Пароль</span>
+            <input type="password" name="password" autocomplete="current-password"
+                   required>
+        </label>
+
+        <input type="hidden" th:name="${_csrf?.parameterName}"
+               th:value="${_csrf?.token}">
+
+        <button type="submit" class="login-form__submit"
+                th:text="#{login.submit}">Войти</button>
+    </form>
+</main>
+</body>
+</html>

@@ -53,10 +53,13 @@ public class ApiExceptionHandler {
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, String>> handleGenericException(Exception ex) {
         log.error("CRITICAL ERROR: {} - {}", ex.getClass().getName(), ex.getMessage(), ex);
-        return ResponseEntity.internalServerError().body(makeError("Внутренняя ошибка сервера", ex));
+        Map<String, String> body = new HashMap<>();
+        body.put("message", "Внутренняя ошибка сервера");
+        body.put("type", "InternalError");
+        return ResponseEntity.internalServerError().body(body);
     }
 
-    
+
     private Map<String, String> makeError(String message, Exception ex) {
         Map<String, String> body = new HashMap<>();
         body.put("message", message != null ? message : "Unknown error");

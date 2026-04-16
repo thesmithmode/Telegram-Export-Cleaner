@@ -81,7 +81,11 @@ class JavaBotClient:
                 from_date=payload.from_date,
                 to_date=payload.to_date,
                 keywords=payload.keywords,
-                exclude_keywords=payload.exclude_keywords
+                exclude_keywords=payload.exclude_keywords,
+                task_id=payload.task_id,
+                bot_user_id=payload.user_id,
+                chat_title=payload.chat_title,
+                messages_count=payload.actual_count,
             )
         finally:
             try:
@@ -177,14 +181,22 @@ class JavaBotClient:
         to_date: Optional[str] = None,
         keywords: Optional[str] = None,
         exclude_keywords: Optional[str] = None,
+        task_id: Optional[str] = None,
+        bot_user_id: Optional[int] = None,
+        chat_title: Optional[str] = None,
+        messages_count: Optional[int] = None,
     ) -> Optional[str]:
         url = f"{self.base_url}/api/convert"
-        
+
         data = {}
         if from_date: data["startDate"] = from_date[:10]
         if to_date: data["endDate"] = to_date[:10]
         if keywords: data["keywords"] = keywords
         if exclude_keywords: data["excludeKeywords"] = exclude_keywords
+        if task_id: data["taskId"] = task_id
+        if bot_user_id is not None: data["botUserId"] = str(bot_user_id)
+        if chat_title: data["chatTitle"] = chat_title
+        if messages_count: data["messagesCount"] = str(messages_count)
 
         retry_count = 0
         while retry_count <= self.max_retries:
@@ -231,7 +243,8 @@ class JavaBotClient:
                 if "user_id" in e: new_e["user_id"] = e["user_id"]
                 res.append(new_e)
             return res
-        except Exception:
+        except Exception as e:
+            logger.warning("Entity transformation failed, returning original: %s", e)
             return entities
 
     @staticmethod
@@ -356,8 +369,8 @@ class JavaBotClient:
                     "text": text,
                 },
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to update queue position: %s", e)
 
     async def aclose(self) -> None:
         await self._http_client.aclose()

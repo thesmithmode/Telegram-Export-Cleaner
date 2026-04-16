@@ -27,7 +27,7 @@ def generate_session():
         return
 
     if len(api_hash) != 32:
-        print("⚠️  API_HASH should be 32 characters, got {len(api_hash)}")
+        print(f"⚠️  API_HASH should be 32 characters, got {len(api_hash)}")
 
     # Create client and start interactive session
     print("\n" + "-" * 80)
