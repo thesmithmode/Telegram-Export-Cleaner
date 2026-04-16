@@ -286,6 +286,154 @@ class TestSendResponse:
         finally:
             p.stop()
 
+    async def test_empty_export_notifies_user_without_java_roundtrip(self):
+        # actual_count=0: перехватываем ДО Java round-trip, пользователю — sendMessage.
+        client, p = _make_client()
+        try:
+            with patch.object(
+                client, "_stream_to_temp_json", new_callable=AsyncMock
+            ) as mock_stream, patch.object(
+                client, "_upload_file_to_java", new_callable=AsyncMock
+            ) as mock_upload, patch.object(
+                client, "_send_file_to_user", new_callable=AsyncMock
+            ) as mock_send, patch.object(
+                client, "notify_user_failure", new_callable=AsyncMock
+            ) as mock_notify_failure:
+                client._http_client.post = AsyncMock(return_value=MagicMock(status_code=200))
+
+                result = await client.send_response(
+                    SendResponsePayload(
+                        task_id="t_empty",
+                        status="completed",
+                        messages=[],
+                        actual_count=0,
+                        user_chat_id=42,
+                        from_date="2026-04-14",
+                        to_date="2026-04-15",
+                    )
+                )
+
+            assert result is True
+            mock_stream.assert_not_called()
+            mock_upload.assert_not_called()
+            mock_send.assert_not_called()
+            mock_notify_failure.assert_not_called()
+
+            client._http_client.post.assert_called_once()
+            call_args = client._http_client.post.call_args
+            url = call_args[0][0]
+            data = call_args[1]["data"]
+            assert "/sendMessage" in url
+            assert "/sendDocument" not in url
+            assert data["chat_id"] == 42
+            assert "не найдено" in data["text"]
+            assert "2026-04-14" in data["text"]
+            assert "2026-04-15" in data["text"]
+        finally:
+            p.stop()
+
+    async def test_empty_export_closes_async_iterator(self):
+        # messages из main.py часто async-итератор — при actual_count==0
+        # мы НЕ итерируем его в _stream_to_temp_json, поэтому send_response
+        # должен явно aclose() чтобы не висел открытый SQLite-курсор/батч.
+        # aclose у native async_generator read-only, поэтому имитируем через
+        # класс с собственным aclose — getattr(..., "aclose", None) его найдёт.
+        client, p = _make_client()
+        try:
+            client._http_client.post = AsyncMock(return_value=MagicMock(status_code=200))
+
+            class TrackedAsyncIter:
+                def __init__(self):
+                    self.closed = False
+
+                def __aiter__(self):
+                    return self
+
+                async def __anext__(self):
+                    raise StopAsyncIteration
+
+                async def aclose(self):
+                    self.closed = True
+
+            messages_iter = TrackedAsyncIter()
+
+            result = await client.send_response(
+                SendResponsePayload(
+                    task_id="t_empty",
+                    status="completed",
+                    messages=messages_iter,
+                    actual_count=0,
+                    user_chat_id=42,
+                )
+            )
+
+            assert result is True
+            assert messages_iter.closed, (
+                "async iterator должен быть закрыт при empty-export early return"
+            )
+        finally:
+            p.stop()
+
+    async def test_empty_export_aclose_swallows_errors(self):
+        # Даже если aclose() кидает — send_response не должен падать,
+        # уведомление пользователю всё равно должно уйти.
+        client, p = _make_client()
+        try:
+            client._http_client.post = AsyncMock(return_value=MagicMock(status_code=200))
+
+            class FailingAclose:
+                def __aiter__(self):
+                    return self
+
+                async def __anext__(self):
+                    raise StopAsyncIteration
+
+                async def aclose(self):
+                    raise RuntimeError("boom")
+
+            result = await client.send_response(
+                SendResponsePayload(
+                    task_id="t_empty",
+                    status="completed",
+                    messages=FailingAclose(),
+                    actual_count=0,
+                    user_chat_id=42,
+                )
+            )
+
+            assert result is True
+            # Уведомление ушло, несмотря на ошибку aclose
+            client._http_client.post.assert_called_once()
+        finally:
+            p.stop()
+
+    async def test_empty_export_without_user_chat_id_is_silent_noop(self):
+        client, p = _make_client()
+        try:
+            with patch.object(
+                client, "_stream_to_temp_json", new_callable=AsyncMock
+            ) as mock_stream, patch.object(
+                client, "_upload_file_to_java", new_callable=AsyncMock
+            ) as mock_upload:
+                client._http_client.post = AsyncMock()
+
+                result = await client.send_response(
+                    SendResponsePayload(
+                        task_id="t_empty",
+                        status="completed",
+                        messages=[],
+                        actual_count=0,
+                        user_chat_id=None,
+                    )
+                )
+
+            assert result is True
+            mock_stream.assert_not_called()
+            mock_upload.assert_not_called()
+            client._http_client.post.assert_not_called()
+        finally:
+            p.stop()
+
 # ---------- _transform_entities (static) --------------------------------
 
 class TestEntityTransformation:
@@ -564,6 +712,93 @@ class TestNotifyUserFailure:
         finally:
             p.stop()
 
+# ---------- notify_empty_export + _format_period ------------------------
+
+@pytest.mark.asyncio
+class TestNotifyEmptyExport:
+
+    async def test_sends_friendly_sendmessage_with_period(self):
+        client, p = _make_client()
+        try:
+            client._http_client.post = AsyncMock(return_value=MagicMock(status_code=200))
+
+            await client.notify_empty_export(
+                123, "task_1", "2026-04-14", "2026-04-15"
+            )
+
+            client._http_client.post.assert_called_once()
+            call_args = client._http_client.post.call_args
+            url = call_args[0][0]
+            data = call_args[1]["data"]
+            assert "/sendMessage" in url
+            assert data["chat_id"] == 123
+            assert "не найдено" in data["text"]
+            # Формат периода: "2026-04-14 — 2026-04-15"
+            assert "2026-04-14" in data["text"]
+            assert "2026-04-15" in data["text"]
+            # Не должно быть префикса "Export failed" — это не ошибка
+            assert "Export failed" not in data["text"]
+
+        finally:
+            p.stop()
+
+    async def test_without_dates_omits_period_prefix(self):
+        # Экспорт без date-фильтра: не должно быть "За выбранный период".
+        client, p = _make_client()
+        try:
+            client._http_client.post = AsyncMock(return_value=MagicMock(status_code=200))
+
+            await client.notify_empty_export(123, "task_1", None, None)
+
+            data = client._http_client.post.call_args[1]["data"]
+            assert "не найдено" in data["text"]
+            assert "За выбранный период" not in data["text"]
+            assert "выбранный период" not in data["text"]
+        finally:
+            p.stop()
+
+    async def test_swallows_http_errors(self):
+        client, p = _make_client()
+        try:
+            client._http_client.post = AsyncMock(
+                side_effect=Exception("connection refused")
+            )
+            # Must not raise
+            await client.notify_empty_export(
+                123, "task_1", "2026-04-14", "2026-04-15"
+            )
+        finally:
+            p.stop()
+
+
+class TestFormatPeriod:
+
+    def test_both_dates(self):
+        assert JavaBotClient._format_period("2026-04-14", "2026-04-15") == (
+            "период 2026-04-14 — 2026-04-15"
+        )
+
+    def test_both_dates_with_time_suffix_is_truncated_to_day(self):
+        # from_date/to_date прилетают в ISO с временем — показываем только день.
+        assert JavaBotClient._format_period(
+            "2026-04-14T00:00:00", "2026-04-15T23:59:59"
+        ) == "период 2026-04-14 — 2026-04-15"
+
+    def test_only_from_date(self):
+        assert JavaBotClient._format_period("2026-04-14", None) == (
+            "период с 2026-04-14"
+        )
+
+    def test_only_to_date(self):
+        assert JavaBotClient._format_period(None, "2026-04-15") == (
+            "период до 2026-04-15"
+        )
+
+    def test_no_dates_returns_none(self):
+        # None сигнализирует notify_empty_export использовать укороченный текст
+        # без префикса «За выбранный период».
+        assert JavaBotClient._format_period(None, None) is None
+
 # ---------- update_queue_position ---------------------------------------
 
 @pytest.mark.asyncio
@@ -782,5 +1017,148 @@ class TestProgressTracker:
         try:
             tracker = client.create_progress_tracker(123, "task_1", topic_name="Мой топик")
             assert tracker._topic_name == "Мой топик"
+        finally:
+            p.stop()
+
+
+# ======================================================================
+# Hotfix @durov: вторая линия защиты от пустого документа
+# ======================================================================
+# actual_count > 0 (напр. 1 служебное сообщение — pin/join), но Java
+# отфильтровала всё в пустой/whitespace текст. Telegram Bot API отклоняет
+# пустой sendDocument → 400 Bad Request. Ожидаемое поведение: перехватываем
+# ДО попытки отправки, шлём notify_empty_export, return True (не False).
+
+@pytest.mark.asyncio
+class TestEmptyCleanedTextFromJava:
+
+    async def test_java_returns_empty_string_triggers_notify_not_senddocument(self):
+        client, p = _make_client()
+        try:
+            messages = [ExportedMessage(id=1, type="message", date="2025-01-01T00:00:00", text="/pin")]
+            with patch.object(client, "_stream_to_temp_json", new_callable=AsyncMock) as mock_stream, \
+                 patch.object(client, "_upload_file_to_java", new_callable=AsyncMock) as mock_upload, \
+                 patch.object(client, "_send_file_to_user", new_callable=AsyncMock) as mock_send, \
+                 patch.object(client, "notify_empty_export", new_callable=AsyncMock) as mock_notify_empty, \
+                 patch.object(client, "notify_user_failure", new_callable=AsyncMock) as mock_notify_fail, \
+                 patch("java_client.os.unlink"), \
+                 patch("java_client.os.path.getsize", return_value=100):
+                mock_stream.return_value = "/tmp/fake.json"
+                mock_upload.return_value = ""  # Java вернула пусто
+
+                result = await client.send_response(SendResponsePayload(
+                    task_id="durov_bug",
+                    status="completed",
+                    messages=messages,
+                    actual_count=1,
+                    user_chat_id=555,
+                    from_date="2025-01-01T00:00:00",
+                    to_date="2025-12-31T23:59:59",
+                ))
+
+            assert result is True, "Пустой результат — это не ошибка, а нулевой выхлоп"
+            mock_notify_empty.assert_called_once()
+            mock_send.assert_not_called(), "sendDocument НЕ должен вызываться с пустым текстом"
+            mock_notify_fail.assert_not_called(), "Это не failure — не шлём 'Ошибка'"
+        finally:
+            p.stop()
+
+    async def test_java_returns_whitespace_only_treated_as_empty(self):
+        """Whitespace-only тоже запрещён Telegram-ом для sendDocument."""
+        client, p = _make_client()
+        try:
+            messages = [ExportedMessage(id=1, type="message", date="2025-01-01T00:00:00", text="x")]
+            with patch.object(client, "_stream_to_temp_json", new_callable=AsyncMock) as mock_stream, \
+                 patch.object(client, "_upload_file_to_java", new_callable=AsyncMock) as mock_upload, \
+                 patch.object(client, "_send_file_to_user", new_callable=AsyncMock) as mock_send, \
+                 patch.object(client, "notify_empty_export", new_callable=AsyncMock) as mock_notify_empty, \
+                 patch("java_client.os.unlink"), \
+                 patch("java_client.os.path.getsize", return_value=100):
+                mock_stream.return_value = "/tmp/fake.json"
+                mock_upload.return_value = "   \n\t  \n  "
+
+                result = await client.send_response(SendResponsePayload(
+                    task_id="t1", status="completed", messages=messages,
+                    actual_count=2, user_chat_id=1,
+                ))
+
+            assert result is True
+            mock_notify_empty.assert_called_once()
+            mock_send.assert_not_called()
+        finally:
+            p.stop()
+
+    async def test_invisible_unicode_treated_as_empty(self):
+        """BOM, zero-width space, format-символы → пустой документ для юзера.
+        Не ловится простым strip() — только через unicodedata.category."""
+        client, p = _make_client()
+        try:
+            messages = [ExportedMessage(id=1, type="message", date="2025-01-01T00:00:00", text="x")]
+            with patch.object(client, "_stream_to_temp_json", new_callable=AsyncMock) as mock_stream, \
+                 patch.object(client, "_upload_file_to_java", new_callable=AsyncMock) as mock_upload, \
+                 patch.object(client, "_send_file_to_user", new_callable=AsyncMock) as mock_send, \
+                 patch.object(client, "notify_empty_export", new_callable=AsyncMock) as mock_notify_empty, \
+                 patch("java_client.os.unlink"), \
+                 patch("java_client.os.path.getsize", return_value=100):
+                mock_stream.return_value = "/tmp/fake.json"
+                mock_upload.return_value = "\ufeff\u200b\u200d\u00a0 \n"
+
+                result = await client.send_response(SendResponsePayload(
+                    task_id="t1", status="completed", messages=messages,
+                    actual_count=1, user_chat_id=1,
+                ))
+
+            assert result is True
+            mock_notify_empty.assert_called_once()
+            mock_send.assert_not_called()
+        finally:
+            p.stop()
+
+    async def test_java_returns_non_empty_still_uploads_document(self):
+        """Регрессия: нормальный путь не сломан защитой от пустоты."""
+        client, p = _make_client()
+        try:
+            messages = [ExportedMessage(id=1, type="message", date="2025-01-01T00:00:00", text="hi")]
+            with patch.object(client, "_stream_to_temp_json", new_callable=AsyncMock) as mock_stream, \
+                 patch.object(client, "_upload_file_to_java", new_callable=AsyncMock) as mock_upload, \
+                 patch.object(client, "_send_file_to_user", new_callable=AsyncMock) as mock_send, \
+                 patch.object(client, "notify_empty_export", new_callable=AsyncMock) as mock_notify_empty, \
+                 patch("java_client.os.unlink"), \
+                 patch("java_client.os.path.getsize", return_value=100):
+                mock_stream.return_value = "/tmp/fake.json"
+                mock_upload.return_value = "Hello, world!"
+                mock_send.return_value = True
+
+                result = await client.send_response(SendResponsePayload(
+                    task_id="t1", status="completed", messages=messages,
+                    actual_count=1, user_chat_id=1, chat_title="Chat",
+                ))
+
+            assert result is True
+            mock_send.assert_called_once()
+            mock_notify_empty.assert_not_called()
+        finally:
+            p.stop()
+
+    async def test_empty_cleaned_text_no_user_chat_id_still_returns_true(self):
+        """Без user_chat_id нечего уведомлять, но и падать не должны."""
+        client, p = _make_client()
+        try:
+            messages = [ExportedMessage(id=1, type="message", date="2025-01-01T00:00:00", text="x")]
+            with patch.object(client, "_stream_to_temp_json", new_callable=AsyncMock) as mock_stream, \
+                 patch.object(client, "_upload_file_to_java", new_callable=AsyncMock) as mock_upload, \
+                 patch.object(client, "notify_empty_export", new_callable=AsyncMock) as mock_notify_empty, \
+                 patch("java_client.os.unlink"), \
+                 patch("java_client.os.path.getsize", return_value=100):
+                mock_stream.return_value = "/tmp/fake.json"
+                mock_upload.return_value = ""
+
+                result = await client.send_response(SendResponsePayload(
+                    task_id="t1", status="completed", messages=messages,
+                    actual_count=1, user_chat_id=None,
+                ))
+
+            assert result is True
+            mock_notify_empty.assert_not_called()
         finally:
             p.stop()

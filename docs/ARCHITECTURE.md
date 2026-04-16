@@ -62,6 +62,7 @@
 - `job:processing:{taskId}` / `job:completed:{taskId}` / `job:failed:{taskId}` — маркеры job lifecycle.
 - `staging:jobs`, `staging:meta:{taskId}` — восстановление задач после падения worker-а.
 - `canonical:{input}` — кэш соответствия входного идентификатора чата canonical ID.
+- `worker:heartbeat:{taskId}` — liveness-маркер долгого экспорта; JSON `{"ts": <unix_ts>, "stage": "start|fetch|convert"}`, TTL 120 сек. Пишется пиггибэком на cancel-poll и перед вызовом `/api/convert`.
 
 ---
 
@@ -87,7 +88,8 @@
 - `BLMOVE` + staging защищает от потери задачи в момент между pop/push.
 - На старте worker делает recovery задач, зависших в staging.
 - TTL у lock/status ключей препятствует «вечным» зависаниям статусов.
-- Отмена поддерживается в обработке: worker периодически проверяет `cancel_export:{taskId}`.
+- Отмена поддерживается через `ExportCancelled`: worker проверяет `cancel_export:{taskId}` каждые 200 сообщений и каждую секунду во время FloodWait (`cancellable_floodwait_sleep`). Текущий батч сохраняется перед выбросом исключения — данные не теряются.
+- Heartbeat (`worker:heartbeat:{taskId}`) даёт observability для долгих экспортов: администратор может диагностировать зависания по `ts` и текущей стадии (`start`/`fetch`/`convert`) без kill-логики.
 
 ---
 

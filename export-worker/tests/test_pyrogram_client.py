@@ -610,8 +610,13 @@ class TestTelegramClientFloodWait:
             async for msg in client.get_chat_history(123, on_floodwait=on_floodwait):
                 messages.append(msg.id)
 
-        assert len(floodwait_calls) == 1, "on_floodwait должен быть вызван ровно один раз"
+        # cancellable_floodwait_sleep зовёт callback периодически (countdown).
+        # Было "ровно 1 раз", стало — хотя бы один раз, начальное значение >= wait_time,
+        # а последующие значения монотонно убывают.
+        assert len(floodwait_calls) >= 1, "on_floodwait должен быть вызван хотя бы раз"
         assert floodwait_calls[0] >= 30, "wait_time должен быть >= значению FloodWait"
+        for earlier, later in zip(floodwait_calls, floodwait_calls[1:]):
+            assert later <= earlier
 
     @pytest.mark.asyncio
     async def test_no_on_floodwait_does_not_crash(self):
@@ -675,8 +680,13 @@ class TestTelegramClientFloodWait:
             async for msg in client.get_chat_history(123, on_floodwait=on_floodwait):
                 messages.append(msg.id)
 
-        assert len(floodwait_calls) == 1, "on_floodwait должен быть вызван ровно один раз"
+        # cancellable_floodwait_sleep зовёт callback периодически (countdown).
+        # Было "ровно 1 раз", стало — хотя бы один раз, начальное значение >= wait_time,
+        # а последующие значения монотонно убывают.
+        assert len(floodwait_calls) >= 1, "on_floodwait должен быть вызван хотя бы раз"
         assert floodwait_calls[0] >= 30, "wait_time должен быть >= значению FloodWait"
+        for earlier, later in zip(floodwait_calls, floodwait_calls[1:]):
+            assert later <= earlier
 
     @pytest.mark.asyncio
     async def test_no_on_floodwait_does_not_crash(self):
@@ -1341,7 +1351,9 @@ class TestGetTopicHistoryDirect:
             messages.append(msg)
 
         assert len(messages) == 2
-        mock_sleep.assert_called_once()
+        # cancellable_floodwait_sleep тикает по секунде — для FloodWait=5
+        # получаем 5 вызовов sleep вместо одного длинного.
+        assert mock_sleep.called
 
     @pytest.mark.asyncio
     @patch("pyrogram_client.MessageConverter")
@@ -1508,3 +1520,191 @@ class TestGetTopicHistoryDirect:
             messages.append(msg)
 
         assert len(messages) == 3
+
+
+# ======================================================================
+# Hotfix @durov / @aeza: отмена и прогресс во время FloodWait
+# ======================================================================
+# Эти тесты гарантируют, что:
+#   1. cancellable_floodwait_sleep выходит быстро при отмене (не ждёт 20+ сек)
+#   2. on_floodwait зовётся периодически (прогресс-бар не замирает)
+#   3. get_chat_history прерывается в середине стрима через is_cancelled_fn
+#   4. ExportCancelled корректно пропагируется наружу из FloodWait-ветки
+
+
+class TestCancellableFloodwaitSleep:
+
+    @pytest.mark.asyncio
+    async def test_no_cancel_no_callback_just_sleeps(self):
+        from pyrogram_client import cancellable_floodwait_sleep
+
+        sleeps = []
+
+        async def fake_sleep(d):
+            sleeps.append(d)
+
+        with patch("pyrogram_client.asyncio.sleep", side_effect=fake_sleep):
+            await cancellable_floodwait_sleep(3.0)
+
+        # Tick=1.0s → три итерации по 1 секунде
+        assert sum(sleeps) == pytest.approx(3.0)
+
+    @pytest.mark.asyncio
+    async def test_exits_immediately_on_cancel(self):
+        from pyrogram_client import cancellable_floodwait_sleep, ExportCancelled
+
+        async def is_cancelled():
+            return True
+
+        with patch("pyrogram_client.asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(ExportCancelled):
+                await cancellable_floodwait_sleep(30.0, is_cancelled_fn=is_cancelled)
+
+    @pytest.mark.asyncio
+    async def test_exits_mid_wait_when_cancel_becomes_true(self):
+        """FloodWait 20 сек, юзер нажал /cancel на 3-й секунде — выходим через ~3 сек,
+        а не ждём 20. Это ядро фикса @aeza."""
+        from pyrogram_client import cancellable_floodwait_sleep, ExportCancelled
+
+        tick_count = {"n": 0}
+
+        async def is_cancelled():
+            tick_count["n"] += 1
+            return tick_count["n"] >= 3  # отменяем на 3-й проверке
+
+        with patch("pyrogram_client.asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(ExportCancelled):
+                await cancellable_floodwait_sleep(20.0, is_cancelled_fn=is_cancelled)
+
+        # Выход должен произойти до окончания 20 сек
+        assert tick_count["n"] == 3
+
+    @pytest.mark.asyncio
+    async def test_on_floodwait_called_initially_and_periodically(self):
+        """Прогресс не должен замирать: on_floodwait зовётся (1) сразу и
+        (2) каждые progress_interval секунд. Ядро фикса 'прогресс во время FloodWait'."""
+        from pyrogram_client import cancellable_floodwait_sleep
+
+        calls = []
+
+        async def on_floodwait(remaining):
+            calls.append(remaining)
+
+        with patch("pyrogram_client.asyncio.sleep", new_callable=AsyncMock):
+            await cancellable_floodwait_sleep(
+                11.0,
+                on_floodwait=on_floodwait,
+                tick_seconds=1.0,
+                progress_interval=5.0,
+            )
+
+        # Инициальный callback + ~2 периодических за 11 секунд (на 5-й и 10-й)
+        assert len(calls) >= 3
+        # Первый callback — начальное значение (~11)
+        assert calls[0] >= 10
+        # Значения должны монотонно убывать
+        for earlier, later in zip(calls, calls[1:]):
+            assert later <= earlier
+
+    @pytest.mark.asyncio
+    async def test_on_floodwait_exception_does_not_break_sleep(self):
+        """Ошибка в UI-callback-е не должна ломать sleep — экспорт продолжается."""
+        from pyrogram_client import cancellable_floodwait_sleep
+
+        async def broken_callback(remaining):
+            raise RuntimeError("UI failed")
+
+        with patch("pyrogram_client.asyncio.sleep", new_callable=AsyncMock):
+            # Must not raise — sleep finishes cleanly despite callback errors
+            await cancellable_floodwait_sleep(2.0, on_floodwait=broken_callback)
+
+    @pytest.mark.asyncio
+    async def test_is_cancelled_redis_error_does_not_break_sleep(self):
+        """Redis упал → is_cancelled_fn бросил — sleep продолжается, а не падает."""
+        from pyrogram_client import cancellable_floodwait_sleep
+
+        async def broken_check():
+            raise ConnectionError("Redis down")
+
+        with patch("pyrogram_client.asyncio.sleep", new_callable=AsyncMock):
+            await cancellable_floodwait_sleep(2.0, is_cancelled_fn=broken_check)
+
+
+class TestGetChatHistoryCancel:
+
+    def _make_msg(self, i):
+        return MagicMock(
+            id=i,
+            date=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            text=f"m{i}",
+            entities=None, media=None, from_user=None, forward_from=None,
+            forward_sender_name=None, forward_date=None, edit_date=None,
+            reply_to_message_id=None, caption=None, caption_entities=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_floodwait_with_cancel_returns_without_yield(self):
+        """После FloodWait пользователь отменил — get_chat_history ловит
+        ExportCancelled и возвращает (а не пробрасывает)."""
+        from pyrogram.errors import FloodWait
+
+        client = TelegramClient()
+        client.is_connected = True
+
+        async def mock_generator(*a, **kw):
+            yield self._make_msg(5)
+            raise FloodWait(value=1)
+
+        client.client = AsyncMock()
+        client.client.get_chat_history = mock_generator
+
+        async def is_cancelled():
+            # Возвращаем True при первой же проверке внутри cancellable sleep
+            return True
+
+        with patch("pyrogram_client.asyncio.sleep", new_callable=AsyncMock):
+            collected = []
+            async for msg in client.get_chat_history(
+                123, is_cancelled_fn=is_cancelled
+            ):
+                collected.append(msg.id)
+
+        # Первое сообщение успели отдать, затем упал FloodWait,
+        # проверка отмены сразу вернула True → чистый выход
+        assert collected == [5]
+
+    @pytest.mark.asyncio
+    async def test_cancel_check_redis_error_is_swallowed(self):
+        """Если Redis упал во время FloodWait — не должны бросать ExportCancelled
+        и должны продолжить retry."""
+        from pyrogram.errors import FloodWait
+
+        client = TelegramClient()
+        client.is_connected = True
+
+        call_count = {"n": 0}
+
+        async def mock_generator(*a, **kw):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                yield self._make_msg(1)
+                raise FloodWait(value=1)
+            else:
+                yield self._make_msg(1)  # дубль, будет скипнут
+
+        client.client = AsyncMock()
+        client.client.get_chat_history = mock_generator
+
+        async def broken_check():
+            raise ConnectionError("Redis down")
+
+        with patch("pyrogram_client.asyncio.sleep", new_callable=AsyncMock):
+            collected = []
+            async for msg in client.get_chat_history(
+                123, is_cancelled_fn=broken_check
+            ):
+                collected.append(msg.id)
+
+        # Экспорт прошёл до конца несмотря на сломанный Redis check
+        assert collected == [1]
+        assert call_count["n"] == 2
