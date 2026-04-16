@@ -27,33 +27,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/**
- * Telegram-бот для запуска экспорта чатов (Версия 10.0.0).
- *
- * <p>Принимает идентификатор целевого чата в формате username (@channel) или ссылки
- * (https://t.me/channel), после чего предлагает интерактивный wizard выбора диапазона
- * экспорта через inline-кнопки.</p>
- *
- * <h3>Состояния сессии</h3>
- * <ul>
- *   <li>IDLE — ожидание username или ссылки</li>
- *   <li>AWAITING_DATE_CHOICE — показан wizard: «📦 Весь чат» или «📅 Указать даты»</li>
- *   <li>AWAITING_FROM_DATE — ввод начальной даты (дд.мм.гггг) или кнопка «⏮ С начала чата»</li>
- *   <li>AWAITING_TO_DATE — ввод конечной даты (дд.мм.гггг) или кнопка «⏭ До сегодня»</li>
- * </ul>
- *
- * <h3>Команды</h3>
- * <ul>
- *   <li>/start — справка, автоматически снимает устаревшую reply-клавиатуру</li>
- *   <li>/cancel — отмена активного экспорта</li>
- *   <li>@username, https://t.me/username — запуск диалога</li>
- * </ul>
- *
- * <p>Бот работает только в личных сообщениях (private chat). Сообщения из групп игнорируются.</p>
- *
- * <p>Защита от параллельных экспортов через Redis SET NX.
- * Сессии автоматически очищаются через {@link #evictStaleSessions()} каждые 30 минут.</p>
- */
 @Component
 @ConditionalOnExpression("'${telegram.bot.token:}' != ''")
 public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadUpdateConsumer {
@@ -67,6 +40,10 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
             Pattern.compile("^@([a-zA-Z][a-zA-Z0-9_]{3,})$");
 
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("dd.MM.yyyy");
+    private static final long SESSION_EVICT_DELAY_MS = 30 * 60 * 1000L;
+    private static final String PROMPT_FROM_DATE = "\n\nВведите начальную дату в формате дд.мм.гггг\nНапример: 01.01.2024";
+    private static final String PROMPT_TO_DATE = "\n\nВведите конечную дату в формате дд.мм.гггг\nНапример: 31.12.2025";
+    private static final String PROMPT_TO_DATE_INLINE = " (дд.мм.гггг):";
 
     private static final String HELP_TEXT = """
             Этот бот экспортирует историю Telegram-чата и отправляет очищенный текст.
@@ -248,9 +225,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
             case CB_DATE_RANGE -> {
                 session.setState(UserSession.State.AWAITING_FROM_DATE);
                 messenger.editMessage(chatId, messageId,
-                        "📅 Чат: " + session.getChatDisplay()
-                                + "\n\nВведите начальную дату в формате дд.мм.гггг"
-                                + "\nНапример: 01.01.2024",
+                        "📅 Чат: " + session.getChatDisplay() + PROMPT_FROM_DATE,
                         buildFromDateKeyboard());
             }
             case CB_FROM_START -> {
@@ -258,9 +233,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
                 session.setState(UserSession.State.AWAITING_TO_DATE);
                 messenger.editMessage(chatId, messageId,
                         "📅 Чат: " + session.getChatDisplay()
-                                + "\nОт: начало чата"
-                                + "\n\nВведите конечную дату в формате дд.мм.гггг"
-                                + "\nНапример: 31.12.2025",
+                                + "\nОт: начало чата" + PROMPT_TO_DATE,
                         buildToDateKeyboard());
             }
             case CB_TO_TODAY -> {
@@ -283,9 +256,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
                 session.setToDate(null);
                 session.setState(UserSession.State.AWAITING_FROM_DATE);
                 messenger.editMessage(chatId, messageId,
-                        "📅 Чат: " + session.getChatDisplay()
-                                + "\n\nВведите начальную дату в формате дд.мм.гггг"
-                                + "\nНапример: 01.01.2024",
+                        "📅 Чат: " + session.getChatDisplay() + PROMPT_FROM_DATE,
                         buildFromDateKeyboard());
             }
             case CB_CANCEL_EXPORT -> {
@@ -307,7 +278,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         session.setFromDate(date.atStartOfDay().toString());
         session.setState(UserSession.State.AWAITING_TO_DATE);
         messenger.sendWithKeyboard(chatId,
-                "📅 От: " + date.format(DATE_FORMAT) + "\n\nВведите конечную дату (дд.мм.гггг):",
+                "📅 От: " + date.format(DATE_FORMAT) + "\n\nВведите конечную дату" + PROMPT_TO_DATE_INLINE,
                 buildToDateKeyboard());
     }
 
@@ -360,18 +331,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         boolean fromCache = jobProducer.isLikelyCached(targetIdentifier);
         long pendingInQueue = jobProducer.getQueueLength();
         boolean hasActiveJob = jobProducer.hasActiveProcessingJob();
-        long aheadCount = (pendingInQueue - 1) + (hasActiveJob ? 1 : 0);
-        long myPosition = pendingInQueue + (hasActiveJob ? 1 : 0);
-
-        String queueInfo;
-        if (fromCache) {
-            queueInfo = "\n\n⚡ Данные в кэше — результат будет быстро!";
-        } else if (aheadCount <= 0) {
-            queueInfo = "\n\n⚙️ Задача поставлена в работу, ожидайте...";
-        } else {
-            queueInfo = String.format("\n\n📋 Вы в очереди: позиция %d\nВпереди %d задач(и)",
-                    myPosition, aheadCount);
-        }
+        String queueInfo = buildQueueInfoText(fromCache, pendingInQueue, hasActiveJob);
 
         String resultText = String.format(
                 "⏳ Задача принята!\n\nID: %s\nЧат: %s%s%s",
@@ -402,9 +362,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         session.reset();
     }
 
-    /**
-     * Отправляет меню выбора диапазона дат с inline-кнопками.
-     */
+    
     private void sendDateChoiceMenu(long chatId, String display) {
         messenger.sendWithKeyboard(chatId,
                 "📋 Чат: " + display + "\n\nВыберите диапазон экспорта:",
@@ -449,11 +407,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
                 .build();
     }
 
-    /**
-     * Быстрый экспорт за последние N календарных дней (включая сегодня).
-     * Устанавливает fromDate = (сегодня - (days - 1)), toDate = null (= до сегодня)
-     * и сразу стартует задачу, редактируя исходное сообщение выбора диапазона.
-     */
+    
     private void startQuickRangeExport(long chatId, long userId, int messageId, int days) {
         UserSession session = getSession(userId);
         LocalDate from = LocalDate.now().minusDays(days - 1L);
@@ -492,10 +446,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
                 .build();
     }
 
-    /**
-     * Проверяет наличие активного экспорта у пользователя.
-     * Если есть — отправляет уведомление и возвращает true.
-     */
+    
     private boolean checkActiveExportAndNotify(long chatId, long userId) {
         String activeTaskId = jobProducer.getActiveExport(userId);
         if (activeTaskId != null) {
@@ -506,11 +457,10 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         return false;
     }
 
-    /**
-     * Очистка сессий старше 2 часов.
-     */
-    @Scheduled(fixedDelay = 30 * 60 * 1000)
+    
+    @Scheduled(fixedDelay = SESSION_EVICT_DELAY_MS)
     public void evictStaleSessions() {
+        if (sessions.isEmpty()) return;
         Instant cutoff = Instant.now().minus(Duration.ofHours(2));
         int beforeSize = sessions.size();
         sessions.entrySet().removeIf(entry -> entry.getValue().getLastAccess().isBefore(cutoff));
@@ -524,6 +474,19 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         UserSession session = sessions.computeIfAbsent(userId, k -> new UserSession());
         session.touch();
         return session;
+    }
+
+    private String buildQueueInfoText(boolean fromCache, long pendingInQueue, boolean hasActiveJob) {
+        if (fromCache) {
+            return "\n\n⚡ Данные в кэше — результат будет быстро!";
+        }
+        // pendingInQueue includes this job; aheadCount excludes it
+        long aheadCount = (pendingInQueue - 1) + (hasActiveJob ? 1 : 0);
+        long myPosition = pendingInQueue + (hasActiveJob ? 1 : 0);
+        if (aheadCount <= 0) {
+            return "\n\n⚙️ Задача поставлена в работу, ожидайте...";
+        }
+        return String.format("\n\n📋 Вы в очереди: позиция %d\nВпереди %d задач(и)", myPosition, aheadCount);
     }
 
     private String buildDateInfoText(UserSession session) {

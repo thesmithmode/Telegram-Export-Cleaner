@@ -1,14 +1,3 @@
-"""
-JSON Converter: Pyrogram Message → Telegram Desktop export format.
-
-Converts Pyrogram Message objects to result.json compatible format.
-Handles:
-- Text and entities (formatting)
-- Media metadata (photo, video, audio, etc)
-- Forwarded messages
-- Edited messages
-- User information
-"""
 
 import logging
 from typing import Optional, List, Any
@@ -18,9 +7,7 @@ from models import ExportedMessage, MessageEntity as MessageEntityModel
 
 logger = logging.getLogger(__name__)
 
-
 class MessageConverter:
-    """Converter from Pyrogram Message to result.json format."""
 
     # Entity type mapping: Pyrogram → result.json
     ENTITY_TYPE_MAP = {
@@ -64,11 +51,6 @@ class MessageConverter:
 
     @staticmethod
     def get_user_display_name(user: Optional[pyrogram_types.User]) -> Optional[str]:
-        """
-        Convert User object to display name string.
-
-        Returns: "FirstName LastName", "@username", "ID:123", or None
-        """
         if not user:
             return None
 
@@ -93,13 +75,6 @@ class MessageConverter:
     def convert_entities(
         entities: Optional[List[pyrogram_types.MessageEntity]]
     ) -> Optional[List[MessageEntityModel]]:
-        """
-        Convert MessageEntity list to result.json format.
-
-        MessageEntity has: type, offset (UTF-16 code unit position), length (UTF-16 code units).
-        Telegram API uses UTF-16 offsets — emoji outside BMP (U+10000+) count as 2 units.
-        Pyrogram already returns UTF-16 offsets, so we pass them through unchanged.
-        """
         if not entities:
             return None
 
@@ -137,11 +112,6 @@ class MessageConverter:
 
     @staticmethod
     def get_media_type(media: Optional[Any]) -> Optional[str]:
-        """
-        Determine media type from Pyrogram media object.
-
-        Returns: "photo", "video", "audio", etc., or None
-        """
         if not media:
             return None
 
@@ -150,18 +120,6 @@ class MessageConverter:
 
     @staticmethod
     def convert_message(message: pyrogram_types.Message) -> ExportedMessage:
-        """
-        Convert Pyrogram Message to result.json format.
-
-        Main conversion logic:
-        1. Basic fields (id, type, date, text)
-        2. User information
-        3. Text entities (formatting)
-        4. Media metadata
-        5. Forward information
-        6. Edit information
-        7. Reply information
-        """
         try:
             # Basic fields
             exported = ExportedMessage(
@@ -236,7 +194,6 @@ class MessageConverter:
     def convert_messages(
         messages: List[pyrogram_types.Message]
     ) -> List[ExportedMessage]:
-        """Convert list of messages."""
         result = []
         for message in messages:
             try:
