@@ -22,7 +22,7 @@ LABEL project=telegram-cleaner
 WORKDIR /app
 RUN apk add --no-cache curl && \
     addgroup -S app && adduser -S app -G app && \
-    mkdir -p /data/import /data/export && chown -R app:app /data
+    mkdir -p /data/import /data/export /data/stats && chown -R app:app /data
 COPY --from=build --chown=app:app /app/target/telegram-cleaner-*.jar app.jar
 USER app
 
