@@ -37,7 +37,7 @@ class MessageFilterFactoryTest {
         @Test
         @DisplayName("Все параметры null → null")
         void allNullReturnsNull() {
-            assertThat(MessageFilter.fromParameters(null, null, null, null)).isNull();
+            assertThat(MessageFilter.fromParameters((String) null, null, null, null)).isNull();
         }
 
         @Test
@@ -83,7 +83,7 @@ class MessageFilterFactoryTest {
         @Test
         @DisplayName("Одно ключевое слово — проходят совпадающие, отсеиваются несовпадающие")
         void singleKeyword() throws Exception {
-            MessageFilter filter = MessageFilter.fromParameters(null, null, "hello", null);
+            MessageFilter filter = MessageFilter.fromParameters((String) null, null, "hello", null);
             assertThat(filter.matches(msg("2025-01-01T00:00:00", "Hello world"))).isTrue();
             assertThat(filter.matches(msg("2025-01-01T00:00:00", "Goodbye"))).isFalse();
         }
@@ -91,7 +91,7 @@ class MessageFilterFactoryTest {
         @Test
         @DisplayName("Несколько ключевых слов через запятую — совпадение по любому из них (OR)")
         void multipleKeywordsCommaSeparated() throws Exception {
-            MessageFilter filter = MessageFilter.fromParameters(null, null, "java,spring", null);
+            MessageFilter filter = MessageFilter.fromParameters((String) null, null, "java,spring", null);
             assertThat(filter.matches(msg("2025-01-01T00:00:00", "java rocks"))).isTrue();
             assertThat(filter.matches(msg("2025-01-01T00:00:00", "spring boot"))).isTrue();
             assertThat(filter.matches(msg("2025-01-01T00:00:00", "python rules"))).isFalse();
@@ -100,7 +100,7 @@ class MessageFilterFactoryTest {
         @Test
         @DisplayName("Пробелы вокруг ключевых слов обрезаются — фильтрация работает корректно")
         void keywordsAreTrimmed() throws Exception {
-            MessageFilter filter = MessageFilter.fromParameters(null, null, " java , spring ", null);
+            MessageFilter filter = MessageFilter.fromParameters((String) null, null, " java , spring ", null);
             assertThat(filter.matches(msg("2025-01-01T00:00:00", "java code"))).isTrue();
             assertThat(filter.matches(msg("2025-01-01T00:00:00", "spring framework"))).isTrue();
         }
@@ -108,7 +108,7 @@ class MessageFilterFactoryTest {
         @Test
         @DisplayName("excludeKeywords — сообщения с исключённым словом отсеиваются")
         void setsExcludeKeywords() throws Exception {
-            MessageFilter filter = MessageFilter.fromParameters(null, null, null, "spam");
+            MessageFilter filter = MessageFilter.fromParameters((String) null, null, null, "spam");
             assertThat(filter.matches(msg("2025-01-01T00:00:00", "buy cheap spam now"))).isFalse();
             assertThat(filter.matches(msg("2025-01-01T00:00:00", "normal message"))).isTrue();
         }
