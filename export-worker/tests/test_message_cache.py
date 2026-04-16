@@ -2,6 +2,9 @@
 import time
 import pytest
 import asyncio
+from unittest.mock import patch
+
+import aiosqlite
 
 from models import ExportedMessage
 from message_cache import MessageCache
@@ -235,6 +238,65 @@ class TestEviction:
         await cache.store_messages(123, _make_messages(range(1, 16)))
         assert await cache.count_messages(123, 1, 15) == 15
         assert await cache.count_messages(123, 5, 10) == 6
+
+    @pytest.mark.asyncio
+    async def test_evict_retries_on_busy(self, tmp_path):
+        cache = MessageCache(db_path=str(tmp_path / "retry.db"), max_disk_bytes=0)
+        await cache.initialize()
+        try:
+            call_count = 0
+            raised_errors: list[aiosqlite.OperationalError] = []
+            original = cache._evict_impl
+
+            async def flaky_evict():
+                nonlocal call_count
+                call_count += 1
+                if call_count < 3:
+                    err = aiosqlite.OperationalError("database is locked")
+                    raised_errors.append(err)
+                    raise err
+                return await original()
+
+            with patch.object(cache, "_evict_impl", side_effect=flaky_evict):
+                result = await cache.evict_if_needed(max_retries=3)
+
+            assert call_count == 3
+            assert len(raised_errors) == 2  # первые 2 попытки упали с busy
+            assert all("locked" in str(e) for e in raised_errors)
+            assert result == 0  # бюджет 0 → таргет 0 → nothing to evict
+        finally:
+            await cache.close()
+
+    @pytest.mark.asyncio
+    async def test_evict_gives_up_after_max_retries(self, tmp_path, caplog):
+        cache = MessageCache(db_path=str(tmp_path / "busy.db"), max_disk_bytes=0)
+        await cache.initialize()
+        try:
+            async def always_busy():
+                raise aiosqlite.OperationalError("database is locked")
+
+            with patch.object(cache, "_evict_impl", side_effect=always_busy):
+                with caplog.at_level("WARNING"):
+                    result = await cache.evict_if_needed(max_retries=3)
+
+            assert result == 0
+            assert any("busy" in r.message.lower() for r in caplog.records)
+        finally:
+            await cache.close()
+
+    @pytest.mark.asyncio
+    async def test_evict_reraises_other_errors(self, tmp_path):
+        cache = MessageCache(db_path=str(tmp_path / "err.db"), max_disk_bytes=0)
+        await cache.initialize()
+        try:
+            async def bad_error():
+                raise aiosqlite.OperationalError("no such table: chat_meta")
+
+            with patch.object(cache, "_evict_impl", side_effect=bad_error):
+                with pytest.raises(aiosqlite.OperationalError, match="no such table"):
+                    await cache.evict_if_needed(max_retries=3)
+        finally:
+            await cache.close()
 
 class TestCacheDisabled:
 
@@ -718,3 +780,57 @@ class TestTopicIsolation:
         # Явно запросить topic_id=0 — тот же результат
         msgs_explicit = await cache.get_messages(100, 0, 10, topic_id=0)
         assert len(msgs_explicit) == 3
+
+
+class TestReopenPersistence:
+    # Кэш лежит на хосте (bind mount). После рестарта/редеплоя контейнера
+    # SQLite-файл тот же — данные и id-ranges должны сохраниться,
+    # повторный initialize() на тот же путь не сбрасывает схему.
+
+    def _make_cache(self, db_path: str) -> MessageCache:
+        return MessageCache(db_path=db_path, max_disk_bytes=10 * 1024 * 1024,
+                            max_messages_per_chat=1000, ttl_seconds=3600)
+
+    @pytest.mark.asyncio
+    async def test_reopen_existing_db_preserves_data(self, tmp_path):
+        db_path = str(tmp_path / "reopen.db")
+
+        first = self._make_cache(db_path)
+        await first.initialize()
+        await first.store_messages(555, _make_messages([1, 2, 3]))
+        await first.close()
+
+        second = self._make_cache(db_path)
+        await second.initialize()
+        try:
+            msgs = await second.get_messages(555, 1, 3)
+            assert [m.id for m in msgs] == [1, 2, 3]
+            assert msgs[0].text == "msg_1"
+
+            ranges = await second.get_cached_ranges(555)
+            assert ranges == [[1, 3]]
+        finally:
+            await second.close()
+
+    @pytest.mark.asyncio
+    async def test_reopen_after_full_export_workflow(self, tmp_path):
+        # Эмуляция цикла: воркер поднялся, закэшировал чат, упал/был рестартнут,
+        # воркер поднялся снова — повторный экспорт того же диапазона должен
+        # быть cache HIT (get_missing_ranges → []), никаких запросов к Telegram.
+        db_path = str(tmp_path / "workflow.db")
+
+        first = self._make_cache(db_path)
+        await first.initialize()
+        await first.store_messages(777, _make_messages(list(range(100, 201))))
+        await first.close()
+
+        second = self._make_cache(db_path)
+        await second.initialize()
+        try:
+            missing = await second.get_missing_ranges(777, 100, 200)
+            assert missing == []
+
+            count = await second.count_messages(777, 100, 200)
+            assert count == 101
+        finally:
+            await second.close()

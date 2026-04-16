@@ -1,4 +1,5 @@
 
+import asyncio
 import logging
 import os
 import time
@@ -87,7 +88,31 @@ class MessageCache:
             );
         """)
         await self._db.commit()
-        logger.info(f"MessageCache initialized at {self.db_path}")
+        logger.info("MessageCache initialized at %s", self.db_path)
+        await self._log_startup_state()
+
+    async def _log_startup_state(self) -> None:
+        # Стартовый self-report: если после деплоя bind mount потерялся,
+        # в логах сразу видно chats=0 messages=0 — а не через жалобу юзера.
+        if self._db is None:
+            return
+        async with self._db.execute(
+            "SELECT COUNT(DISTINCT chat_id), COUNT(*), "
+            "COALESCE(SUM(msg_count), 0), COALESCE(SUM(size_bytes), 0), "
+            "COALESCE(MAX(last_accessed), 0) FROM chat_meta"
+        ) as cur:
+            row = await cur.fetchone()
+        chats, topics, messages, size_bytes, last_accessed = row or (0, 0, 0, 0, 0)
+        size_mb = size_bytes / (1024 * 1024)
+        last_write = (
+            datetime.fromtimestamp(last_accessed, tz=timezone.utc).isoformat()
+            if last_accessed else "never"
+        )
+        logger.info(
+            "Cache state at startup: chats=%d topics=%d messages=%d "
+            "size=%.2f MB last_write=%s",
+            chats, topics, messages, size_mb, last_write,
+        )
 
     async def close(self):
         if self._db:
@@ -473,7 +498,23 @@ class MessageCache:
             (time.time(), chat_id, topic_id),
         )
 
-    async def evict_if_needed(self) -> int:
+    async def evict_if_needed(self, max_retries: int = 3) -> int:
+        for attempt in range(max_retries):
+            try:
+                return await self._evict_impl()
+            except aiosqlite.OperationalError as exc:
+                msg = str(exc).lower()
+                if "locked" not in msg and "busy" not in msg:
+                    raise
+                if attempt == max_retries - 1:
+                    logger.warning(
+                        "evict_if_needed: database busy after %d retries, skipping cycle",
+                        max_retries,
+                    )
+                    return 0
+                await asyncio.sleep(0.1 * (2 ** attempt))
+
+    async def _evict_impl(self) -> int:
         if self._db is None:
             return 0
 

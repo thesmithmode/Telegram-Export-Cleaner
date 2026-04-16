@@ -120,7 +120,10 @@ services:
       - STATS_STREAM_MAXLEN=${STATS_STREAM_MAXLEN:-100000}
     volumes:
       - export-data:/data/export
-      - dashboard_data:/data/stats
+      # Dashboard SQLite — host bind mount вне docker volumes, чтобы переживать
+      # compose down / volume rm. Путь на хосте задаётся ${HOST_DATA_PATH} в .env,
+      # директорию готовит админ (chown uid:gid соответствует user'у java-bot).
+      - ${HOST_DATA_PATH:-/var/lib/telegram-cleaner}/dashboard:/data/stats
     networks:
       - traefik-proxy
       - internal
@@ -169,7 +172,10 @@ services:
       - LOG_LEVEL=INFO
       - PYTHONUNBUFFERED=1
     volumes:
-      - cache-data:/data/cache
+      # Message cache SQLite — host bind mount вне docker volumes, чтобы переживать
+      # compose down / volume rm. Путь на хосте задаётся ${HOST_DATA_PATH} в .env,
+      # бэкапится cron'ом на хосте через ops/backup-cache.sh.
+      - ${HOST_DATA_PATH:-/var/lib/telegram-cleaner}/cache:/data/cache
     depends_on:
       java-bot:
         condition: service_healthy
@@ -228,6 +234,6 @@ networks:
 volumes:
   redis-data:
   export-data:
-  cache-data:
-  dashboard_data:
   traefik_acme:
+  # cache-data и dashboard_data переведены на host bind mount (${HOST_DATA_PATH})
+  # для стойкости к любым `compose down`/volume rm.

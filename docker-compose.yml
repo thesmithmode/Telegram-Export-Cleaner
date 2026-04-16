@@ -67,8 +67,9 @@ services:
     volumes:
       - java_import:/data/import
       - java_export:/data/export
-      # Dashboard БД (статистика, логины) — переживает рестарты контейнера
-      - dashboard_data:/data/stats
+      # Dashboard БД (статистика, логины) — bind mount, переживает любые compose операции.
+      # Перед первым запуском: mkdir -p ./dashboard && sudo chown 100:101 ./dashboard
+      - ./dashboard:/data/stats
     # Снижено с 1024m: кэш сообщений больше не в JVM, достаточно 768m.
     mem_limit: 768m
     cpus: '0.5'
@@ -149,9 +150,9 @@ services:
       - ./export-worker/session:/app/session
       # Logs (optional)
       - ./export-worker/logs:/app/logs
-      # SQLite message cache — хранится на диске HDD, переживает рестарты.
-      # Замените ./cache на путь к HDD разделу, если /var не на HDD.
-      - cache_data:/data/cache
+      # SQLite message cache — bind mount на хост, переживает любые compose операции.
+      # Перед первым запуском: mkdir -p ./cache && sudo chown 999:999 ./cache
+      - ./cache:/data/cache
 
     networks:
       - telegram-export
@@ -173,9 +174,5 @@ volumes:
     driver: local
   java_export:
     driver: local
-  cache_data:
-    driver: local
-  # Dashboard SQLite (статистика бота, логины веб-UI). Маленький объём,
-  # активные write — предпочтительно SSD.
-  dashboard_data:
-    driver: local
+  # cache_data и dashboard_data переведены на bind mount (./cache и ./dashboard)
+  # — переживают `compose down`/volume rm.
