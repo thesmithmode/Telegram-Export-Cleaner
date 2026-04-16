@@ -1,11 +1,3 @@
-"""
-Unit tests for models.py
-
-Tests:
-- Pydantic model validation
-- JSON serialization
-- Field validation
-"""
 
 import pytest
 from pydantic import ValidationError
@@ -17,12 +9,9 @@ from models import (
     MessageEntity
 )
 
-
 class TestExportRequest:
-    """Tests for ExportRequest model"""
 
     def test_valid_request(self):
-        """Should create valid ExportRequest"""
         req = ExportRequest(
             task_id="export_12345",
             user_id=123456789,
@@ -36,7 +25,6 @@ class TestExportRequest:
         assert req.limit == 1000
 
     def test_request_with_dates(self):
-        """Should accept ISO date filters"""
         req = ExportRequest(
             task_id="export_12345",
             user_id=123456789,
@@ -49,7 +37,6 @@ class TestExportRequest:
         assert req.to_date == "2025-12-31T23:59:59"
 
     def test_request_with_date_only_format(self):
-        """Should accept YYYY-MM-DD date format"""
         req = ExportRequest(
             task_id="export_12345",
             user_id=123456789,
@@ -62,7 +49,6 @@ class TestExportRequest:
         assert req.to_date == "2025-12-31"
 
     def test_request_with_datetime_no_seconds_format(self):
-        """Should accept YYYY-MM-DDTHH:MM date format (without seconds)"""
         req = ExportRequest(
             task_id="export_12345",
             user_id=123456789,
@@ -75,7 +61,6 @@ class TestExportRequest:
         assert req.to_date == "2026-03-30T23:59"
 
     def test_request_invalid_from_date_rejects(self):
-        """Should reject invalid from_date (e.g. impossible date)"""
         with pytest.raises(ValidationError) as exc_info:
             ExportRequest(
                 task_id="export_12345",
@@ -86,7 +71,6 @@ class TestExportRequest:
         assert "from_date" in str(exc_info.value) or "Неверный формат" in str(exc_info.value)
 
     def test_request_invalid_to_date_rejects(self):
-        """Should reject invalid to_date (wrong format)"""
         with pytest.raises(ValidationError):
             ExportRequest(
                 task_id="export_12345",
@@ -96,7 +80,6 @@ class TestExportRequest:
             )
 
     def test_request_invalid_date_garbage_rejects(self):
-        """Should reject completely invalid date strings"""
         with pytest.raises(ValidationError):
             ExportRequest(
                 task_id="export_12345",
@@ -106,7 +89,6 @@ class TestExportRequest:
             )
 
     def test_request_none_dates_accepted(self):
-        """Should accept None dates without validation error"""
         req = ExportRequest(
             task_id="export_12345",
             user_id=123456789,
@@ -118,7 +100,6 @@ class TestExportRequest:
         assert req.to_date is None
 
     def test_request_missing_required_field(self):
-        """Should fail without required fields"""
         with pytest.raises(ValidationError):
             ExportRequest(
                 user_id=123456789,
@@ -127,7 +108,6 @@ class TestExportRequest:
             )
 
     def test_request_default_values(self):
-        """Should have sensible defaults"""
         req = ExportRequest(
             task_id="export_12345",
             user_id=123456789,
@@ -140,7 +120,6 @@ class TestExportRequest:
         assert req.to_date is None
 
     def test_request_json_serialization(self):
-        """Should serialize to JSON"""
         req = ExportRequest(
             task_id="export_12345",
             user_id=123456789,
@@ -153,12 +132,9 @@ class TestExportRequest:
         assert json_data["task_id"] == "export_12345"
         assert json_data["limit"] == 1000
 
-
 class TestMessageEntity:
-    """Tests for MessageEntity model"""
 
     def test_simple_entity(self):
-        """Should create simple entity"""
         entity = MessageEntity(
             type="bold",
             offset=0,
@@ -172,7 +148,6 @@ class TestMessageEntity:
         assert entity.user_id is None
 
     def test_text_link_entity(self):
-        """Should handle text_link with URL"""
         entity = MessageEntity(
             type="text_link",
             offset=0,
@@ -184,7 +159,6 @@ class TestMessageEntity:
         assert entity.url == "https://example.com"
 
     def test_text_mention_entity(self):
-        """Should handle text_mention with user_id"""
         entity = MessageEntity(
             type="text_mention",
             offset=0,
@@ -196,7 +170,6 @@ class TestMessageEntity:
         assert entity.user_id == 123456789
 
     def test_entity_missing_required(self):
-        """Should fail without required fields"""
         with pytest.raises(ValidationError):
             MessageEntity(
                 type="bold"
@@ -204,17 +177,6 @@ class TestMessageEntity:
             )
 
     def test_emoji_entity_offset_utf16_convention(self):
-        """Telegram uses UTF-16 code unit offsets, not Python string indices.
-
-        An emoji like 🎉 (U+1F389) is outside the Basic Multilingual Plane
-        and requires a surrogate pair in UTF-16 — it counts as 2 code units,
-        not 1. If the string is '🎉 text', the bold entity on 'text' must have
-        offset=3 (2 for emoji + 1 for space), NOT offset=2 as Python len() suggests.
-
-        REGRESSION: If this test fails, the docstring was silently reverted to
-        "UTF-8 characters" — verify that json_converter.py passes Pyrogram's
-        UTF-16 offsets through unchanged (no conversion).
-        """
         emoji_text = "🎉 text"
 
         # Python len() sees 6 characters: emoji=1 code point + space=1 + 'text'=4.
@@ -243,11 +205,6 @@ class TestMessageEntity:
         assert entity.length == 4  # 't','e','x','t' — all BMP, 1 unit each
 
     def test_multi_emoji_offsets_accumulate(self):
-        """Multiple emoji compounds the UTF-16 vs Python index divergence.
-
-        '🔥🎉 ok' → 2+2+1 = 5 UTF-16 units before 'ok', but Python sees 3+1=4.
-        Entity on 'ok' must have offset=5 in Telegram convention.
-        """
         text = "🔥🎉 ok"
         # UTF-16 length of prefix "🔥🎉 "
         prefix_utf16 = len("🔥🎉 ".encode("utf-16-le")) // 2
@@ -257,12 +214,9 @@ class TestMessageEntity:
         assert entity.offset == 5
         assert entity.length == 2
 
-
 class TestExportedMessage:
-    """Tests for ExportedMessage model"""
 
     def test_minimal_message(self):
-        """Should create message with minimal fields"""
         msg = ExportedMessage(
             id=123,
             type="message",
@@ -275,7 +229,6 @@ class TestExportedMessage:
         assert msg.text == ""
 
     def test_full_message(self):
-        """Should create message with all fields"""
         msg = ExportedMessage(
             id=123,
             type="message",
@@ -301,7 +254,6 @@ class TestExportedMessage:
         assert msg.width == 1024
 
     def test_message_with_entities(self):
-        """Should handle text entities"""
         msg = ExportedMessage(
             id=123,
             type="message",
@@ -318,7 +270,6 @@ class TestExportedMessage:
         assert msg.text_entities[1].type == "italic"
 
     def test_message_json_serialization(self):
-        """Should serialize to JSON"""
         msg = ExportedMessage(
             id=123,
             type="message",
@@ -333,7 +284,6 @@ class TestExportedMessage:
         assert "from_user" not in json_data  # None values excluded
 
     def test_message_type_validation(self):
-        """Should validate message type"""
         msg = ExportedMessage(
             id=123,
             type="message",  # Should be "message"
@@ -342,12 +292,9 @@ class TestExportedMessage:
 
         assert msg.type == "message"
 
-
 class TestExportResponse:
-    """Tests for ExportResponse model"""
 
     def test_success_response(self):
-        """Should create successful response"""
         response = ExportResponse(
             task_id="export_12345",
             status="completed",
@@ -369,7 +316,6 @@ class TestExportResponse:
         assert len(response.messages) == 1
 
     def test_failed_response(self):
-        """Should create failed response"""
         response = ExportResponse(
             task_id="export_12345",
             status="failed",
@@ -383,7 +329,6 @@ class TestExportResponse:
         assert response.message_count == 0
 
     def test_in_progress_response(self):
-        """Should handle in_progress status"""
         response = ExportResponse(
             task_id="export_12345",
             status="in_progress",
@@ -393,7 +338,6 @@ class TestExportResponse:
         assert response.status == "in_progress"
 
     def test_invalid_status(self):
-        """Should validate status values"""
         with pytest.raises(ValidationError):
             ExportResponse(
                 task_id="export_12345",
@@ -401,7 +345,6 @@ class TestExportResponse:
             )
 
     def test_response_json_serialization(self):
-        """Should serialize response to JSON"""
         response = ExportResponse(
             task_id="export_12345",
             status="completed",
@@ -416,7 +359,6 @@ class TestExportResponse:
         assert json_data["message_count"] == 0
 
     def test_response_with_partial_messages(self):
-        """Should handle partial results on error"""
         response = ExportResponse(
             task_id="export_12345",
             status="failed",
@@ -438,12 +380,9 @@ class TestExportResponse:
         assert response.message_count == 50
         assert len(response.messages) == 50
 
-
 class TestModelIntegration:
-    """Integration tests for model chain"""
 
     def test_request_to_response_flow(self):
-        """Should flow from request through response"""
         # Create request
         request = ExportRequest(
             task_id="export_12345",
@@ -474,7 +413,6 @@ class TestModelIntegration:
         assert response.message_count == 500
 
     def test_json_round_trip(self):
-        """Should survive JSON serialization round-trip"""
         original = ExportRequest(
             task_id="export_12345",
             user_id=123456789,

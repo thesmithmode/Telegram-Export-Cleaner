@@ -19,9 +19,6 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/**
- * Тесты для TelegramExporter - обработка ошибок и граничные условия.
- */
 @DisplayName("TelegramExporter - Error Handling")
 class TelegramExporterErrorHandlingTest {
 

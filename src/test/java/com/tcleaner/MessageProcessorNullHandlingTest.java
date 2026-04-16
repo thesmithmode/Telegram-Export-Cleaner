@@ -10,10 +10,6 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * Тесты для обработки null, пустых и невалидных данных в MessageProcessor.
- * Критично для защиты от NPE на этапе CI.
- */
 @DisplayName("MessageProcessor - Обработка null и edge cases")
 class MessageProcessorNullHandlingTest {
 

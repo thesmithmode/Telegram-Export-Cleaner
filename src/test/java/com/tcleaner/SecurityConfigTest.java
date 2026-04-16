@@ -17,11 +17,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/**
- * Тесты для SecurityConfig.
- *
- * Проверяет корректность конфигурации безопасности, заголовков и аутентификации.
- */
 @SpringBootTest
 @AutoConfigureMockMvc
 @TestPropertySource(properties = "api.key=test-api-key")

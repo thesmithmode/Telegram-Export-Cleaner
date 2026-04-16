@@ -13,20 +13,6 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * Тесты для MarkdownParser.
- * 
- * Ожидаемое поведение:
- * - plain → text
- * - bold → **text**
- * - italic → *text*
- * - code → `text`
- * - pre → ```\ntext\n```
- * - link → text
- * - mention → @username
- * - spoiler → ||text||
- * - underline → <u>text</u>
- */
 @DisplayName("MarkdownParser")
 class MarkdownParserTest {
 

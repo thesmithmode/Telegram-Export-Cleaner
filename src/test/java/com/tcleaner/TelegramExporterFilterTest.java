@@ -18,9 +18,6 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * Тесты для TelegramExporter с фильтрацией через MessageFilter.
- */
 @DisplayName("TelegramExporter - Filter Integration")
 class TelegramExporterFilterTest {
 
