@@ -291,11 +291,11 @@ class QueueConsumer:
             processing_key = f"job:processing:{task_id}"
             failed_key = f"job:failed:{task_id}"
 
-            # Remove from processing
-            await self.redis_client.delete(processing_key)
+            raw = await self.redis_client.get(f"staging:meta:{task_id}")
 
-            # Set failed marker
-            await self.redis_client.setex(
+            pipe = self.redis_client.pipeline(transaction=True)
+            pipe.delete(processing_key)
+            pipe.setex(
                 failed_key,
                 JOB_MARKER_TTL,
                 json.dumps({
@@ -303,13 +303,18 @@ class QueueConsumer:
                     "timestamp": datetime.now().isoformat()
                 })
             )
+            pipe.srem("staging:jobs", task_id)
+            if raw:
+                try:
+                    meta = json.loads(raw)
+                    pipe.lrem(meta["queue"], 1, meta["payload"])
+                except Exception:
+                    pass
+            pipe.delete(f"staging:meta:{task_id}")
+            await pipe.execute()
 
             logger.debug(f"Marked job failed: {task_id}")
-            await self._untrack_staging_job(task_id)
-            await self._remove_from_staging(task_id)
 
-            # Публикуем export.failed в stats stream, чтобы Java ingestion-сервис
-            # обновил статус в dashboard.db (at-least-once; идемпотентно по task_id)
             await self._publish_failed_event(task_id, error)
 
             return True

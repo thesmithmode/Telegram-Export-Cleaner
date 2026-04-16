@@ -1,6 +1,5 @@
 package com.tcleaner;
 import com.tcleaner.core.MessageFilter;
-import com.tcleaner.core.MessageFilterFactory;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -38,13 +37,13 @@ class MessageFilterFactoryTest {
         @Test
         @DisplayName("Все параметры null → null")
         void allNullReturnsNull() {
-            assertThat(MessageFilterFactory.build(null, null, null, null)).isNull();
+            assertThat(MessageFilter.fromParameters(null, null, null, null)).isNull();
         }
 
         @Test
         @DisplayName("Все параметры пустые → null")
         void allBlankReturnsNull() {
-            assertThat(MessageFilterFactory.build("", "  ", "", "")).isNull();
+            assertThat(MessageFilter.fromParameters("", "  ", "", "")).isNull();
         }
     }
 
@@ -55,7 +54,7 @@ class MessageFilterFactoryTest {
         @Test
         @DisplayName("startDate — сообщения до даты отсеиваются")
         void setsStartDate() throws Exception {
-            MessageFilter filter = MessageFilterFactory.build("2025-07-01", null, null, null);
+            MessageFilter filter = MessageFilter.fromParameters("2025-07-01", null, null, null);
             assertThat(filter.matches(msg("2025-06-30T23:59:59", "before"))).isFalse();
             assertThat(filter.matches(msg("2025-07-01T00:00:00", "on start"))).isTrue();
             assertThat(filter.matches(msg("2025-08-01T00:00:00", "after"))).isTrue();
@@ -64,7 +63,7 @@ class MessageFilterFactoryTest {
         @Test
         @DisplayName("endDate — сообщения после даты отсеиваются")
         void setsEndDate() throws Exception {
-            MessageFilter filter = MessageFilterFactory.build(null, "2025-06-30", null, null);
+            MessageFilter filter = MessageFilter.fromParameters(null, "2025-06-30", null, null);
             assertThat(filter.matches(msg("2025-06-30T23:59:59", "on end"))).isTrue();
             assertThat(filter.matches(msg("2025-07-01T00:00:00", "after"))).isFalse();
         }
@@ -72,7 +71,7 @@ class MessageFilterFactoryTest {
         @Test
         @DisplayName("Невалидная дата → исключение DateTimeParseException")
         void invalidDateThrows() {
-            assertThatThrownBy(() -> MessageFilterFactory.build("not-a-date", null, null, null))
+            assertThatThrownBy(() -> MessageFilter.fromParameters("not-a-date", null, null, null))
                     .isInstanceOf(java.time.format.DateTimeParseException.class);
         }
     }
@@ -84,7 +83,7 @@ class MessageFilterFactoryTest {
         @Test
         @DisplayName("Одно ключевое слово — проходят совпадающие, отсеиваются несовпадающие")
         void singleKeyword() throws Exception {
-            MessageFilter filter = MessageFilterFactory.build(null, null, "hello", null);
+            MessageFilter filter = MessageFilter.fromParameters(null, null, "hello", null);
             assertThat(filter.matches(msg("2025-01-01T00:00:00", "Hello world"))).isTrue();
             assertThat(filter.matches(msg("2025-01-01T00:00:00", "Goodbye"))).isFalse();
         }
@@ -92,7 +91,7 @@ class MessageFilterFactoryTest {
         @Test
         @DisplayName("Несколько ключевых слов через запятую — совпадение по любому из них (OR)")
         void multipleKeywordsCommaSeparated() throws Exception {
-            MessageFilter filter = MessageFilterFactory.build(null, null, "java,spring", null);
+            MessageFilter filter = MessageFilter.fromParameters(null, null, "java,spring", null);
             assertThat(filter.matches(msg("2025-01-01T00:00:00", "java rocks"))).isTrue();
             assertThat(filter.matches(msg("2025-01-01T00:00:00", "spring boot"))).isTrue();
             assertThat(filter.matches(msg("2025-01-01T00:00:00", "python rules"))).isFalse();
@@ -101,7 +100,7 @@ class MessageFilterFactoryTest {
         @Test
         @DisplayName("Пробелы вокруг ключевых слов обрезаются — фильтрация работает корректно")
         void keywordsAreTrimmed() throws Exception {
-            MessageFilter filter = MessageFilterFactory.build(null, null, " java , spring ", null);
+            MessageFilter filter = MessageFilter.fromParameters(null, null, " java , spring ", null);
             assertThat(filter.matches(msg("2025-01-01T00:00:00", "java code"))).isTrue();
             assertThat(filter.matches(msg("2025-01-01T00:00:00", "spring framework"))).isTrue();
         }
@@ -109,7 +108,7 @@ class MessageFilterFactoryTest {
         @Test
         @DisplayName("excludeKeywords — сообщения с исключённым словом отсеиваются")
         void setsExcludeKeywords() throws Exception {
-            MessageFilter filter = MessageFilterFactory.build(null, null, null, "spam");
+            MessageFilter filter = MessageFilter.fromParameters(null, null, null, "spam");
             assertThat(filter.matches(msg("2025-01-01T00:00:00", "buy cheap spam now"))).isFalse();
             assertThat(filter.matches(msg("2025-01-01T00:00:00", "normal message"))).isTrue();
         }
@@ -122,7 +121,7 @@ class MessageFilterFactoryTest {
         @Test
         @DisplayName("Дата + ключевое слово — оба условия применяются (AND)")
         void dateAndKeywordCombineAsAnd() throws Exception {
-            MessageFilter filter = MessageFilterFactory.build(
+            MessageFilter filter = MessageFilter.fromParameters(
                     "2025-06-01", "2025-06-30", "java", null);
             // Дата в диапазоне + keyword совпадает → проходит
             assertThat(filter.matches(msg("2025-06-15T00:00:00", "learning java"))).isTrue();
@@ -140,7 +139,7 @@ class MessageFilterFactoryTest {
         @Test
         @DisplayName("startDate раньше endDate — OK")
         void startBeforeEndIsOk() {
-            MessageFilter filter = MessageFilterFactory.build(
+            MessageFilter filter = MessageFilter.fromParameters(
                     "2025-01-01", "2025-12-31", null, null);
             assertThat(filter).isNotNull();
         }
@@ -148,7 +147,7 @@ class MessageFilterFactoryTest {
         @Test
         @DisplayName("startDate равен endDate — OK")
         void startEqualsEndIsOk() {
-            MessageFilter filter = MessageFilterFactory.build(
+            MessageFilter filter = MessageFilter.fromParameters(
                     "2025-06-15", "2025-06-15", null, null);
             assertThat(filter).isNotNull();
         }
@@ -156,7 +155,7 @@ class MessageFilterFactoryTest {
         @Test
         @DisplayName("startDate позже endDate — исключение")
         void startAfterEndThrows() {
-            assertThatThrownBy(() -> MessageFilterFactory.build(
+            assertThatThrownBy(() -> MessageFilter.fromParameters(
                     "2025-12-31", "2025-01-01", null, null))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("startDate")
@@ -166,7 +165,7 @@ class MessageFilterFactoryTest {
         @Test
         @DisplayName("Только startDate задан — OK (нечего сравнивать)")
         void onlyStartDateIsOk() {
-            MessageFilter filter = MessageFilterFactory.build(
+            MessageFilter filter = MessageFilter.fromParameters(
                     "2025-06-01", null, null, null);
             assertThat(filter).isNotNull();
         }
@@ -174,7 +173,7 @@ class MessageFilterFactoryTest {
         @Test
         @DisplayName("Только endDate задан — OK (нечего сравнивать)")
         void onlyEndDateIsOk() {
-            MessageFilter filter = MessageFilterFactory.build(
+            MessageFilter filter = MessageFilter.fromParameters(
                     null, "2025-06-30", null, null);
             assertThat(filter).isNotNull();
         }

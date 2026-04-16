@@ -5,7 +5,7 @@
 (function () {
     "use strict";
 
-    const { fetchJson, formatNumber, formatBytes, formatDate, escapeHtml } = window.Dashboard || {};
+    const { fetchJson, formatNumber, formatBytes, formatDate, escapeHtml, onReady } = window.Dashboard || {};
     if (!fetchJson) { return; }
 
     function row(u) {
@@ -34,9 +34,5 @@
         }
     }
 
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", load);
-    } else {
-        load();
-    }
+    onReady(load);
 })();

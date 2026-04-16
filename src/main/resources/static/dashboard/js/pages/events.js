@@ -6,7 +6,7 @@
 (function () {
     "use strict";
 
-    const { fetchJson, formatNumber, formatBytes, formatDate, escapeHtml } = window.Dashboard || {};
+    const { fetchJson, formatNumber, formatBytes, formatDate, escapeHtml, onReady } = window.Dashboard || {};
     if (!fetchJson) { return; }
 
     const STATUS_CLASS = {
@@ -58,9 +58,5 @@
         load(select ? select.value : "");
     }
 
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", init);
-    } else {
-        init();
-    }
+    onReady(init);
 })();

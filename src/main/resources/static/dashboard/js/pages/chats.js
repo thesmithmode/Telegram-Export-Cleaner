@@ -5,36 +5,9 @@
 (function () {
     "use strict";
 
-    const { fetchJson, formatNumber, formatBytes, readPeriodFromUrl, escapeHtml } = window.Dashboard || {};
+    const { fetchJson, formatNumber, formatBytes, readPeriodFromUrl, escapeHtml,
+            renderBarChart, onReady } = window.Dashboard || {};
     if (!fetchJson) { return; }
-
-    function makeCanvas(id) {
-        const el = document.getElementById(id);
-        if (!el) { return null; }
-        const h = Number(el.dataset.height) || 300;
-        el.style.height = `${h}px`;
-        return el.getContext("2d");
-    }
-
-    function renderChart(chats) {
-        const ctx = makeCanvas("chart-top-chats");
-        if (!ctx || !window.Chart) { return; }
-        const top20 = chats.slice(0, 20);
-        new Chart(ctx, {
-            type: "bar",
-            data: {
-                labels: top20.map(c => c.chatTitle || c.canonicalChatId),
-                datasets: [{
-                    label: "bytes",
-                    data: top20.map(c => c.totalBytes),
-                    backgroundColor: "#1e50c8",
-                }],
-            },
-            options: { responsive: true, maintainAspectRatio: false, indexAxis: "y",
-                scales: { x: { beginAtZero: true,
-                    ticks: { callback: v => formatBytes(v) } } } },
-        });
-    }
 
     function row(c) {
         const name = escapeHtml(c.chatTitle || c.canonicalChatId);
@@ -52,7 +25,11 @@
         const tbody = document.getElementById("chats-tbody");
         try {
             const chats = await fetchJson("/dashboard/api/stats/chats", params);
-            renderChart(chats);
+            renderBarChart("chart-top-chats", chats.slice(0, 20), {
+                labelFn: c => c.chatTitle || c.canonicalChatId,
+                valueFn: c => c.totalBytes,
+                label: "bytes", color: "#1e50c8", tickFn: v => formatBytes(v),
+            });
             tbody.innerHTML = chats.length
                 ? chats.map(row).join("")
                 : `<tr><td colspan="4" style="text-align:center;color:var(--muted)">Нет данных</td></tr>`;
@@ -64,9 +41,5 @@
         }
     }
 
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", load);
-    } else {
-        load();
-    }
+    onReady(load);
 })();

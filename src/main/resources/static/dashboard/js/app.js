@@ -103,12 +103,66 @@
             .replace(/'/g, "&#039;");
     }
 
+    function makeCanvas(id) {
+        const el = document.getElementById(id);
+        if (!el) { return null; }
+        const h = Number(el.dataset.height) || 300;
+        el.style.height = `${h}px`;
+        return el.getContext("2d");
+    }
+
+    function setKpi(name, value) {
+        const el = document.querySelector(`[data-kpi="${name}"]`);
+        if (el) { el.textContent = value; }
+    }
+
+    function renderTimeseries(canvasId, points) {
+        const ctx = makeCanvas(canvasId);
+        if (!ctx || !window.Chart) { return; }
+        new Chart(ctx, {
+            type: "line",
+            data: {
+                labels: points.map(p => p.period),
+                datasets: [{
+                    label: "exports",
+                    data: points.map(p => p.value),
+                    borderColor: "#2563eb",
+                    backgroundColor: "rgba(37,99,235,.12)",
+                    fill: true, tension: 0.25,
+                }],
+            },
+            options: { responsive: true, maintainAspectRatio: false,
+                scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } },
+        });
+    }
+
+    function renderBarChart(canvasId, items, { labelFn, valueFn, label, color, tickFn }) {
+        const ctx = makeCanvas(canvasId);
+        if (!ctx || !window.Chart) { return; }
+        new Chart(ctx, {
+            type: "bar",
+            data: {
+                labels: items.map(labelFn),
+                datasets: [{ label, data: items.map(valueFn), backgroundColor: color }],
+            },
+            options: { responsive: true, maintainAspectRatio: false, indexAxis: "y",
+                scales: { x: { beginAtZero: true, ticks: tickFn ? { callback: tickFn } : { precision: 0 } } } },
+        });
+    }
+
+    function onReady(fn) {
+        if (document.readyState === "loading") {
+            document.addEventListener("DOMContentLoaded", fn);
+        } else {
+            fn();
+        }
+    }
+
     window.Dashboard = {
         fetchJson, formatNumber, formatBytes, formatDate,
         readPeriodFromUrl, escapeHtml,
+        makeCanvas, setKpi, renderTimeseries, renderBarChart, onReady,
     };
 
-    document.addEventListener("DOMContentLoaded", () => {
-        initPeriodFilter();
-    });
+    onReady(initPeriodFilter);
 })();
