@@ -3,7 +3,7 @@ import logging
 import json
 import asyncio
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 import redis.asyncio as redis
 
@@ -291,11 +291,11 @@ class QueueConsumer:
             processing_key = f"job:processing:{task_id}"
             failed_key = f"job:failed:{task_id}"
 
-            # Remove from processing
-            await self.redis_client.delete(processing_key)
+            raw = await self.redis_client.get(f"staging:meta:{task_id}")
 
-            # Set failed marker
-            await self.redis_client.setex(
+            pipe = self.redis_client.pipeline(transaction=True)
+            pipe.delete(processing_key)
+            pipe.setex(
                 failed_key,
                 JOB_MARKER_TTL,
                 json.dumps({
@@ -303,15 +303,44 @@ class QueueConsumer:
                     "timestamp": datetime.now().isoformat()
                 })
             )
+            pipe.srem("staging:jobs", task_id)
+            if raw:
+                try:
+                    meta = json.loads(raw)
+                    pipe.lrem(meta["queue"], 1, meta["payload"])
+                except Exception:
+                    pass
+            pipe.delete(f"staging:meta:{task_id}")
+            await pipe.execute()
 
             logger.debug(f"Marked job failed: {task_id}")
-            await self._untrack_staging_job(task_id)
-            await self._remove_from_staging(task_id)
+
+            await self._publish_failed_event(task_id, error)
+
             return True
 
         except Exception as e:
             logger.error(f"Failed to mark job failed: {e}")
             return False
+
+    async def _publish_failed_event(self, task_id: str, error: str) -> None:
+        """XADD export.failed в stats:events. Ошибки здесь не должны ронять основной flow."""
+        try:
+            payload = json.dumps({
+                "type": "export.failed",
+                "task_id": task_id,
+                "status": "failed",
+                "error": error,
+                "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            })
+            await self.redis_client.xadd(
+                settings.STATS_STREAM_KEY,
+                {"payload": payload},
+                maxlen=100_000,
+                approximate=True,
+            )
+        except Exception as e:
+            logger.debug(f"stats xadd failed for {task_id}: {e}")
 
     async def get_pending_jobs(self) -> dict:
         if not self.redis_client:
