@@ -43,8 +43,9 @@ class ExportWorker:
         job: ExportRequest,
         batch: list[ExportedMessage],
     ) -> bool:
+        tid = job.effective_topic_id
         if self.message_cache and self.message_cache.enabled and batch:
-            await self.message_cache.store_messages(job.chat_id, batch)
+            await self.message_cache.store_messages(job.chat_id, batch, topic_id=tid)
             batch.clear()
 
         if not await self.is_cancelled(job.task_id):
@@ -88,10 +89,11 @@ class ExportWorker:
             except Exception:
                 pass
 
-    def _create_tracker(self, job: ExportRequest) -> Optional[ProgressTracker]:
+    def _create_tracker(self, job: ExportRequest,
+                        topic_name: Optional[str] = None) -> Optional[ProgressTracker]:
         if job.user_chat_id and self.java_client:
             return self.java_client.create_progress_tracker(
-                job.user_chat_id, job.task_id
+                job.user_chat_id, job.task_id, topic_name=topic_name
             )
         return None
 
@@ -287,6 +289,13 @@ class ExportWorker:
                             f"{original_chat_input!r} → {canonical_id}: {canonical_err}"
                         )
 
+            topic_name = None
+            if job.topic_id:
+                topic_name = await self.telegram_client.get_topic_name(
+                    job.chat_id, job.topic_id
+                )
+                if topic_name:
+                    logger.info(f"  Topic: {topic_name} (id={job.topic_id})")
             # --- Cache-aware export ---
             # Оба пути возвращают (count: int, messages: AsyncGenerator) или None.
             # None означает: отменено ИЛИ ошибка кэша → нужно проверить cancel перед fallback.
@@ -300,9 +309,9 @@ class ExportWorker:
             if self.message_cache and self.message_cache.enabled:
                 cache_was_tried = True
                 if has_date_filter:
-                    result = await self._export_with_date_cache(job)
+                    result = await self._export_with_date_cache(job, topic_name)
                 else:
-                    result = await self._export_with_id_cache(job)
+                    result = await self._export_with_id_cache(job, topic_name)
 
                 if result is not None:
                     msg_count, messages_for_send = result  # (int, AsyncGenerator)
@@ -323,7 +332,7 @@ class ExportWorker:
                     await self.queue_consumer.mark_job_completed(job.task_id)
                     await self._cleanup_job(job)
                     return True
-                fallback_result = await self._fetch_all_messages(job)
+                fallback_result = await self._fetch_all_messages(job, topic_name)
                 if fallback_result is None:
                     return True
                 # _fetch_all_messages уже записал сообщения в кэш батчами
@@ -460,8 +469,9 @@ class ExportWorker:
         return cached
 
     async def _export_with_date_cache(
-        self, job: ExportRequest
+        self, job: ExportRequest, topic_name: Optional[str] = None
     ) -> Optional[tuple[int, AsyncGenerator]]:
+        tid = job.effective_topic_id
         from_date_str = job.from_date[:10] if job.from_date else None
         to_date_str = job.to_date[:10] if job.to_date else None
 
@@ -473,19 +483,19 @@ class ExportWorker:
 
         # Find which date ranges we're missing
         missing = await self.message_cache.get_missing_date_ranges(
-            job.chat_id, from_date_str, to_date_str
+            job.chat_id, from_date_str, to_date_str, topic_id=tid
         )
 
         if not missing:
             # Full cache HIT — count without loading, stream without loading
             count = await self.message_cache.count_messages_by_date(
-                job.chat_id, from_date_str, to_date_str
+                job.chat_id, from_date_str, to_date_str, topic_id=tid
             )
             logger.info(
                 f"  Cache HIT (полный) для чата {job.chat_id} "
                 f"[{from_date_str} - {to_date_str}]: {count} сообщений"
             )
-            tracker = self._create_tracker(job)
+            tracker = self._create_tracker(job, topic_name)
             if tracker:
                 await tracker.start(count)
 
@@ -499,7 +509,7 @@ class ExportWorker:
 
             await self.message_cache.evict_if_needed()
             return count, self.message_cache.iter_messages_by_date(
-                job.chat_id, from_date_str, to_date_str
+                job.chat_id, from_date_str, to_date_str, topic_id=tid
             )
 
         # Partial or full miss — fetch missing date ranges from Telegram
@@ -507,7 +517,7 @@ class ExportWorker:
             f"  Cache MISS (частичный) для чата {job.chat_id}: missing={missing}"
         )
 
-        tracker = self._create_tracker(job)
+        tracker = self._create_tracker(job, topic_name)
         if tracker:
             await tracker.start()
 
@@ -515,12 +525,12 @@ class ExportWorker:
         from_dt = datetime.fromisoformat(from_date_str + "T00:00:00+00:00")
         to_dt = datetime.fromisoformat(to_date_str + "T23:59:59+00:00")
         total = await self.telegram_client.get_messages_count(
-            job.chat_id, from_dt, to_dt
+            job.chat_id, from_dt, to_dt, topic_id=job.topic_id
         )
 
         # Cached count at start (for progress offset)
         cached_count = await self.message_cache.count_messages_by_date(
-            job.chat_id, from_date_str, to_date_str
+            job.chat_id, from_date_str, to_date_str, topic_id=tid
         )
 
         if tracker:
@@ -546,6 +556,7 @@ class ExportWorker:
                     from_date=gap_from_dt,
                     to_date=gap_to_dt,
                     on_floodwait=tracker.on_floodwait if tracker else None,
+                    topic_id=job.topic_id,
                 ):
                     batch.append(msg)
                     fetched_count += 1
@@ -560,16 +571,16 @@ class ExportWorker:
 
             # Flush remaining batch for this gap
             if batch:
-                await self.message_cache.store_messages(job.chat_id, batch)
+                await self.message_cache.store_messages(job.chat_id, batch, topic_id=tid)
             if gap_fetched:
                 logger.info(f"  Fetched {gap_fetched} messages for [{gap_from} - {gap_to}]")
             elif self.message_cache and self.message_cache.enabled:
                 # Telegram вернул 0 сообщений — диапазон проверен, фиксируем чтобы не ходить снова
-                await self.message_cache.mark_date_range_checked(job.chat_id, gap_from, gap_to)
+                await self.message_cache.mark_date_range_checked(job.chat_id, gap_from, gap_to, topic_id=tid)
 
         # After storing all gaps, count final total from cache (authoritative)
         count = await self.message_cache.count_messages_by_date(
-            job.chat_id, from_date_str, to_date_str
+            job.chat_id, from_date_str, to_date_str, topic_id=tid
         )
         logger.info(f"  Date-range export complete: {count} messages")
 
@@ -583,13 +594,14 @@ class ExportWorker:
 
         await self.message_cache.evict_if_needed()
         return count, self.message_cache.iter_messages_by_date(
-            job.chat_id, from_date_str, to_date_str
+            job.chat_id, from_date_str, to_date_str, topic_id=tid
         )
 
     async def _export_with_id_cache(
-        self, job: ExportRequest
+        self, job: ExportRequest, topic_name: Optional[str] = None
     ) -> Optional[tuple[int, AsyncGenerator]]:
-        cached_ranges = await self.message_cache.get_cached_ranges(job.chat_id)
+        tid = job.effective_topic_id
+        cached_ranges = await self.message_cache.get_cached_ranges(job.chat_id, topic_id=tid)
 
         if not cached_ranges:
             logger.info(f"  Cache MISS для чата {job.chat_id} — полная загрузка")
@@ -608,12 +620,12 @@ class ExportWorker:
         logger.info(f"  Cache HIT для чата {job.chat_id}: ranges={cached_ranges}, cache_max_id={cache_max_id}")
 
         # Прогресс-трекер
-        tracker = self._create_tracker(job)
+        tracker = self._create_tracker(job, topic_name)
         if tracker:
             await tracker.start()
 
         # Получаем total для прогресс-репортинга
-        total = await self.telegram_client.get_messages_count(job.chat_id)
+        total = await self.telegram_client.get_messages_count(job.chat_id, topic_id=job.topic_id)
         if job.limit and job.limit > 0 and (total is None or job.limit < total):
             total = job.limit
         if tracker:
@@ -629,7 +641,7 @@ class ExportWorker:
         cached_count = 0
         if not (job.limit and job.limit > 0):
             cached_count = await self.message_cache.count_messages(
-                job.chat_id, 0, 2 ** 62
+                job.chat_id, 0, 2 ** 62, topic_id=tid
             )
             if tracker and cached_count:
                 await tracker.seed(cached_count)
@@ -647,6 +659,7 @@ class ExportWorker:
                 offset_id=0,
                 min_id=cache_max_id,
                 on_floodwait=tracker.on_floodwait if tracker else None,
+                topic_id=job.topic_id,
             ):
                 batch.append(msg)
                 fetched_count += 1
@@ -662,7 +675,7 @@ class ExportWorker:
             logger.warning(f"Failed fetching new messages above cache: {e}")
 
         if batch:
-            await self.message_cache.store_messages(job.chat_id, batch)
+            await self.message_cache.store_messages(job.chat_id, batch, topic_id=tid)
         if fresh_count:
             logger.info(f"  Fetched {fresh_count} new messages above cache max {cache_max_id}")
 
@@ -671,7 +684,7 @@ class ExportWorker:
         full_min = min(r[0] for r in cached_ranges)
         full_max = max(cache_max_id, latest_new_id)
         logger.info(f"    Range to check: [{full_min}, {full_max}]")
-        missing = await self.message_cache.get_missing_ranges(job.chat_id, full_min, full_max)
+        missing = await self.message_cache.get_missing_ranges(job.chat_id, full_min, full_max, topic_id=tid)
         logger.info(f"    Found {len(missing)} gaps: {missing}")
 
         for gap_low, gap_high in missing:
@@ -684,6 +697,7 @@ class ExportWorker:
                     offset_id=gap_high + 1,
                     min_id=gap_low - 1,
                     on_floodwait=tracker.on_floodwait if tracker else None,
+                    topic_id=job.topic_id,
                 ):
                     batch.append(msg)
                     fetched_count += 1
@@ -697,7 +711,7 @@ class ExportWorker:
                 logger.warning(f"Failed fetching gap [{gap_low}-{gap_high}]: {e}")
 
             if batch:
-                await self.message_cache.store_messages(job.chat_id, batch)
+                await self.message_cache.store_messages(job.chat_id, batch, topic_id=tid)
             if gap_count:
                 logger.info(f"  Filled gap [{gap_low}-{gap_high}]: {gap_count} messages")
 
@@ -716,6 +730,7 @@ class ExportWorker:
                         offset_id=cache_min_id,
                         min_id=0,
                         on_floodwait=tracker.on_floodwait if tracker else None,
+                        topic_id=job.topic_id,
                     ):
                         batch.append(msg)
                         fetched_count += 1
@@ -729,13 +744,13 @@ class ExportWorker:
                     logger.warning(f"Failed fetching older messages below cache min {cache_min_id}: {e}")
 
                 if batch:
-                    await self.message_cache.store_messages(job.chat_id, batch)
+                    await self.message_cache.store_messages(job.chat_id, batch, topic_id=tid)
                 if older_count:
                     logger.info(f"  Fetched {older_count} older messages below cache min {cache_min_id}")
 
         # Считаем итоговое кол-во через ZCOUNT (O(1), без загрузки в память).
         actual_min = 0 if (not job.limit or job.limit <= 0) else full_min
-        count = await self.message_cache.count_messages(job.chat_id, actual_min, full_max)
+        count = await self.message_cache.count_messages(job.chat_id, actual_min, full_max, topic_id=tid)
         logger.info(f"  Total after cache merge: {count} messages")
 
         # Проверяем отмену ДО finalize — иначе спамит 100% при каждом рестарте
@@ -751,11 +766,12 @@ class ExportWorker:
 
         # Возвращаем (count, generator) — вызывающий код стримит через iter_messages,
         # не держа все 252K объектов в памяти одновременно.
-        return count, self.message_cache.iter_messages(job.chat_id, actual_min, full_max)
+        return count, self.message_cache.iter_messages(job.chat_id, actual_min, full_max, topic_id=tid)
 
     async def _fetch_all_messages(
-        self, job: ExportRequest
+        self, job: ExportRequest, topic_name: Optional[str] = None
     ) -> Optional[tuple[int, object]]:
+        tid = job.effective_topic_id
         # Parse date filters
         from_date = None
         to_date = None
@@ -776,12 +792,12 @@ class ExportWorker:
         # Это позволяет сразу показать progress bar с реальным total вместо
         # двух API calls (start→spinner, set_total→0% bar).
         total = await self.telegram_client.get_messages_count(
-            job.chat_id, from_date, to_date
+            job.chat_id, from_date, to_date, topic_id=job.topic_id
         )
         if job.limit and job.limit > 0 and (total is None or job.limit < total):
             total = job.limit
 
-        tracker = self._create_tracker(job)
+        tracker = self._create_tracker(job, topic_name)
         if tracker:
             await tracker.start(total=total)
 
@@ -805,6 +821,7 @@ class ExportWorker:
                 from_date=from_date,
                 to_date=to_date,
                 on_floodwait=tracker.on_floodwait if tracker else None,
+                topic_id=job.topic_id,
             ):
                 count += 1
                 if use_cache:
@@ -830,7 +847,7 @@ class ExportWorker:
 
         # Flush remaining batch
         if batch and use_cache:
-            await self.message_cache.store_messages(job.chat_id, batch)
+            await self.message_cache.store_messages(job.chat_id, batch, topic_id=tid)
 
         if tracker:
             await tracker.finalize(count)
@@ -840,11 +857,11 @@ class ExportWorker:
             to_date_str   = job.to_date[:10]   if job.to_date   else None
             if from_date_str and to_date_str:
                 gen = self.message_cache.iter_messages_by_date(
-                    job.chat_id, from_date_str, to_date_str
+                    job.chat_id, from_date_str, to_date_str, topic_id=tid
                 )
             else:
                 # No date filter: return all messages for this chat from cache
-                gen = self.message_cache.iter_messages(job.chat_id, 0, 2 ** 62)
+                gen = self.message_cache.iter_messages(job.chat_id, 0, 2 ** 62, topic_id=tid)
             return count, gen
 
         return count, nocache_messages

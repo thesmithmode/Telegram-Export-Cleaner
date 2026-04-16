@@ -51,34 +51,39 @@ class MessageCache:
             PRAGMA mmap_size=268435456;
 
             CREATE TABLE IF NOT EXISTS messages (
-                chat_id  INTEGER NOT NULL,
-                msg_id   INTEGER NOT NULL,
-                msg_ts   INTEGER NOT NULL,
-                data     BLOB    NOT NULL,
-                PRIMARY KEY (chat_id, msg_id)
+                chat_id   INTEGER NOT NULL,
+                topic_id  INTEGER NOT NULL DEFAULT 0,
+                msg_id    INTEGER NOT NULL,
+                msg_ts    INTEGER NOT NULL,
+                data      BLOB    NOT NULL,
+                PRIMARY KEY (chat_id, topic_id, msg_id)
             );
             CREATE INDEX IF NOT EXISTS idx_msg_ts
-                ON messages(chat_id, msg_ts, msg_id);
+                ON messages(chat_id, topic_id, msg_ts, msg_id);
 
             CREATE TABLE IF NOT EXISTS chat_id_ranges (
-                chat_id  INTEGER NOT NULL,
-                min_id   INTEGER NOT NULL,
-                max_id   INTEGER NOT NULL,
-                PRIMARY KEY (chat_id, min_id)
+                chat_id   INTEGER NOT NULL,
+                topic_id  INTEGER NOT NULL DEFAULT 0,
+                min_id    INTEGER NOT NULL,
+                max_id    INTEGER NOT NULL,
+                PRIMARY KEY (chat_id, topic_id, min_id)
             );
 
             CREATE TABLE IF NOT EXISTS chat_date_ranges (
                 chat_id    INTEGER NOT NULL,
+                topic_id   INTEGER NOT NULL DEFAULT 0,
                 from_date  TEXT    NOT NULL,
                 to_date    TEXT    NOT NULL,
-                PRIMARY KEY (chat_id, from_date)
+                PRIMARY KEY (chat_id, topic_id, from_date)
             );
 
             CREATE TABLE IF NOT EXISTS chat_meta (
-                chat_id       INTEGER PRIMARY KEY,
+                chat_id       INTEGER NOT NULL,
+                topic_id      INTEGER NOT NULL DEFAULT 0,
                 last_accessed REAL    NOT NULL DEFAULT 0,
                 msg_count     INTEGER NOT NULL DEFAULT 0,
-                size_bytes    INTEGER NOT NULL DEFAULT 0
+                size_bytes    INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (chat_id, topic_id)
             );
         """)
         await self._db.commit()
@@ -107,7 +112,8 @@ class MessageCache:
     # ------------------------------------------------------------------ #
 
     async def store_messages(
-        self, chat_id: Union[int, str], messages: List[ExportedMessage]
+        self, chat_id: Union[int, str], messages: List[ExportedMessage],
+        topic_id: int = 0,
     ) -> int:
         if not self.enabled or not messages or self._db is None:
             return 0
@@ -121,33 +127,33 @@ class MessageCache:
         for msg in messages:
             data = self._serialize(msg)
             ts = int(self._parse_date_to_timestamp(msg.date) or 0)
-            rows.append((chat_id_int, msg.id, ts, data))
+            rows.append((chat_id_int, topic_id, msg.id, ts, data))
             total_bytes += len(data)
 
         try:
             # INSERT OR REPLACE: newest import always wins
             for i in range(0, len(rows), _STORE_BATCH):
                 await self._db.executemany(
-                    "INSERT OR REPLACE INTO messages(chat_id, msg_id, msg_ts, data)"
-                    " VALUES (?,?,?,?)",
+                    "INSERT OR REPLACE INTO messages(chat_id, topic_id, msg_id, msg_ts, data)"
+                    " VALUES (?,?,?,?,?)",
                     rows[i : i + _STORE_BATCH],
                 )
 
             # Merge ID ranges (без commit внутри — см. докстринг helper'ов)
             msg_ids = sorted(m.id for m in messages)
-            await self._add_range(chat_id_int, msg_ids[0], msg_ids[-1])
+            await self._add_range(chat_id_int, topic_id, msg_ids[0], msg_ids[-1])
 
             # Merge date ranges
             dates = sorted({self._extract_date_str(m.date) for m in messages if m.date})
             if dates:
-                await self._add_date_range(chat_id_int, dates[0], dates[-1])
+                await self._add_date_range(chat_id_int, topic_id, dates[0], dates[-1])
 
             # Upsert metadata — size_bytes пересчитывается из реальных данных,
             # а не аккумулируется (иначе INSERT OR REPLACE раздувает счётчик)
             async with self._db.execute(
                 "SELECT COUNT(*), COALESCE(SUM(LENGTH(data)), 0)"
-                " FROM messages WHERE chat_id=?",
-                (chat_id_int,),
+                " FROM messages WHERE chat_id=? AND topic_id=?",
+                (chat_id_int, topic_id),
             ) as cur:
                 row = await cur.fetchone()
                 actual_count = row[0] if row else len(messages)
@@ -155,14 +161,14 @@ class MessageCache:
 
             await self._db.execute(
                 """
-                INSERT INTO chat_meta(chat_id, last_accessed, msg_count, size_bytes)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(chat_id) DO UPDATE SET
+                INSERT INTO chat_meta(chat_id, topic_id, last_accessed, msg_count, size_bytes)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(chat_id, topic_id) DO UPDATE SET
                     last_accessed = excluded.last_accessed,
                     msg_count     = excluded.msg_count,
                     size_bytes    = excluded.size_bytes
                 """,
-                (chat_id_int, now, actual_count, actual_bytes),
+                (chat_id_int, topic_id, now, actual_count, actual_bytes),
             )
 
             # Единственный commit — атомарно фиксирует ВСЁ или НИЧЕГО
@@ -188,19 +194,20 @@ class MessageCache:
     # ------------------------------------------------------------------ #
 
     async def iter_messages(
-        self, chat_id: Union[int, str], low_id: int, high_id: int
+        self, chat_id: Union[int, str], low_id: int, high_id: int,
+        topic_id: int = 0,
     ) -> AsyncGenerator[ExportedMessage, None]:
         if not self.enabled or self._db is None:
             return
 
         chat_id_int = int(chat_id)
-        await self._touch(chat_id_int)
+        await self._touch(chat_id_int, topic_id)
 
         async with self._db.execute(
             "SELECT data FROM messages"
-            " WHERE chat_id=? AND msg_id BETWEEN ? AND ?"
+            " WHERE chat_id=? AND topic_id=? AND msg_id BETWEEN ? AND ?"
             " ORDER BY msg_id",
-            (chat_id_int, low_id, high_id),
+            (chat_id_int, topic_id, low_id, high_id),
         ) as cursor:
             while True:
                 rows = await cursor.fetchmany(_FETCH_CHUNK)
@@ -213,22 +220,24 @@ class MessageCache:
                         logger.warning(f"Deserialize error (chat {chat_id_int}): {exc}")
 
     async def get_messages(
-        self, chat_id: Union[int, str], low_id: int, high_id: int
+        self, chat_id: Union[int, str], low_id: int, high_id: int,
+        topic_id: int = 0,
     ) -> List[ExportedMessage]:
         result = []
-        async for msg in self.iter_messages(chat_id, low_id, high_id):
+        async for msg in self.iter_messages(chat_id, low_id, high_id, topic_id=topic_id):
             result.append(msg)
         return result
 
     async def count_messages(
-        self, chat_id: Union[int, str], low_id: int, high_id: int
+        self, chat_id: Union[int, str], low_id: int, high_id: int,
+        topic_id: int = 0,
     ) -> int:
         if not self.enabled or self._db is None:
             return 0
         async with self._db.execute(
             "SELECT COUNT(*) FROM messages"
-            " WHERE chat_id=? AND msg_id BETWEEN ? AND ?",
-            (int(chat_id), low_id, high_id),
+            " WHERE chat_id=? AND topic_id=? AND msg_id BETWEEN ? AND ?",
+            (int(chat_id), topic_id, low_id, high_id),
         ) as cur:
             row = await cur.fetchone()
             return row[0] if row else 0
@@ -237,24 +246,26 @@ class MessageCache:
     # ID-range management
     # ------------------------------------------------------------------ #
 
-    async def get_cached_ranges(self, chat_id: Union[int, str]) -> List[List[int]]:
+    async def get_cached_ranges(self, chat_id: Union[int, str],
+                               topic_id: int = 0) -> List[List[int]]:
         if not self.enabled or self._db is None:
             return []
         async with self._db.execute(
             "SELECT min_id, max_id FROM chat_id_ranges"
-            " WHERE chat_id=? ORDER BY min_id",
-            (int(chat_id),),
+            " WHERE chat_id=? AND topic_id=? ORDER BY min_id",
+            (int(chat_id), topic_id),
         ) as cur:
             rows = await cur.fetchall()
         return [[r[0], r[1]] for r in rows]
 
     async def get_missing_ranges(
-        self, chat_id: Union[int, str], requested_low: int, requested_high: int
+        self, chat_id: Union[int, str], requested_low: int, requested_high: int,
+        topic_id: int = 0,
     ) -> List[Tuple[int, int]]:
         if not self.enabled:
             return [(requested_low, requested_high)]
 
-        cached = await self.get_cached_ranges(chat_id)
+        cached = await self.get_cached_ranges(chat_id, topic_id=topic_id)
         if not cached:
             return [(requested_low, requested_high)]
 
@@ -285,7 +296,8 @@ class MessageCache:
     # ------------------------------------------------------------------ #
 
     async def iter_messages_by_date(
-        self, chat_id: Union[int, str], from_date: str, to_date: str
+        self, chat_id: Union[int, str], from_date: str, to_date: str,
+        topic_id: int = 0,
     ) -> AsyncGenerator[ExportedMessage, None]:
         if not self.enabled or self._db is None:
             return
@@ -293,13 +305,13 @@ class MessageCache:
         chat_id_int = int(chat_id)
         ts_from = int(self._date_str_to_timestamp(from_date))
         ts_to   = int(self._date_str_to_timestamp(to_date)) + 86400
-        await self._touch(chat_id_int)
+        await self._touch(chat_id_int, topic_id)
 
         async with self._db.execute(
             "SELECT data FROM messages"
-            " WHERE chat_id=? AND msg_ts BETWEEN ? AND ?"
+            " WHERE chat_id=? AND topic_id=? AND msg_ts BETWEEN ? AND ?"
             " ORDER BY msg_id",
-            (chat_id_int, ts_from, ts_to),
+            (chat_id_int, topic_id, ts_from, ts_to),
         ) as cursor:
             while True:
                 rows = await cursor.fetchmany(_FETCH_CHUNK)
@@ -312,15 +324,17 @@ class MessageCache:
                         logger.warning(f"Deserialize error (chat {chat_id_int}): {exc}")
 
     async def get_messages_by_date(
-        self, chat_id: Union[int, str], from_date: str, to_date: str
+        self, chat_id: Union[int, str], from_date: str, to_date: str,
+        topic_id: int = 0,
     ) -> List[ExportedMessage]:
         result = []
-        async for msg in self.iter_messages_by_date(chat_id, from_date, to_date):
+        async for msg in self.iter_messages_by_date(chat_id, from_date, to_date, topic_id=topic_id):
             result.append(msg)
         return result
 
     async def count_messages_by_date(
-        self, chat_id: Union[int, str], from_date: str, to_date: str
+        self, chat_id: Union[int, str], from_date: str, to_date: str,
+        topic_id: int = 0,
     ) -> int:
         if not self.enabled or self._db is None:
             return 0
@@ -328,40 +342,43 @@ class MessageCache:
         ts_to   = int(self._date_str_to_timestamp(to_date)) + 86400
         async with self._db.execute(
             "SELECT COUNT(*) FROM messages"
-            " WHERE chat_id=? AND msg_ts BETWEEN ? AND ?",
-            (int(chat_id), ts_from, ts_to),
+            " WHERE chat_id=? AND topic_id=? AND msg_ts BETWEEN ? AND ?",
+            (int(chat_id), topic_id, ts_from, ts_to),
         ) as cur:
             row = await cur.fetchone()
             return row[0] if row else 0
 
-    async def get_cached_date_ranges(self, chat_id: Union[int, str]) -> List[List[str]]:
+    async def get_cached_date_ranges(self, chat_id: Union[int, str],
+                                    topic_id: int = 0) -> List[List[str]]:
         if not self.enabled or self._db is None:
             return []
         async with self._db.execute(
             "SELECT from_date, to_date FROM chat_date_ranges"
-            " WHERE chat_id=? ORDER BY from_date",
-            (int(chat_id),),
+            " WHERE chat_id=? AND topic_id=? ORDER BY from_date",
+            (int(chat_id), topic_id),
         ) as cur:
             rows = await cur.fetchall()
         return [[r[0], r[1]] for r in rows]
 
     async def get_missing_date_ranges(
-        self, chat_id: Union[int, str], from_date: str, to_date: str
+        self, chat_id: Union[int, str], from_date: str, to_date: str,
+        topic_id: int = 0,
     ) -> List[Tuple[str, str]]:
         if not self.enabled:
             return [(from_date, to_date)]
-        cached = await self.get_cached_date_ranges(chat_id)
+        cached = await self.get_cached_date_ranges(chat_id, topic_id=topic_id)
         if not cached:
             return [(from_date, to_date)]
         return self._compute_missing_date_ranges(cached, from_date, to_date)
 
     async def mark_date_range_checked(
-        self, chat_id: Union[int, str], from_date: str, to_date: str
+        self, chat_id: Union[int, str], from_date: str, to_date: str,
+        topic_id: int = 0,
     ) -> None:
         if not self.enabled or self._db is None:
             return
         chat_id_int = int(chat_id)
-        await self._add_date_range(chat_id_int, from_date, to_date)
+        await self._add_date_range(chat_id_int, topic_id, from_date, to_date)
         await self._db.commit()
 
     @staticmethod
@@ -390,15 +407,15 @@ class MessageCache:
     # Internal range merge helpers
     # ------------------------------------------------------------------ #
 
-    async def _add_range(self, chat_id: int, new_min: int, new_max: int):
-        cached = await self.get_cached_ranges(chat_id)
+    async def _add_range(self, chat_id: int, topic_id: int, new_min: int, new_max: int):
+        cached = await self.get_cached_ranges(chat_id, topic_id=topic_id)
         merged = self._merge_intervals(cached + [[new_min, new_max]])
         await self._db.execute(
-            "DELETE FROM chat_id_ranges WHERE chat_id=?", (chat_id,)
+            "DELETE FROM chat_id_ranges WHERE chat_id=? AND topic_id=?", (chat_id, topic_id)
         )
         await self._db.executemany(
-            "INSERT INTO chat_id_ranges(chat_id, min_id, max_id) VALUES (?,?,?)",
-            [(chat_id, r[0], r[1]) for r in merged],
+            "INSERT INTO chat_id_ranges(chat_id, topic_id, min_id, max_id) VALUES (?,?,?,?)",
+            [(chat_id, topic_id, r[0], r[1]) for r in merged],
         )
 
     @staticmethod
@@ -415,15 +432,15 @@ class MessageCache:
                 merged.append([low, high])
         return merged
 
-    async def _add_date_range(self, chat_id: int, new_from: str, new_to: str):
-        cached = await self.get_cached_date_ranges(chat_id)
+    async def _add_date_range(self, chat_id: int, topic_id: int, new_from: str, new_to: str):
+        cached = await self.get_cached_date_ranges(chat_id, topic_id=topic_id)
         merged = self._merge_date_intervals(cached + [[new_from, new_to]])
         await self._db.execute(
-            "DELETE FROM chat_date_ranges WHERE chat_id=?", (chat_id,)
+            "DELETE FROM chat_date_ranges WHERE chat_id=? AND topic_id=?", (chat_id, topic_id)
         )
         await self._db.executemany(
-            "INSERT INTO chat_date_ranges(chat_id, from_date, to_date) VALUES (?,?,?)",
-            [(chat_id, r[0], r[1]) for r in merged],
+            "INSERT INTO chat_date_ranges(chat_id, topic_id, from_date, to_date) VALUES (?,?,?,?)",
+            [(chat_id, topic_id, r[0], r[1]) for r in merged],
         )
 
     @staticmethod
@@ -447,15 +464,14 @@ class MessageCache:
     # LRU touch & eviction
     # ------------------------------------------------------------------ #
 
-    async def _touch(self, chat_id: int):
+    async def _touch(self, chat_id: int, topic_id: int = 0):
         """Обновляет last_accessed и сразу фиксирует изменение в БД."""
         if self._db is None:
             return
         await self._db.execute(
-            "UPDATE chat_meta SET last_accessed=? WHERE chat_id=?",
-            (time.time(), chat_id),
+            "UPDATE chat_meta SET last_accessed=? WHERE chat_id=? AND topic_id=?",
+            (time.time(), chat_id, topic_id),
         )
-        await self._db.commit()
 
     async def evict_if_needed(self) -> int:
         if self._db is None:
@@ -473,31 +489,32 @@ class MessageCache:
 
         # Fetch candidates sorted oldest-first (LRU)
         async with self._db.execute(
-            "SELECT chat_id, size_bytes FROM chat_meta ORDER BY last_accessed ASC"
+            "SELECT chat_id, topic_id, size_bytes FROM chat_meta ORDER BY last_accessed ASC"
         ) as cur:
             candidates = await cur.fetchall()
 
         evicted = 0
         try:
-            for chat_id, size in candidates:
+            for chat_id, topic_id, size in candidates:
                 if total_bytes <= target:
                     break
                 await self._db.execute(
-                    "DELETE FROM messages WHERE chat_id=?", (chat_id,)
+                    "DELETE FROM messages WHERE chat_id=? AND topic_id=?", (chat_id, topic_id)
                 )
                 await self._db.execute(
-                    "DELETE FROM chat_id_ranges WHERE chat_id=?", (chat_id,)
+                    "DELETE FROM chat_id_ranges WHERE chat_id=? AND topic_id=?", (chat_id, topic_id)
                 )
                 await self._db.execute(
-                    "DELETE FROM chat_date_ranges WHERE chat_id=?", (chat_id,)
+                    "DELETE FROM chat_date_ranges WHERE chat_id=? AND topic_id=?", (chat_id, topic_id)
                 )
                 await self._db.execute(
-                    "DELETE FROM chat_meta WHERE chat_id=?", (chat_id,)
+                    "DELETE FROM chat_meta WHERE chat_id=? AND topic_id=?", (chat_id, topic_id)
                 )
                 total_bytes -= size
                 evicted += 1
+                topic_info = f" topic={topic_id}" if topic_id else ""
                 logger.info(
-                    f"Evicted LRU cache for chat {chat_id} "
+                    f"Evicted LRU cache for chat {chat_id}{topic_info} "
                     f"({size // 1024} KB freed, remaining ~{total_bytes // 1024 // 1024} MB)"
                 )
             # Один атомарный commit — либо все evict'ы, либо ни одного.

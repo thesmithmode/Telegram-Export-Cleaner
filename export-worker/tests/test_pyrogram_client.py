@@ -2,7 +2,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timezone
-from pyrogram.errors import Unauthorized, BadRequest, PeerIdInvalid
+from pyrogram.errors import Unauthorized, BadRequest, PeerIdInvalid, FloodWait
 
 from pyrogram_client import TelegramClient
 from models import ExportedMessage
@@ -835,6 +835,151 @@ class TestTelegramClientMessageCount:
         assert mock_pyrogram.invoke.call_count == 2
         mock_pyrogram.get_chat_history_count.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_get_topic_messages_count_success(self):
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.resolve_peer = AsyncMock(return_value=MagicMock())
+
+        result = MagicMock()
+        result.count = 350
+        mock_pyrogram.invoke = AsyncMock(return_value=result)
+        client.client = mock_pyrogram
+
+        count = await client.get_topic_messages_count(123, topic_id=42)
+
+        assert count == 350
+        mock_pyrogram.invoke.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_topic_messages_count_with_dates(self):
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.resolve_peer = AsyncMock(return_value=MagicMock())
+
+        result = MagicMock()
+        result.count = 100
+        mock_pyrogram.invoke = AsyncMock(return_value=result)
+        client.client = mock_pyrogram
+
+        count = await client.get_topic_messages_count(
+            123, topic_id=42,
+            from_date=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            to_date=datetime(2025, 1, 31, tzinfo=timezone.utc),
+        )
+
+        assert count == 100
+        # Проверяем что msg_id (topic_id) передан в GetReplies
+        call_args = mock_pyrogram.invoke.call_args[0][0]
+        assert call_args.msg_id == 42
+
+    @pytest.mark.asyncio
+    async def test_get_topic_messages_count_no_count_attr(self):
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.resolve_peer = AsyncMock(return_value=MagicMock())
+
+        result = MagicMock(spec=[])
+        result.messages = [MagicMock(), MagicMock()]
+        mock_pyrogram.invoke = AsyncMock(return_value=result)
+        client.client = mock_pyrogram
+
+        count = await client.get_topic_messages_count(123, topic_id=42)
+
+        assert count == 2
+
+    @pytest.mark.asyncio
+    async def test_get_topic_messages_count_error_returns_none(self):
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.resolve_peer = AsyncMock(side_effect=Exception("API error"))
+        client.client = mock_pyrogram
+
+        result = await client.get_topic_messages_count(123, topic_id=42)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_messages_count_with_topic_id_delegates_to_topic(self):
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.resolve_peer = AsyncMock(return_value=MagicMock())
+
+        result = MagicMock()
+        result.count = 200
+        mock_pyrogram.invoke = AsyncMock(return_value=result)
+        client.client = mock_pyrogram
+
+        count = await client.get_messages_count(123, topic_id=42)
+
+        assert count == 200
+        # Должен использовать messages.GetReplies (invoke), а не get_chat_history_count
+        mock_pyrogram.invoke.assert_called_once()
+        mock_pyrogram.get_chat_history_count.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_messages_count_with_topic_and_dates(self):
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.resolve_peer = AsyncMock(return_value=MagicMock())
+
+        result = MagicMock()
+        result.count = 50
+        mock_pyrogram.invoke = AsyncMock(return_value=result)
+        client.client = mock_pyrogram
+
+        count = await client.get_messages_count(
+            123, datetime(2025, 1, 1), datetime(2025, 1, 31), topic_id=42
+        )
+
+        assert count == 50
+        # Один вызов GetReplies (не два GetHistory как для date_range_count)
+        assert mock_pyrogram.invoke.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_get_topic_name_success(self):
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.resolve_peer = AsyncMock(return_value=MagicMock())
+
+        topic = MagicMock()
+        topic.title = "Обход блокировок"
+        result = MagicMock()
+        result.topics = [topic]
+        mock_pyrogram.invoke = AsyncMock(return_value=result)
+        client.client = mock_pyrogram
+
+        name = await client.get_topic_name(123, topic_id=42)
+
+        assert name == "Обход блокировок"
+
+    @pytest.mark.asyncio
+    async def test_get_topic_name_not_found(self):
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.resolve_peer = AsyncMock(return_value=MagicMock())
+
+        result = MagicMock()
+        result.topics = []
+        mock_pyrogram.invoke = AsyncMock(return_value=result)
+        client.client = mock_pyrogram
+
+        name = await client.get_topic_name(123, topic_id=99999)
+
+        assert name is None
+
+    @pytest.mark.asyncio
+    async def test_get_topic_name_error_returns_none(self):
+        client = TelegramClient()
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.resolve_peer = AsyncMock(side_effect=Exception("API error"))
+        client.client = mock_pyrogram
+
+        name = await client.get_topic_name(123, topic_id=42)
+
+        assert name is None
+
+
 class TestTelegramClientContextManager:
 
     @pytest.mark.asyncio
@@ -971,3 +1116,395 @@ class TestResolveNumericChatIdWithCanonicalMapping:
 
         assert is_accessible is True
         assert error is None
+
+
+class TestTelegramClientTopicExport:
+    """Тесты экспорта из forum topics через raw MTProto."""
+
+    def _make_msg(self, msg_id: int, text: str = ""):
+        return MagicMock(
+            id=msg_id,
+            text=text or f"Message {msg_id}",
+            date=datetime(2025, 1, 1, 0, 0, msg_id % 60),
+            from_user=None,
+            entities=None,
+            media=None,
+            forward_from=None,
+            forward_sender_name=None,
+            forward_date=None,
+            edit_date=None,
+            reply_to_message_id=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_chat_history_with_topic_id_delegates_to_topic_method(self):
+        """topic_id задан — вызывается _get_topic_history вместо обычного get_chat_history"""
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+        client.client = mock_pyrogram
+
+        # Mock _get_topic_history
+        async def mock_topic_history(**kwargs):
+            yield MagicMock(id=100, text="Topic msg", date=datetime(2025, 1, 1))
+            return
+        client._get_topic_history = mock_topic_history
+
+        messages = []
+        async for msg in client.get_chat_history(123, topic_id=42):
+            messages.append(msg)
+
+        assert len(messages) == 1
+        # Обычный get_chat_history Pyrogram НЕ должен вызываться
+        mock_pyrogram.get_chat_history.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_chat_history_without_topic_uses_standard_path(self):
+        """topic_id=None — стандартный путь через Pyrogram get_chat_history"""
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+
+        raw = [self._make_msg(2), self._make_msg(1)]
+
+        async def mock_get_chat_history(*args, **kwargs):
+            for msg in raw:
+                yield msg
+
+        mock_pyrogram.get_chat_history = mock_get_chat_history
+        client.client = mock_pyrogram
+
+        messages = []
+        async for msg in client.get_chat_history(123, topic_id=None):
+            messages.append(msg)
+
+        assert len(messages) == 2
+
+    @pytest.mark.asyncio
+    async def test_get_chat_history_topic_id_none_by_default(self):
+        """Без передачи topic_id — стандартный путь (backward compat)"""
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+
+        async def mock_get_chat_history(*args, **kwargs):
+            yield self._make_msg(1)
+
+        mock_pyrogram.get_chat_history = mock_get_chat_history
+        client.client = mock_pyrogram
+
+        messages = []
+        async for msg in client.get_chat_history(123):
+            messages.append(msg)
+
+        assert len(messages) == 1
+
+
+class TestGetTopicHistoryDirect:
+    """Тесты _get_topic_history напрямую: пагинация, лимит, дедупликация, FloodWait."""
+
+    def _make_raw_msg(self, msg_id: int):
+        msg = MagicMock()
+        msg.id = msg_id
+        return msg
+
+    def _make_search_result(self, msg_ids: list[int]):
+        result = MagicMock()
+        result.messages = [self._make_raw_msg(mid) for mid in msg_ids]
+        result.users = []
+        result.chats = []
+        return result
+
+    def _setup_client(self):
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.resolve_peer = AsyncMock(return_value=MagicMock())
+        client.client = mock_pyrogram
+        return client, mock_pyrogram
+
+    @pytest.mark.asyncio
+    @patch("pyrogram_client.MessageConverter")
+    @patch("pyrogram_client.pyrogram_types.Message._parse")
+    async def test_single_batch(self, mock_parse, mock_converter):
+        """Один батч < batch_size — цикл завершается."""
+        client, mock_pyrogram = self._setup_client()
+
+        mock_pyrogram.invoke = AsyncMock(return_value=self._make_search_result([10, 9, 8]))
+
+        async def parse_side_effect(cli, raw, users, chats):
+            m = MagicMock()
+            m.id = raw.id
+            return m
+        mock_parse.side_effect = parse_side_effect
+        mock_converter.convert_message.return_value = ExportedMessage(id=1, date="2025-01-01", text="msg")
+
+        messages = []
+        async for msg in client._get_topic_history(chat_id=123, topic_id=42):
+            messages.append(msg)
+
+        assert len(messages) == 3
+        mock_pyrogram.invoke.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch("pyrogram_client.MessageConverter")
+    @patch("pyrogram_client.pyrogram_types.Message._parse")
+    async def test_limit_stops_early(self, mock_parse, mock_converter):
+        """limit=2 — останавливается после 2 сообщений."""
+        client, mock_pyrogram = self._setup_client()
+
+        mock_pyrogram.invoke = AsyncMock(return_value=self._make_search_result([10, 9, 8]))
+
+        async def parse_side_effect(cli, raw, users, chats):
+            m = MagicMock()
+            m.id = raw.id
+            return m
+        mock_parse.side_effect = parse_side_effect
+        mock_converter.convert_message.return_value = ExportedMessage(id=1, date="2025-01-01", text="msg")
+
+        messages = []
+        async for msg in client._get_topic_history(chat_id=123, topic_id=42, limit=2):
+            messages.append(msg)
+
+        assert len(messages) == 2
+
+    @pytest.mark.asyncio
+    @patch("pyrogram_client.MessageConverter")
+    @patch("pyrogram_client.pyrogram_types.Message._parse")
+    async def test_pagination_two_batches(self, mock_parse, mock_converter):
+        """Два батча: первый полный (100 сообщений), второй неполный."""
+        client, mock_pyrogram = self._setup_client()
+
+        batch1 = self._make_search_result(list(range(200, 100, -1)))  # 100 msgs
+        batch2 = self._make_search_result(list(range(100, 90, -1)))   # 10 msgs
+
+        mock_pyrogram.invoke = AsyncMock(side_effect=[batch1, batch2])
+
+        async def parse_side_effect(cli, raw, users, chats):
+            m = MagicMock()
+            m.id = raw.id
+            return m
+        mock_parse.side_effect = parse_side_effect
+        mock_converter.convert_message.return_value = ExportedMessage(id=1, date="2025-01-01", text="msg")
+
+        messages = []
+        async for msg in client._get_topic_history(chat_id=123, topic_id=42):
+            messages.append(msg)
+
+        assert len(messages) == 110
+        assert mock_pyrogram.invoke.call_count == 2
+
+    @pytest.mark.asyncio
+    @patch("pyrogram_client.MessageConverter")
+    @patch("pyrogram_client.pyrogram_types.Message._parse")
+    async def test_dedup_skips_repeated_ids(self, mock_parse, mock_converter):
+        """Дубликаты msg_id пропускаются."""
+        client, mock_pyrogram = self._setup_client()
+
+        mock_pyrogram.invoke = AsyncMock(return_value=self._make_search_result([10, 10, 9]))
+
+        async def parse_side_effect(cli, raw, users, chats):
+            m = MagicMock()
+            m.id = raw.id
+            return m
+        mock_parse.side_effect = parse_side_effect
+        mock_converter.convert_message.return_value = ExportedMessage(id=1, date="2025-01-01", text="msg")
+
+        messages = []
+        async for msg in client._get_topic_history(chat_id=123, topic_id=42):
+            messages.append(msg)
+
+        assert len(messages) == 2  # 10 и 9, дубликат 10 пропущен
+
+    @pytest.mark.asyncio
+    @patch("pyrogram_client.asyncio.sleep", new_callable=AsyncMock)
+    @patch("pyrogram_client.MessageConverter")
+    @patch("pyrogram_client.pyrogram_types.Message._parse")
+    async def test_floodwait_retry(self, mock_parse, mock_converter, mock_sleep):
+        """FloodWait — retry и продолжение."""
+        client, mock_pyrogram = self._setup_client()
+
+        flood_error = FloodWait(value=5)
+        ok_result = self._make_search_result([10, 9])
+
+        mock_pyrogram.invoke = AsyncMock(side_effect=[flood_error, ok_result])
+
+        async def parse_side_effect(cli, raw, users, chats):
+            m = MagicMock()
+            m.id = raw.id
+            return m
+        mock_parse.side_effect = parse_side_effect
+        mock_converter.convert_message.return_value = ExportedMessage(id=1, date="2025-01-01", text="msg")
+
+        messages = []
+        async for msg in client._get_topic_history(chat_id=123, topic_id=42):
+            messages.append(msg)
+
+        assert len(messages) == 2
+        mock_sleep.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch("pyrogram_client.MessageConverter")
+    @patch("pyrogram_client.pyrogram_types.Message._parse")
+    async def test_min_id_boundary_stops(self, mock_parse, mock_converter):
+        """msg_id <= min_id — генератор останавливается."""
+        client, mock_pyrogram = self._setup_client()
+
+        mock_pyrogram.invoke = AsyncMock(return_value=self._make_search_result([15, 10, 5]))
+
+        async def parse_side_effect(cli, raw, users, chats):
+            m = MagicMock()
+            m.id = raw.id
+            return m
+        mock_parse.side_effect = parse_side_effect
+        mock_converter.convert_message.return_value = ExportedMessage(id=1, date="2025-01-01", text="msg")
+
+        messages = []
+        async for msg in client._get_topic_history(chat_id=123, topic_id=42, min_id=10):
+            messages.append(msg)
+
+        assert len(messages) == 1  # только id=15, id=10 <= min_id → return
+
+    @pytest.mark.asyncio
+    @patch("pyrogram_client.MessageConverter")
+    @patch("pyrogram_client.pyrogram_types.Message._parse")
+    async def test_parse_failure_skips_message(self, mock_parse, mock_converter):
+        """Ошибка парсинга одного сообщения — пропускается, остальные yield'ятся."""
+        client, mock_pyrogram = self._setup_client()
+
+        mock_pyrogram.invoke = AsyncMock(return_value=self._make_search_result([10, 9, 8]))
+
+        call_count = 0
+        async def parse_side_effect(cli, raw, users, chats):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:  # второе сообщение (id=9) фейлит парсинг
+                raise ValueError("parse error")
+            m = MagicMock()
+            m.id = raw.id
+            return m
+        mock_parse.side_effect = parse_side_effect
+        mock_converter.convert_message.return_value = ExportedMessage(id=1, date="2025-01-01", text="msg")
+
+        messages = []
+        async for msg in client._get_topic_history(chat_id=123, topic_id=42):
+            messages.append(msg)
+
+        assert len(messages) == 2  # id=10 и id=8, id=9 пропущен
+
+    @pytest.mark.asyncio
+    @patch("pyrogram_client.MessageConverter")
+    @patch("pyrogram_client.pyrogram_types.Message._parse")
+    async def test_from_date_stops_iteration_early(self, mock_parse, mock_converter):
+        """Сообщение старше from_date — итерация останавливается."""
+        client, mock_pyrogram = self._setup_client()
+
+        mock_pyrogram.invoke = AsyncMock(return_value=self._make_search_result([10, 9, 8]))
+
+        async def parse_side_effect(cli, raw, users, chats):
+            m = MagicMock()
+            m.id = raw.id
+            dates = {10: datetime(2025, 1, 3), 9: datetime(2025, 1, 2), 8: datetime(2025, 1, 1)}
+            m.date = dates[raw.id]
+            return m
+        mock_parse.side_effect = parse_side_effect
+        mock_converter.convert_message.side_effect = lambda m: ExportedMessage(
+            id=m.id, date=str(m.date.date()), text="msg"
+        )
+
+        messages = []
+        async for msg in client._get_topic_history(
+            chat_id=123, topic_id=42, from_date=datetime(2025, 1, 2, tzinfo=timezone.utc)
+        ):
+            messages.append(msg)
+
+        assert len(messages) == 2
+        assert [m.id for m in messages] == [10, 9]
+
+    @pytest.mark.asyncio
+    @patch("pyrogram_client.MessageConverter")
+    @patch("pyrogram_client.pyrogram_types.Message._parse")
+    async def test_to_date_skips_newer_messages(self, mock_parse, mock_converter):
+        """Сообщения новее to_date — пропускаются, старые yield'ятся."""
+        client, mock_pyrogram = self._setup_client()
+
+        mock_pyrogram.invoke = AsyncMock(return_value=self._make_search_result([10, 9, 8]))
+
+        async def parse_side_effect(cli, raw, users, chats):
+            m = MagicMock()
+            m.id = raw.id
+            dates = {10: datetime(2025, 1, 3), 9: datetime(2025, 1, 2), 8: datetime(2025, 1, 1)}
+            m.date = dates[raw.id]
+            return m
+        mock_parse.side_effect = parse_side_effect
+        mock_converter.convert_message.side_effect = lambda m: ExportedMessage(
+            id=m.id, date=str(m.date.date()), text="msg"
+        )
+
+        messages = []
+        async for msg in client._get_topic_history(
+            chat_id=123, topic_id=42, to_date=datetime(2025, 1, 2, tzinfo=timezone.utc)
+        ):
+            messages.append(msg)
+
+        assert len(messages) == 2
+        assert [m.id for m in messages] == [9, 8]
+
+    @pytest.mark.asyncio
+    @patch("pyrogram_client.MessageConverter")
+    @patch("pyrogram_client.pyrogram_types.Message._parse")
+    async def test_date_range_filters_both_sides(self, mock_parse, mock_converter):
+        """from_date + to_date — только сообщения в диапазоне."""
+        client, mock_pyrogram = self._setup_client()
+
+        mock_pyrogram.invoke = AsyncMock(return_value=self._make_search_result([10, 9, 8, 7]))
+
+        async def parse_side_effect(cli, raw, users, chats):
+            m = MagicMock()
+            m.id = raw.id
+            dates = {
+                10: datetime(2025, 1, 4),
+                9: datetime(2025, 1, 3),
+                8: datetime(2025, 1, 2),
+                7: datetime(2025, 1, 1),
+            }
+            m.date = dates[raw.id]
+            return m
+        mock_parse.side_effect = parse_side_effect
+        mock_converter.convert_message.side_effect = lambda m: ExportedMessage(
+            id=m.id, date=str(m.date.date()), text="msg"
+        )
+
+        messages = []
+        async for msg in client._get_topic_history(
+            chat_id=123, topic_id=42,
+            from_date=datetime(2025, 1, 2, tzinfo=timezone.utc),
+            to_date=datetime(2025, 1, 3, tzinfo=timezone.utc),
+        ):
+            messages.append(msg)
+
+        assert len(messages) == 2
+        assert [m.id for m in messages] == [9, 8]
+
+    @pytest.mark.asyncio
+    @patch("pyrogram_client.MessageConverter")
+    @patch("pyrogram_client.pyrogram_types.Message._parse")
+    async def test_no_dates_returns_all_messages(self, mock_parse, mock_converter):
+        """Без from_date/to_date — все сообщения возвращаются."""
+        client, mock_pyrogram = self._setup_client()
+
+        mock_pyrogram.invoke = AsyncMock(return_value=self._make_search_result([10, 9, 8]))
+
+        async def parse_side_effect(cli, raw, users, chats):
+            m = MagicMock()
+            m.id = raw.id
+            m.date = datetime(2025, 1, 1)
+            return m
+        mock_parse.side_effect = parse_side_effect
+        mock_converter.convert_message.return_value = ExportedMessage(id=1, date="2025-01-01", text="msg")
+
+        messages = []
+        async for msg in client._get_topic_history(chat_id=123, topic_id=42):
+            messages.append(msg)
+
+        assert len(messages) == 3

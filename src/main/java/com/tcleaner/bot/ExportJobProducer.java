@@ -36,20 +36,25 @@ public class ExportJobProducer {
     }
 
     public String enqueue(long userId, long userChatId, long chatId) {
-        return enqueue(userId, userChatId, (Object) chatId, null, null, null, null);
+        return enqueue(userId, userChatId, (Object) chatId, null, null, null, null, null);
     }
 
     public String enqueue(long userId, long userChatId, long chatId, String fromDate, String toDate) {
-        return enqueue(userId, userChatId, (Object) chatId, fromDate, toDate, null, null);
+        return enqueue(userId, userChatId, (Object) chatId, null, fromDate, toDate, null, null);
     }
 
     public String enqueue(long userId, long userChatId, String chatIdentifier) {
-        return enqueue(userId, userChatId, (Object) chatIdentifier, null, null, null, null);
+        return enqueue(userId, userChatId, (Object) chatIdentifier, null, null, null, null, null);
     }
 
     public String enqueue(long userId, long userChatId, String chatIdentifier,
                           String fromDate, String toDate) {
-        return enqueue(userId, userChatId, (Object) chatIdentifier, fromDate, toDate, null, null);
+        return enqueue(userId, userChatId, (Object) chatIdentifier, null, fromDate, toDate, null, null);
+    }
+
+    public String enqueue(long userId, long userChatId, String chatIdentifier,
+                          Integer topicId, String fromDate, String toDate) {
+        return enqueue(userId, userChatId, (Object) chatIdentifier, topicId, fromDate, toDate, null, null);
     }
 
     private static final String ACTIVE_EXPORT_PREFIX = "active_export:";
@@ -59,8 +64,8 @@ public class ExportJobProducer {
     private static final long ACTIVE_EXPORT_TTL_MINUTES = 60;
     private static final String EXPRESS_QUEUE_SUFFIX = "_express";
 
-    private String enqueue(long userId, long userChatId, Object chatId, String fromDate,
-                           String toDate, String keywords, String excludeKeywords) {
+    private String enqueue(long userId, long userChatId, Object chatId, Integer topicId,
+                           String fromDate, String toDate, String keywords, String excludeKeywords) {
         String taskId = "export_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
 
         Map<String, Object> job = new HashMap<>();
@@ -68,6 +73,9 @@ public class ExportJobProducer {
         job.put("user_id", userId);
         job.put("user_chat_id", userChatId);
         job.put("chat_id", chatId);
+        if (topicId != null) {
+            job.put("topic_id", topicId);
+        }
         job.put("limit", 0);
         job.put("offset_id", 0);
         if (fromDate != null) {

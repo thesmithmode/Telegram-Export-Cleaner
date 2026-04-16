@@ -433,7 +433,7 @@ class TestCancelSupport:
 
             # Verify cancel was detected and messages were saved
             assert is_cancelled == True
-            worker.message_cache.store_messages.assert_called_once_with(job.chat_id, test_messages)
+            worker.message_cache.store_messages.assert_called_once_with(job.chat_id, test_messages, topic_id=job.effective_topic_id)
 
     async def test_cancel_clears_active_export_marker(self):
         from main import ExportWorker
