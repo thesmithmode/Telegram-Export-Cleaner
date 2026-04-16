@@ -1,0 +1,26 @@
+# Telegram Export Worker Dependencies
+# Version: 1.0
+# Date: 2026-03-18
+
+# Core Telegram API
+pyrogram==2.0.106
+TgCrypto==1.2.5
+
+# Redis queue handling
+redis==5.0.1
+
+# HTTP client
+httpx==0.25.2
+
+# Data validation
+pydantic==2.6.1
+pydantic-settings==2.2.0
+
+# Logging and monitoring
+psutil==5.9.8
+
+# Serialization (cache)
+msgpack==1.0.7
+
+# Environment management
+python-dotenv==1.0.0
