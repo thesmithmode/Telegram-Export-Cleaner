@@ -52,6 +52,13 @@ public class EnvUserBootstrap implements CommandLineRunner {
     @Override
     @Transactional
     public void run(String... args) {
+        // Удаляем устаревших ADMIN-пользователей с другим username (смена логина через env)
+        repository.findAllByRole(DashboardRole.ADMIN).stream()
+                .filter(u -> !u.getUsername().equals(adminUsername))
+                .forEach(u -> {
+                    repository.delete(u);
+                    log.info("Dashboard: удалён устаревший admin '{}'", u.getUsername());
+                });
         upsert(adminUsername, adminPassword, DashboardRole.ADMIN, null);
         if (!testUsername.isBlank() && !testPassword.isBlank()) {
             Long botId = testBotUserId > 0 ? testBotUserId : null;

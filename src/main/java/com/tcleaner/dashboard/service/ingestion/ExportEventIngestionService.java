@@ -15,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
 
 /**
@@ -226,8 +227,13 @@ public class ExportEventIngestionService {
         try {
             return LocalDate.parse(iso);
         } catch (DateTimeParseException ex) {
-            log.warn("Невалидная дата в payload: {}", iso);
-            return null;
+            // payload может прийти как datetime: "2026-04-14T00:00:00" — берём только дату
+            try {
+                return LocalDateTime.parse(iso).toLocalDate();
+            } catch (DateTimeParseException ex2) {
+                log.warn("Невалидная дата в payload: {}", iso);
+                return null;
+            }
         }
     }
 

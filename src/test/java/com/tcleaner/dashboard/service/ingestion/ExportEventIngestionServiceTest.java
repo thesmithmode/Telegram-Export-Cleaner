@@ -195,6 +195,41 @@ class ExportEventIngestionServiceTest {
         assertThat(events.findByTaskId(TASK)).isEmpty();
     }
 
+    @Test
+    @DisplayName("fromDate/toDate в формате datetime (T00:00:00) корректно парсятся")
+    void dateTimeFormatParsedAsLocalDate() {
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_STARTED)
+                .taskId(TASK).botUserId(USER_ID)
+                .chatIdRaw("@chat").canonicalChatId("-100777")
+                .chatTitle("Test Chat").source("bot").status("queued")
+                .fromDate("2026-04-14T00:00:00")
+                .toDate("2026-04-16T00:00:00")
+                .ts(TS).build());
+
+        ExportEvent ev = events.findByTaskId(TASK).orElseThrow();
+        assertThat(ev.getFromDate()).isNotNull();
+        assertThat(ev.getFromDate().toString()).isEqualTo("2026-04-14");
+        assertThat(ev.getToDate()).isNotNull();
+        assertThat(ev.getToDate().toString()).isEqualTo("2026-04-16");
+    }
+
+    @Test
+    @DisplayName("fromDate в формате yyyy-MM-dd также корректно парсится")
+    void plainDateFormatParsed() {
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_STARTED)
+                .taskId(TASK).botUserId(USER_ID)
+                .chatIdRaw("@chat").canonicalChatId("-100777")
+                .chatTitle("Test Chat").source("bot").status("queued")
+                .fromDate("2026-04-14")
+                .ts(TS).build());
+
+        ExportEvent ev = events.findByTaskId(TASK).orElseThrow();
+        assertThat(ev.getFromDate()).isNotNull();
+        assertThat(ev.getFromDate().toString()).isEqualTo("2026-04-14");
+    }
+
     private static StatsEventPayload started() {
         return StatsEventPayload.builder()
                 .type(StatsEventType.EXPORT_STARTED)
