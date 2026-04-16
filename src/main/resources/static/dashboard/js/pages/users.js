@@ -5,14 +5,14 @@
 (function () {
     "use strict";
 
-    const { fetchJson, formatNumber, formatBytes, formatDate } = window.Dashboard || {};
+    const { fetchJson, formatNumber, formatBytes, formatDate, escapeHtml } = window.Dashboard || {};
     if (!fetchJson) { return; }
 
     function row(u) {
-        const name = u.displayName || u.username || `id ${u.botUserId}`;
-        const link = `/dashboard/user/${u.botUserId}`;
+        const name = escapeHtml(u.displayName || u.username || `id ${u.botUserId}`);
+        const link = `/dashboard/user/${encodeURIComponent(u.botUserId)}`;
         return `<tr>
-          <td><a href="${link}">${name}</a> <small style="color:var(--muted)">@${u.username || ""}</small></td>
+          <td><a href="${link}">${name}</a> <small style="color:var(--muted)">@${escapeHtml(u.username || "")}</small></td>
           <td>${formatNumber(u.totalExports)}</td>
           <td>${formatNumber(u.totalMessages)}</td>
           <td>${formatBytes(u.totalBytes)}</td>

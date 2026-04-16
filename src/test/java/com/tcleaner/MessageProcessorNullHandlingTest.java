@@ -243,6 +243,7 @@ class MessageProcessorNullHandlingTest {
 
             String result = processor.processMessage(message);
             assertThat(result).isNotNull();
+            assertThat(result).contains("!@#$%^&*()_+-=[]{}|;:',.&lt;&gt;?/");
         }
     }
 }

@@ -3,7 +3,7 @@ import logging
 import json
 import asyncio
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 import redis.asyncio as redis
 
@@ -326,7 +326,7 @@ class QueueConsumer:
                 "task_id": task_id,
                 "status": "failed",
                 "error": error,
-                "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             })
             await self.redis_client.xadd(
                 settings.STATS_STREAM_KEY,

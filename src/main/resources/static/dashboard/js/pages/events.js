@@ -6,7 +6,7 @@
 (function () {
     "use strict";
 
-    const { fetchJson, formatNumber, formatBytes, formatDate } = window.Dashboard || {};
+    const { fetchJson, formatNumber, formatBytes, formatDate, escapeHtml } = window.Dashboard || {};
     if (!fetchJson) { return; }
 
     const STATUS_CLASS = {
@@ -23,10 +23,10 @@
     }
 
     function row(e) {
-        const user = e.username ? `@${e.username}` : (e.botUserId || "—");
+        const user = e.username ? `@${escapeHtml(e.username)}` : (e.botUserId || "—");
         return `<tr>
           <td>${user}</td>
-          <td>${e.chatTitle || e.canonicalChatId || "—"}</td>
+          <td>${escapeHtml(e.chatTitle || e.canonicalChatId || "—")}</td>
           <td>${chip(e.status)}</td>
           <td>${formatNumber(e.messagesCount)}</td>
           <td>${formatBytes(e.bytesCount)}</td>

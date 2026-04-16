@@ -44,6 +44,6 @@ public class BotUserAccessPolicy {
         if (role == DashboardRole.ADMIN) {
             return true;
         }
-        return ownBotUserId != null && ownBotUserId == targetBotUserId;
+        return ownBotUserId != null && ownBotUserId.longValue() == targetBotUserId;
     }
 }

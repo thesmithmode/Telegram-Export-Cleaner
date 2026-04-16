@@ -111,3 +111,11 @@ env/
 *.env
 # Pyrogram session files
 export-worker/session/
+*.session
+
+# SQLite databases (created at runtime)
+*.db
+
+# TLS keys (never commit)
+*.pem
+*.key

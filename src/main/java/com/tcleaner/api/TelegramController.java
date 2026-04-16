@@ -179,6 +179,11 @@ public class TelegramController {
             delegate.flush();
         }
 
+        @Override
+        public void close() throws IOException {
+            delegate.close();
+        }
+
         long getByteCount() {
             return count;
         }

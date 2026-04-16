@@ -92,9 +92,20 @@
         });
     }
 
+    /** Экранирование HTML-спецсимволов для защиты от XSS. */
+    function escapeHtml(str) {
+        if (str === null || str === undefined) return "";
+        return String(str)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
+
     window.Dashboard = {
         fetchJson, formatNumber, formatBytes, formatDate,
-        readPeriodFromUrl,
+        readPeriodFromUrl, escapeHtml,
     };
 
     document.addEventListener("DOMContentLoaded", () => {

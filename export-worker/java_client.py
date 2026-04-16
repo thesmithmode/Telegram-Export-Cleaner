@@ -243,7 +243,8 @@ class JavaBotClient:
                 if "user_id" in e: new_e["user_id"] = e["user_id"]
                 res.append(new_e)
             return res
-        except Exception:
+        except Exception as e:
+            logger.warning("Entity transformation failed, returning original: %s", e)
             return entities
 
     @staticmethod
@@ -368,8 +369,8 @@ class JavaBotClient:
                     "text": text,
                 },
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to update queue position: %s", e)
 
     async def aclose(self) -> None:
         await self._http_client.aclose()

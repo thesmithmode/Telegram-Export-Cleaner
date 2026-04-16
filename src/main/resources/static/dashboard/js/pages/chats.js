@@ -5,7 +5,7 @@
 (function () {
     "use strict";
 
-    const { fetchJson, formatNumber, formatBytes, readPeriodFromUrl } = window.Dashboard || {};
+    const { fetchJson, formatNumber, formatBytes, readPeriodFromUrl, escapeHtml } = window.Dashboard || {};
     if (!fetchJson) { return; }
 
     function makeCanvas(id) {
@@ -37,7 +37,7 @@
     }
 
     function row(c) {
-        const name = c.chatTitle || c.canonicalChatId;
+        const name = escapeHtml(c.chatTitle || c.canonicalChatId);
         return `<tr>
           <td>${name}</td>
           <td>${formatNumber(c.exportCount)}</td>
