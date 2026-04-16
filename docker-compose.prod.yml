@@ -9,12 +9,17 @@
 #
 # Проверка сертификата:
 #   curl -I https://${TRAEFIK_DASHBOARD_DOMAIN}/dashboard/login
+#
+# ВАЖНО: перед первым деплоем создать общую сеть вручную:
+#   docker network create traefik-proxy
 
 services:
   # ===========================================================================
-  # Traefik v3: reverse-proxy + TLS (Let's Encrypt HTTP-01)
+  # Traefik v3: единый reverse-proxy для всего сервера
   # Слушает :80 (→ редирект на 443) и :443.
+  # Обслуживает ОБА домена: tec.* (дашборд) и st.* (SillyTavern).
   # /api/** наружу НЕ публикуется — только /dashboard/** через Dashboard-router.
+  # SillyTavern роутится через labels на контейнере st_app.
   # ===========================================================================
   traefik:
     image: traefik:v3.0
@@ -28,11 +33,15 @@ services:
       # HTTP → HTTPS глобальный редирект
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
-      # Docker provider (только явно помеченные сервисы)
+      # Docker provider — читает labels со ВСЕХ контейнеров сервера
       - --providers.docker=true
       - --providers.docker.exposedByDefault=false
-      - --providers.docker.network=telegram-cleaner_proxy
-      # ACME / Let's Encrypt
+      - --providers.docker.network=traefik-proxy
+      # File provider — локальный конфиг на сервере (не в репо!)
+      # Используется для маршрутизации других сервисов на хосте
+      - --providers.file.directory=/config
+      - --providers.file.watch=true
+      # ACME / Let's Encrypt (управляет SSL для всех доменов автоматически)
       - --certificatesresolvers.letsencrypt.acme.httpChallenge=true
       - --certificatesresolvers.letsencrypt.acme.httpChallenge.entryPoint=web
       - --certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_ACME_EMAIL}
@@ -40,14 +49,23 @@ services:
       # Dashboard отключён в проде
       - --api.dashboard=false
       - --log.level=INFO
+      # Access log в файл — fail2ban читает его для бана брутфорса
+      - --accesslog=true
+      - --accesslog.filepath=/logs/access.log
     ports:
       - "80:80"
       - "443:443"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - traefik_acme:/acme
+      # Логи на хост — fail2ban читает /root/traefik/logs/access.log
+      - /root/traefik/logs:/logs
+      # Локальные конфиги (не в репо) — маршруты других сервисов на хосте
+      - /root/traefik/config:/config:ro
+      # Файлы авторизации (htpasswd и др.) — создаются вручную на сервере
+      - /root/traefik/auth:/auth:ro
     networks:
-      - proxy
+      - traefik-proxy
     restart: unless-stopped
     mem_limit: 128m
     cpus: '0.1'
@@ -108,7 +126,7 @@ services:
       - export-data:/data/export
       - dashboard_data:/data/stats
     networks:
-      - proxy
+      - traefik-proxy
       - internal
     restart: unless-stopped
     healthcheck:
@@ -203,9 +221,11 @@ services:
         max-file: "3"
 
 networks:
-  # proxy: Traefik ↔ java-bot (внешний трафик)
-  proxy:
-    name: telegram-cleaner_proxy
+  # Общая сеть для Traefik — создаётся вручную один раз: docker network create traefik-proxy
+  # Все сервисы которые должны быть доступны снаружи подключаются к этой сети.
+  # SillyTavern (st_app) тоже подключён к ней через свой docker-compose.
+  traefik-proxy:
+    external: true
   # internal: java-bot ↔ worker ↔ redis (только внутренний трафик)
   internal:
     name: telegram-cleaner_internal

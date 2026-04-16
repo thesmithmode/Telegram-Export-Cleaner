@@ -187,6 +187,10 @@ jobs:
             TELEGRAM_API_ID=${{ secrets.TELEGRAM_API_ID }}
             TELEGRAM_API_HASH=${{ secrets.TELEGRAM_API_HASH }}
             TELEGRAM_SESSION_STRING=${{ secrets.TELEGRAM_SESSION_STRING }}
+            DASHBOARD_ADMIN_PASSWORD=${{ secrets.DASHBOARD_ADMIN_PASSWORD }}
+            DASHBOARD_TEST_PASSWORD=${{ secrets.DASHBOARD_TEST_PASSWORD }}
+            TRAEFIK_DASHBOARD_DOMAIN=${{ secrets.TRAEFIK_DASHBOARD_DOMAIN }}
+            TRAEFIK_ACME_EMAIL=${{ secrets.TRAEFIK_ACME_EMAIL }}
             ENVEOF
 
             echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
@@ -202,7 +206,7 @@ jobs:
             echo "⏳ Ждём /api/health (до 90 сек)..."
             HEALTH_OK=""
             for i in $(seq 1 30); do
-              if curl -fsS --max-time 3 http://127.0.0.1:8080/api/health >/dev/null 2>&1; then
+              if docker exec telegram-export-java-bot wget -qO/dev/null http://localhost:8080/api/health 2>/dev/null; then
                 HEALTH_OK=1
                 echo "✅ java-bot жив после $((i*3)) сек"
                 break
