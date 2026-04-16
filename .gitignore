@@ -116,6 +116,11 @@ export-worker/session/
 # SQLite databases (created at runtime)
 *.db
 
+# Bind-mount директории dev-compose (cache/, dashboard/) и бэкапы
+/cache/
+/dashboard/
+/backups/
+
 # TLS keys (never commit)
 *.pem
 *.key
