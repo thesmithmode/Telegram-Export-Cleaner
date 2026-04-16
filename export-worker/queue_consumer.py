@@ -12,7 +12,7 @@ Handles:
 import logging
 import json
 import asyncio
-from typing import Optional, Callable, Any
+from typing import Optional
 from datetime import datetime
 
 import redis.asyncio as redis
@@ -179,14 +179,16 @@ class QueueConsumer:
 
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse job JSON: {e}. Moving to DLQ.")
-                # Remove from staging and move to DLQ
-                await self.redis_client.lpop(dest_queue)
+                # Remove THIS specific payload from staging (LREM, not LPOP — LPOP
+                # would blindly drop the head of the list, which may belong to a
+                # concurrent worker or a recovered staging entry, causing data loss).
+                await self.redis_client.lrem(dest_queue, 1, job_json)
                 await self._move_to_dlq(job_json, f"JSON parse error: {e}")
                 return None
 
             except Exception as e:
                 logger.error(f"Failed to create ExportRequest: {e}. Moving to DLQ.")
-                await self.redis_client.lpop(dest_queue)
+                await self.redis_client.lrem(dest_queue, 1, job_json)
                 await self._move_to_dlq(job_json, f"Validation error: {e}")
                 return None
 
@@ -357,7 +359,11 @@ class QueueConsumer:
             raw = await self.redis_client.get(f"staging:meta:{task_id}")
 
             # Batch the 4 write operations into one pipeline (4 RTT → 1 RTT)
-            pipe = self.redis_client.pipeline()
+            # transaction=True (MULTI/EXEC) — явно указано, чтобы не зависеть от
+            # дефолта redis-py: частичный fail в середине оставил бы job
+            # в несогласованном состоянии (delete processing выполнено, но staging
+            # ещё числит job → recover_staging_jobs перезапустит уже завершённую).
+            pipe = self.redis_client.pipeline(transaction=True)
             pipe.delete(processing_key)
             pipe.setex(completed_key, JOB_MARKER_TTL, str(datetime.now().isoformat()))
             pipe.srem("staging:jobs", task_id)

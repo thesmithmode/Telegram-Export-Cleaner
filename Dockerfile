@@ -9,6 +9,9 @@ RUN mvn clean package -DskipTests -q
 
 # Stage 2: Runtime
 FROM eclipse-temurin:21-jre-alpine
+# LABEL нужен для фильтрованного docker prune в CI/CD — чтобы не снести образы
+# чужих проектов, живущих на том же хосте (external-service и др).
+LABEL project=telegram-cleaner
 WORKDIR /app
 RUN apk add --no-cache curl && \
     addgroup -S app && adduser -S app -G app && \

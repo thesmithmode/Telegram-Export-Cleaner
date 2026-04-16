@@ -116,4 +116,46 @@ class UrlValidatorTest {
                     .isEqualTo("https://safe.com");
         }
     }
+
+    /**
+     * Protocol-relative URL (//evil.com) в markdown-рендерерах превращается в
+     * https://evil.com. До фикса startsWith("/") ошибочно относил их к «относительным»
+     * и пропускал. Эти тесты защищают фикс от отката.
+     */
+    @Nested
+    @DisplayName("Protocol-relative URL — блокировка (regression)")
+    class BlocksProtocolRelative {
+
+        @Test
+        void blocksDoubleSlashHost() {
+            assertThat(UrlValidator.isSafeUrl("//evil.com")).isFalse();
+        }
+
+        @Test
+        void blocksDoubleSlashWithPath() {
+            assertThat(UrlValidator.isSafeUrl("//evil.com/steal?token=1")).isFalse();
+        }
+
+        @Test
+        void blocksTripleSlash() {
+            assertThat(UrlValidator.isSafeUrl("///attack.com")).isFalse();
+        }
+
+        @Test
+        void blocksDoubleSlashLocalhost() {
+            assertThat(UrlValidator.isSafeUrl("//127.0.0.1/admin")).isFalse();
+        }
+
+        @Test
+        void sanitizeFallsBackForProtocolRelative() {
+            assertThat(UrlValidator.sanitizeUrl("//evil.com", "#"))
+                    .isEqualTo("#");
+        }
+
+        @Test
+        void stillAllowsSingleSlashRelative() {
+            // Защита от overcorrection: /path должен оставаться разрешённым.
+            assertThat(UrlValidator.isSafeUrl("/path/to/page")).isTrue();
+        }
+    }
 }
