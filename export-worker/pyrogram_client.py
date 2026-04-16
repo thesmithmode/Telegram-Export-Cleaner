@@ -11,7 +11,7 @@ Handles:
 
 import asyncio
 import logging
-from typing import Optional, AsyncGenerator, Union
+from typing import Any, Optional, AsyncGenerator, Union
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -176,6 +176,7 @@ class TelegramClient:
         min_id: int = 0,
         from_date: Optional[datetime] = None,
         to_date: Optional[datetime] = None,
+        on_floodwait: Optional[Any] = None,
     ) -> AsyncGenerator[ExportedMessage, None]:
         """
         Get chat message history with exponential backoff for rate limiting.
@@ -297,6 +298,8 @@ class TelegramClient:
                         f"(have seen {len(seen_message_ids)} unique messages)"
                     )
 
+                    if on_floodwait:
+                        await on_floodwait(wait_time)
                     await asyncio.sleep(wait_time)
                     # Restart get_chat_history from last_offset_id with deduplication active
 

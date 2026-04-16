@@ -624,6 +624,73 @@ class TestTelegramClientFloodWait:
                     pass
 
 
+    @pytest.mark.asyncio
+    async def test_on_floodwait_callback_called_with_wait_time(self):
+        """on_floodwait callback вызывается с временем ожидания при FloodWait."""
+        from pyrogram.errors import FloodWait
+
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+
+        call_count = 0
+
+        async def mock_get_chat_history(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                yield self._make_msg(1)
+                raise FloodWait(value=30)
+            else:
+                yield self._make_msg(1)  # duplicate
+
+        mock_pyrogram.get_chat_history = mock_get_chat_history
+        client.client = mock_pyrogram
+
+        floodwait_calls = []
+
+        async def on_floodwait(wait_seconds):
+            floodwait_calls.append(wait_seconds)
+
+        with patch("pyrogram_client.asyncio.sleep", new_callable=AsyncMock):
+            messages = []
+            async for msg in client.get_chat_history(123, on_floodwait=on_floodwait):
+                messages.append(msg.id)
+
+        assert len(floodwait_calls) == 1, "on_floodwait должен быть вызван ровно один раз"
+        assert floodwait_calls[0] >= 30, "wait_time должен быть >= значению FloodWait"
+
+    @pytest.mark.asyncio
+    async def test_no_on_floodwait_does_not_crash(self):
+        """Если on_floodwait=None — FloodWait обрабатывается без ошибок."""
+        from pyrogram.errors import FloodWait
+
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+
+        call_count = 0
+
+        async def mock_get_chat_history(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise FloodWait(value=1)
+                yield  # make it async generator
+            else:
+                yield self._make_msg(1)
+
+        mock_pyrogram.get_chat_history = mock_get_chat_history
+        client.client = mock_pyrogram
+
+        with patch("pyrogram_client.asyncio.sleep", new_callable=AsyncMock):
+            messages = []
+            async for msg in client.get_chat_history(123, on_floodwait=None):
+                messages.append(msg.id)
+
+        assert messages == [1]
+
+
 class TestTelegramClientMessageCount:
     """Test message count methods."""
 
