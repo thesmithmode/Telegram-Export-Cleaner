@@ -1,7 +1,11 @@
 package com.tcleaner.bot;
 
+import com.tcleaner.dashboard.events.StatsEventPayload;
+import com.tcleaner.dashboard.events.StatsEventType;
+import com.tcleaner.dashboard.events.StatsStreamPublisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -12,6 +16,7 @@ import org.telegram.telegrambots.longpolling.util.LongPollingSingleThreadUpdateC
 import org.telegram.telegrambots.meta.api.objects.commands.BotCommand;
 import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
 import org.telegram.telegrambots.meta.api.objects.Update;
+import org.telegram.telegrambots.meta.api.objects.User;
 import org.telegram.telegrambots.meta.api.objects.message.Message;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
@@ -71,16 +76,19 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     private final String botToken;
     private final ExportJobProducer jobProducer;
     private final BotMessenger messenger;
+    private final ObjectProvider<StatsStreamPublisher> statsPublisherProvider;
     private final ConcurrentHashMap<Long, UserSession> sessions = new ConcurrentHashMap<>();
 
     public ExportBot(
             @Value("${telegram.bot.token}") String botToken,
             ExportJobProducer jobProducer,
-            BotMessenger messenger
+            BotMessenger messenger,
+            ObjectProvider<StatsStreamPublisher> statsPublisherProvider
     ) {
         this.botToken = botToken;
         this.jobProducer = jobProducer;
         this.messenger = messenger;
+        this.statsPublisherProvider = statsPublisherProvider;
         log.info("Telegram-бот инициализирован");
     }
 
@@ -113,6 +121,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
 
     private void processUpdate(Update update) {
         if (update.hasCallbackQuery()) {
+            publishBotUserSeen(update.getCallbackQuery().getFrom());
             handleCallbackSafe(update.getCallbackQuery());
             return;
         }
@@ -128,6 +137,8 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
 
         long chatId = message.getChatId();
         long userId = message.getFrom().getId();
+
+        publishBotUserSeen(message.getFrom());
 
         if (message.hasText()) {
             handleMessageText(chatId, userId, message.getText().trim());
@@ -550,5 +561,39 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private void publishBotUserSeen(User from) {
+        StatsStreamPublisher publisher = statsPublisherProvider.getIfAvailable();
+        if (publisher == null || from == null) {
+            return;
+        }
+        try {
+            publisher.publish(StatsEventPayload.builder()
+                    .type(StatsEventType.BOT_USER_SEEN)
+                    .botUserId(from.getId())
+                    .username(from.getUserName())
+                    .displayName(buildDisplayName(from))
+                    .ts(Instant.now())
+                    .build());
+        } catch (Exception ex) {
+            log.debug("bot_user.seen не опубликовано: {}", ex.getMessage());
+        }
+    }
+
+    private static String buildDisplayName(User from) {
+        String first = from.getFirstName();
+        String last = from.getLastName();
+        StringBuilder sb = new StringBuilder();
+        if (first != null && !first.isBlank()) {
+            sb.append(first);
+        }
+        if (last != null && !last.isBlank()) {
+            if (!sb.isEmpty()) {
+                sb.append(' ');
+            }
+            sb.append(last);
+        }
+        return sb.isEmpty() ? null : sb.toString();
     }
 }

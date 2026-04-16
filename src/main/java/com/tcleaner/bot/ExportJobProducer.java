@@ -1,12 +1,17 @@
 package com.tcleaner.bot;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tcleaner.dashboard.events.StatsEventPayload;
+import com.tcleaner.dashboard.events.StatsEventType;
+import com.tcleaner.dashboard.events.StatsStreamPublisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,15 +29,18 @@ public class ExportJobProducer {
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
     private final String queueName;
+    private final ObjectProvider<StatsStreamPublisher> statsPublisherProvider;
 
     public ExportJobProducer(
             StringRedisTemplate redis,
             ObjectMapper objectMapper,
-            @Value("${telegram.queue.name}") String queueName
+            @Value("${telegram.queue.name}") String queueName,
+            ObjectProvider<StatsStreamPublisher> statsPublisherProvider
     ) {
         this.redis = redis;
         this.objectMapper = objectMapper;
         this.queueName = queueName;
+        this.statsPublisherProvider = statsPublisherProvider;
     }
 
     public String enqueue(long userId, long userChatId, long chatId) {
@@ -116,6 +124,7 @@ public class ExportJobProducer {
             redis.opsForValue().set("job_queue:" + taskId, targetQueue, ACTIVE_EXPORT_TTL_MINUTES, TimeUnit.MINUTES);
             redis.opsForList().rightPush(targetQueue, json);
             log.info("Задача {} добавлена в очередь {} (chat_id={}, cached={})", taskId, targetQueue, chatId, cached);
+            publishExportStarted(taskId, userId, chatId, topicId, fromDate, toDate, keywords, excludeKeywords);
             return taskId;
         } catch (IllegalStateException e) {
             throw e;
@@ -250,5 +259,44 @@ public class ExportJobProducer {
 
         redis.delete(ACTIVE_EXPORT_PREFIX + userId);
         log.info("Запрошена отмена экспорта {} для пользователя {}", taskId, userId);
+        publishStats(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_CANCELLED)
+                .taskId(taskId)
+                .botUserId(userId)
+                .status("cancelled")
+                .source("bot")
+                .ts(Instant.now())
+                .build());
+    }
+
+    private void publishExportStarted(String taskId, long userId, Object chatId, Integer topicId,
+                                      String fromDate, String toDate,
+                                      String keywords, String excludeKeywords) {
+        publishStats(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_STARTED)
+                .taskId(taskId)
+                .botUserId(userId)
+                .chatIdRaw(String.valueOf(chatId))
+                .topicId(topicId)
+                .fromDate(fromDate)
+                .toDate(toDate)
+                .keywords(keywords)
+                .excludeKeywords(excludeKeywords)
+                .status("queued")
+                .source("bot")
+                .ts(Instant.now())
+                .build());
+    }
+
+    private void publishStats(StatsEventPayload payload) {
+        StatsStreamPublisher publisher = statsPublisherProvider.getIfAvailable();
+        if (publisher == null) {
+            return;
+        }
+        try {
+            publisher.publish(payload);
+        } catch (Exception ex) {
+            log.debug("Публикация события статистики не удалась: {}", ex.getMessage());
+        }
     }
 }

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{dashboard/layout :: layout(title=#{chats.title}, content=~{::chats-content})}">
+<body>
+
+<!--
+  Страница чатов: бар-чарт топ-20 + таблица. Данные — GET /dashboard/api/stats/chats.
+-->
+<div th:fragment="chats-content" class="chats">
+    <h1 th:text="#{chats.heading}">Чаты</h1>
+
+    <div th:replace="~{dashboard/fragments/period-filter :: period-filter}"></div>
+
+    <div th:replace="~{dashboard/fragments/chart-block :: chart(
+            id='chart-top-chats', title=#{chats.chart.topChats}, height=320)}"></div>
+
+    <div class="table-wrap">
+        <table class="data-table" id="chats-table">
+            <thead>
+            <tr>
+                <th th:text="#{chats.col.chat}">Чат</th>
+                <th th:text="#{chats.col.exports}">Экспортов</th>
+                <th th:text="#{chats.col.messages}">Сообщений</th>
+                <th th:text="#{chats.col.bytes}">Объём</th>
+            </tr>
+            </thead>
+            <tbody id="chats-tbody">
+            <tr>
+                <td colspan="4" style="text-align:center;color:var(--muted)"
+                    th:text="#{overview.loading}">Загрузка…</td>
+            </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <script th:src="@{/dashboard/js/pages/chats.js}" defer></script>
+</div>
+
+</body>
+</html>
