@@ -130,9 +130,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 150s
     mem_limit: 768m
-    cpus: '0.5'
+    cpus: '0.75'
     logging:
       driver: "json-file"
       options:
