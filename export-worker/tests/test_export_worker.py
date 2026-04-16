@@ -1327,3 +1327,107 @@ class TestExportWorkerTopicSupport:
             call.kwargs.get("topic_name") == "Обход блокировок"
             for call in progress_calls
         )
+
+
+# ======================================================================
+# Heartbeat observability (long-running jobs, 300k+ сообщений / 1ч+)
+# ======================================================================
+# Порог liveness — 60 сек, TTL ключа — 120 сек (двойной запас на один
+# пропущенный heartbeat). Telegram API сам держит таймауты ~22 сек
+# (FloodWait, net read), так что ставить порог ниже минуты нельзя —
+# получим false-positive. Kill не делаем, только observability.
+
+@pytest.mark.asyncio
+class TestHeartbeat:
+
+    async def test_heartbeat_writes_key_with_ttl(self):
+        worker = ExportWorker()
+        worker.control_redis = AsyncMock()
+
+        await worker.heartbeat("task_abc", stage="fetch")
+
+        worker.control_redis.set.assert_called_once()
+        args, kwargs = worker.control_redis.set.call_args
+        assert args[0] == "worker:heartbeat:task_abc"
+        import json as _json
+        payload = _json.loads(args[1])
+        assert payload["stage"] == "fetch"
+        assert isinstance(payload["ts"], int)
+        assert kwargs.get("ex") == 120
+
+    async def test_heartbeat_without_redis_is_noop(self):
+        worker = ExportWorker()
+        worker.control_redis = None
+        # Не должен падать при отсутствии Redis
+        await worker.heartbeat("task_abc")
+
+    async def test_heartbeat_swallows_redis_errors(self):
+        """Redis down не должен ронять экспорт — heartbeat best-effort."""
+        worker = ExportWorker()
+        worker.control_redis = AsyncMock()
+        worker.control_redis.set = AsyncMock(side_effect=ConnectionError("Redis down"))
+
+        # Must not raise
+        await worker.heartbeat("task_abc")
+
+    async def test_clear_heartbeat_deletes_key(self):
+        worker = ExportWorker()
+        worker.control_redis = AsyncMock()
+
+        await worker.clear_heartbeat("task_abc")
+
+        worker.control_redis.delete.assert_called_once_with(
+            "worker:heartbeat:task_abc"
+        )
+
+    async def test_cancel_checker_emits_heartbeat_as_side_effect(self):
+        """Главный инвариант: cancel-poll и heartbeat ходят парой.
+        Pyrogram-слой зовёт is_cancelled_fn каждые 200 сообщений и каждую
+        секунду в FloodWait → автоматически получаем heartbeat на той же
+        частоте без отдельного таймера."""
+        worker = ExportWorker()
+        worker.control_redis = AsyncMock()
+        worker.control_redis.get = AsyncMock(return_value=None)  # не отменено
+
+        check = worker._make_cancel_checker("task_abc")
+        result = await check()
+
+        assert result is False
+        # heartbeat SET вызван
+        set_calls = worker.control_redis.set.call_args_list
+        assert any(
+            call_args[0][0] == "worker:heartbeat:task_abc"
+            for call_args in set_calls
+        ), "cancel-poll должен эмитить heartbeat как side-effect"
+        # cancel-get тоже вызван
+        worker.control_redis.get.assert_called_once_with("cancel_export:task_abc")
+
+    async def test_cancel_checker_heartbeat_failure_does_not_break_cancel(self):
+        """Если heartbeat сломался — cancel всё равно должен работать.
+        Это критично: отмена важнее мониторинга."""
+        worker = ExportWorker()
+        worker.control_redis = AsyncMock()
+        worker.control_redis.set = AsyncMock(side_effect=ConnectionError("down"))
+        worker.control_redis.get = AsyncMock(return_value="1")  # отменено
+
+        check = worker._make_cancel_checker("task_abc")
+        result = await check()
+
+        assert result is True, "cancel должен работать даже если heartbeat упал"
+
+    async def test_cleanup_job_clears_heartbeat(self):
+        """После завершения job — убираем heartbeat, чтобы observer видел
+        'job закончился', а не 'живёт ещё 2 минуты по TTL'."""
+        worker = ExportWorker()
+        worker.control_redis = AsyncMock()
+        worker.control_redis.get = AsyncMock(return_value=None)
+
+        job = ExportRequest(
+            task_id="task_abc", user_id=1, chat_id=-100,
+            limit=0, offset_id=0,
+            from_date="2025-01-01T00:00:00", to_date="2025-12-31T23:59:59",
+        )
+        await worker._cleanup_job(job)
+
+        delete_calls = [c.args[0] for c in worker.control_redis.delete.call_args_list]
+        assert "worker:heartbeat:task_abc" in delete_calls

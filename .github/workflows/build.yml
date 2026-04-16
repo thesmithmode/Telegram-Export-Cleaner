@@ -165,7 +165,7 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           source: docker-compose.prod.yml
-          target: /root/telegram-cleaner/
+          target: ${{ secrets.SERVER_DEPLOY_PATH }}/
           strip_components: 0
 
       - name: SSH Deploy
@@ -177,7 +177,7 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           envs: GH_TOKEN,GH_ACTOR
           script: |
-            cd /root/telegram-cleaner
+            cd ${{ secrets.SERVER_DEPLOY_PATH }}
 
             # ── Секреты в .env (не коммитится) ──────────────────────────────
             # Структура сервисов — в docker-compose.prod.yml (в репо).

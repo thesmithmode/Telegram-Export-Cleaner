@@ -169,11 +169,5 @@ volumes:
     driver: local
   java_export:
     driver: local
-  # SQLite кэш сообщений на диске (HDD/SSD).
-  # Для монтирования конкретного HDD пути используйте:
-  #   driver_opts:
-  #     type: none
-  #     o: bind
-  #     device: /mnt/hdd/telegram-cache
   cache_data:
     driver: local

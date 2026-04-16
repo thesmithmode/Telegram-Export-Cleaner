@@ -67,6 +67,13 @@ QWEN.md
 # Gemini CLI
 .gemini/
 GEMINI.md
+# Claude Code
+.claude/
+CLAUDE.md
+# Serena MCP
+.serena/
+# MCP config
+.mcp.json
 
 
 # Личные данные для тестирования (real Telegram exports)
