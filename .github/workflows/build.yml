@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
 
-  # ─── 1. Сборка и тесты ───────────────────────────────────────────────────────
+  # ─── 1. Сборка и тесты Java ──────────────────────────────────────────────────
   test:
     name: Build & Test
     runs-on: ubuntu-latest
@@ -29,11 +29,66 @@ jobs:
       - name: Build and test
         run: mvn clean package
 
+  # ─── 1b. Python тесты (гейт для docker/deploy) ───────────────────────────────
+  python-tests:
+    name: Python Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Create environment file
+        run: |
+          cat > export-worker/.env << EOF
+          TELEGRAM_API_ID=1
+          TELEGRAM_API_HASH=test_hash_for_ci
+          TELEGRAM_PHONE_NUMBER=+1234567890
+          TELEGRAM_BOT_TOKEN=000000000:AAAAAA
+          REDIS_HOST=localhost
+          REDIS_PORT=6379
+          JAVA_API_BASE_URL=http://localhost:8080
+          LOG_LEVEL=DEBUG
+          CACHE_ENABLED=false
+          EOF
+
+      - name: Install dependencies
+        run: |
+          cd export-worker
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov ruff
+
+      - name: Lint Python (ruff)
+        run: |
+          cd export-worker
+          # Критичные правила: F (pyflakes — unused, undefined), E9 (syntax),
+          # W605 (invalid escape). Расширять набор постепенно, не одним махом,
+          # чтобы lint не стал noise-gate.
+          ruff check --select F,E9,W605 --exclude tests .
+
+      - name: Run Python tests
+        run: |
+          cd export-worker
+          pytest \
+            tests/test_models.py \
+            tests/test_json_converter.py \
+            tests/test_export_worker.py \
+            tests/test_message_cache.py \
+            tests/test_queue_consumer.py \
+            tests/test_pyrogram_client.py \
+            tests/test_java_client.py \
+            -v --tb=short
+
   # ─── 2. Сборка и публикация Docker-образа ────────────────────────────────────
   docker:
     name: Publish Docker Image
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, python-tests]
     timeout-minutes: 30
     permissions:
       contents: read
@@ -100,6 +155,19 @@ jobs:
     needs: docker
     timeout-minutes: 15
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy docker-compose.prod.yml to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          port: ${{ secrets.SERVER_PORT }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: docker-compose.prod.yml
+          target: /root/telegram-cleaner/
+          strip_components: 0
+
       - name: SSH Deploy
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -109,76 +177,55 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           envs: GH_TOKEN,GH_ACTOR
           script: |
-            mkdir -p /root/telegram-cleaner && cd /root/telegram-cleaner
-            cat <<EOF > docker-compose.yml
-            services:
-              java-bot:
-                image: ghcr.io/${{ github.repository_owner }}/telegram-export-cleaner:latest
-                ports: ["127.0.0.1:8081:8080"]
-                environment:
-                  - REDIS_HOST=redis
-                  - REDIS_PORT=6379
-                  - TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
-                  - TELEGRAM_BOT_USERNAME=ExportCleanerBot
-                volumes:
-                  - export-data:/data/export
-                depends_on: { redis: { condition: service_healthy } }
-                restart: unless-stopped
-                healthcheck:
-                  test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/health || exit 1"]
-                  interval: 10s
-                  timeout: 5s
-                  retries: 5
-                  start_period: 30s
-                deploy:
-                  resources:
-                    limits:
-                      memory: 1024M
-              python-worker:
-                image: ghcr.io/${{ github.repository_owner }}/telegram-export-python-worker:latest
-                environment:
-                  - TELEGRAM_API_ID=${{ secrets.TELEGRAM_API_ID }}
-                  - TELEGRAM_API_HASH=${{ secrets.TELEGRAM_API_HASH }}
-                  - TELEGRAM_SESSION_STRING=${{ secrets.TELEGRAM_SESSION_STRING }}
-                  - TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
-                  - JAVA_API_BASE_URL=http://java-bot:8080
-                  - REDIS_HOST=redis
-                  - REDIS_PORT=6379
-                  - LOG_LEVEL=INFO
-                  - PYTHONUNBUFFERED=1
-                depends_on: { java-bot: { condition: service_healthy } }
-                restart: unless-stopped
-                healthcheck:
-                  test: ["CMD-SHELL", "pgrep -f 'python.*main.py' || exit 1"]
-                  interval: 15s
-                  timeout: 5s
-                  retries: 3
-                  start_period: 10s
-                deploy:
-                  resources:
-                    limits:
-                      memory: 512M
-              redis:
-                image: redis:7-alpine
-                command: redis-server --appendonly yes --appendfsync everysec --maxmemory 256mb --maxmemory-policy allkeys-lru
-                volumes:
-                  - redis-data:/data
-                healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 10s }
-                restart: unless-stopped
-                deploy:
-                  resources:
-                    limits:
-                      memory: 256M
-            volumes:
-              redis-data:
-              export-data:
-            EOF
+            cd /root/telegram-cleaner
+
+            # ── Секреты в .env (не коммитится) ──────────────────────────────
+            # Структура сервисов — в docker-compose.prod.yml (в репо).
+            # Разделение: конфиг → git, секреты → GitHub Secrets → .env на сервере.
+            cat > .env << 'ENVEOF'
+            TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+            TELEGRAM_API_ID=${{ secrets.TELEGRAM_API_ID }}
+            TELEGRAM_API_HASH=${{ secrets.TELEGRAM_API_HASH }}
+            TELEGRAM_SESSION_STRING=${{ secrets.TELEGRAM_SESSION_STRING }}
+            JAVA_API_KEY=${{ secrets.JAVA_API_KEY }}
+            ENVEOF
+
             echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
-            docker compose pull
-            docker compose up -d --remove-orphans
-            # Clean up only our project images (avoid deleting other containers on server)
-            docker image prune --filter "until=24h" -f
-            docker container prune --filter "until=24h" -f
+            docker compose -f docker-compose.prod.yml --env-file .env pull
+            docker compose -f docker-compose.prod.yml --env-file .env up -d --remove-orphans
+
+            # ── Post-deploy smoke test ──────────────────────────────────────
+            # Раньше deploy считался успешным, если `compose up -d` вернул 0,
+            # даже если java-bot тут же крашился (OOM, битая миграция, bad env).
+            # Теперь ждём, пока /api/health ответит 200, иначе job становится
+            # красным и команда видит сломанный прод сразу, а не через час по
+            # жалобам пользователей.
+            echo "⏳ Ждём /api/health (до 90 сек)..."
+            HEALTH_OK=""
+            for i in $(seq 1 30); do
+              if curl -fsS --max-time 3 http://127.0.0.1:8081/api/health >/dev/null 2>&1; then
+                HEALTH_OK=1
+                echo "✅ java-bot жив после $((i*3)) сек"
+                break
+              fi
+              sleep 3
+            done
+            if [ -z "$HEALTH_OK" ]; then
+              echo "❌ /api/health не отвечает 90 сек — деплой сломан"
+              echo "--- docker ps ---"
+              docker compose -f docker-compose.prod.yml ps
+              echo "--- java-bot logs (tail 100) ---"
+              docker compose -f docker-compose.prod.yml logs --tail=100 java-bot || true
+              echo "--- python-worker logs (tail 50) ---"
+              docker compose -f docker-compose.prod.yml logs --tail=50 python-worker || true
+              exit 1
+            fi
+
+            # Clean up only our project images (avoid deleting other containers on server).
+            # Фильтруем по label=project=telegram-cleaner, чтобы НЕ снести образы
+            # SillyTavern и других сервисов, живущих на том же хосте.
+            docker image prune --filter "until=24h" --filter "label=project=telegram-cleaner" -f
+            docker container prune --filter "until=24h" --filter "label=project=telegram-cleaner" -f
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_ACTOR: ${{ github.actor }}

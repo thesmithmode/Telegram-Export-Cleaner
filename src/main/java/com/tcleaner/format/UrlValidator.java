@@ -53,6 +53,13 @@ public class UrlValidator {
             return true;
         }
 
+        // Protocol-relative URL (//evil.com) — в браузере/markdown-рендерере превращается
+        // в https://evil.com. Это НЕ относительная ссылка, хотя startsWith("/") = true.
+        // Явно отклоняем до проверки относительных путей.
+        if (trimmed.startsWith("//")) {
+            return false;
+        }
+
         // Относительные ссылки безопасны
         if (trimmed.startsWith("/") || trimmed.startsWith("./")
                 || trimmed.startsWith("../") || trimmed.startsWith("#")) {

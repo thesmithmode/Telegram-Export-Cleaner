@@ -77,6 +77,24 @@ class ExportRequest(BaseModel):
     keywords: Optional[str] = Field(None, description="Comma-separated keywords to include")
     exclude_keywords: Optional[str] = Field(None, description="Comma-separated keywords to exclude")
 
+    @field_validator("chat_id", mode="before")
+    @classmethod
+    def coerce_chat_id(cls, v):
+        """Принимает chat_id как int, str-число или username.
+
+        Java иногда сериализует chat_id как строку (числовой ID или username).
+        Числовые строки приводим к int (чтобы вся остальная логика — кэш-ключи,
+        сравнения, передача в Pyrogram — работала с одним типом). Username
+        (нечисловые строки) оставляем как есть — Pyrogram умеет их разрешать.
+        """
+        if isinstance(v, str):
+            stripped = v.strip()
+            try:
+                return int(stripped)
+            except ValueError:
+                return stripped  # username — keep as string
+        return v
+
     @field_validator("from_date", "to_date", mode="before")
     @classmethod
     def validate_date(cls, v: Optional[str]) -> Optional[str]:
@@ -113,8 +131,22 @@ class MessageEntity(BaseModel):
     )
 
     type: str = Field(..., description="Entity type: bold, italic, code, url, etc")
-    offset: int = Field(..., description="Start offset in UTF-8 characters")
-    length: int = Field(..., description="Length in UTF-8 characters")
+    offset: int = Field(
+        ...,
+        description=(
+            "Start offset in UTF-16 code units (Telegram API convention). "
+            "Emoji and other characters outside the Basic Multilingual Plane "
+            "(U+10000+) count as 2 units each — consistent with Java char[] "
+            "and JavaScript string.length, NOT with Python len()."
+        ),
+    )
+    length: int = Field(
+        ...,
+        description=(
+            "Length in UTF-16 code units (Telegram API convention). "
+            "Same UTF-16 surrogate-pair counting as offset."
+        ),
+    )
     url: Optional[str] = Field(None, description="URL for text_url/custom_emoji")
     user_id: Optional[int] = Field(None, description="User ID for text_mention")
 

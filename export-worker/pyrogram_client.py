@@ -11,12 +11,11 @@ Handles:
 
 import asyncio
 import logging
-import os
-from typing import List, Optional, AsyncGenerator, Union
+from typing import Optional, AsyncGenerator, Union
 from pathlib import Path
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
-from pyrogram import Client, types as pyrogram_types
+from pyrogram import Client
 from pyrogram.raw import functions, types as raw_types
 from pyrogram.errors import (
     FloodWait, Unauthorized, BadRequest, ChannelPrivate, ChatAdminRequired,
@@ -280,9 +279,9 @@ class TelegramClient:
                         )
                         raise
 
-                    # Create dedup set on first FloodWait
+                    # Create dedup set on first FloodWait, starting with last yielded message
                     if seen_message_ids is None:
-                        seen_message_ids = set()
+                        seen_message_ids = {last_offset_id}
 
                     # Use Telegram's suggested wait as minimum
                     wait_time = min(
