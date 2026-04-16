@@ -225,6 +225,29 @@ jobs:
               exit 1
             fi
 
+            # ── Запуск python-worker после того как java-bot здоров ───────────
+            # docker compose up -d не гарантирует запуск сервисов с
+            # depends_on: condition: service_healthy если зависимость в момент
+            # up ещё не healthy. Явный up -d python-worker идемпотентен:
+            # не трогает уже запущенный, создаёт и запускает если отсутствует.
+            echo "⏳ Запускаем python-worker..."
+            docker compose -f docker-compose.prod.yml --env-file .env up -d python-worker
+            WORKER_OK=""
+            for i in $(seq 1 20); do
+              WORKER_STATUS=$(docker inspect --format='{{.State.Status}}' telegram-export-worker 2>/dev/null || echo "missing")
+              if [ "$WORKER_STATUS" = "running" ]; then
+                WORKER_OK=1
+                echo "✅ python-worker запущен после $((i*3)) сек"
+                break
+              fi
+              sleep 3
+            done
+            if [ -z "$WORKER_OK" ]; then
+              echo "❌ python-worker не запустился за 60 сек"
+              docker compose -f docker-compose.prod.yml logs --tail=50 python-worker || true
+              exit 1
+            fi
+
             # Clean up only our project images (avoid deleting other containers on server).
             # Фильтруем по label=project=telegram-cleaner (задан в Dockerfile), чтобы НЕ снести образы
             # других сервисов, живущих на том же хосте.
