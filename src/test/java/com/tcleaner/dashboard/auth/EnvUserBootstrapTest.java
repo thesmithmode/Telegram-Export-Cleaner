@@ -1,6 +1,7 @@
 package com.tcleaner.dashboard.auth;
 
 import com.tcleaner.core.TelegramExporter;
+import com.tcleaner.dashboard.domain.AuthProvider;
 import com.tcleaner.dashboard.domain.DashboardRole;
 import com.tcleaner.dashboard.domain.DashboardUser;
 import com.tcleaner.dashboard.repository.DashboardUserRepository;
@@ -11,6 +12,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -34,6 +37,9 @@ class EnvUserBootstrapTest {
 
     @Autowired
     private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private EnvUserBootstrap bootstrap;
 
     @MockitoBean
     private TelegramExporter mockExporter;
@@ -63,15 +69,36 @@ class EnvUserBootstrapTest {
     @Test
     @DisplayName("повторный запуск не создаёт дубликаты и не обновляет совпадающий пароль")
     void idempotent() {
-        // Bootstrap уже отработал при старте контекста. Запустим вручную ещё раз.
         long countBefore = repository.count();
-        // Пароли в test-пропертях те же — bootstrap не должен менять хэши
         DashboardUser adminBefore = repository.findByUsername("testadmin").orElseThrow();
         String hashBefore = adminBefore.getPasswordHash();
 
-        // Вызываем вручную через CommandLineRunner (пароли те же)
-        // Результат: хэш не изменился, количество пользователей не выросло
         assertThat(repository.count()).isEqualTo(countBefore);
         assertThat(adminBefore.getPasswordHash()).isEqualTo(hashBefore);
+    }
+
+    @Test
+    @DisplayName("при смене admin username — старый ADMIN удаляется при следующем запуске bootstrap")
+    void oldAdminDeletedOnUsernameChange() throws Exception {
+        // Имитируем: в БД уже есть ADMIN с устаревшим именем (например, после смены логина в secrets)
+        repository.save(DashboardUser.builder()
+                .username("oldadmin")
+                .passwordHash("$2a$10$abc")
+                .role(DashboardRole.ADMIN)
+                .provider(AuthProvider.LOCAL)
+                .createdAt(Instant.now())
+                .enabled(true)
+                .build());
+        assertThat(repository.findByUsername("oldadmin")).isPresent();
+
+        // Bootstrap запускается снова (как при следующем деплое) — текущий admin="testadmin"
+        bootstrap.run();
+
+        // oldadmin должен быть удалён, testadmin остаётся
+        assertThat(repository.findByUsername("oldadmin")).isEmpty();
+        assertThat(repository.findByUsername("testadmin")).isPresent();
+        assertThat(repository.findAllByRole(DashboardRole.ADMIN))
+                .extracting(DashboardUser::getUsername)
+                .containsExactly("testadmin");
     }
 }
