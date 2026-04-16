@@ -15,11 +15,10 @@
 
 services:
   # ===========================================================================
-  # Traefik v3: единый reverse-proxy для всего сервера
+  # Traefik v3: reverse-proxy + TLS (Let's Encrypt HTTP-01)
   # Слушает :80 (→ редирект на 443) и :443.
-  # Обслуживает ОБА домена: tec.* (дашборд) и st.* (SillyTavern).
   # /api/** наружу НЕ публикуется — только /dashboard/** через Dashboard-router.
-  # SillyTavern роутится через labels на контейнере st_app.
+  # File provider (/config) позволяет добавлять маршруты без изменения этого файла.
   # ===========================================================================
   traefik:
     image: traefik:v3.0
@@ -222,8 +221,7 @@ services:
 
 networks:
   # Общая сеть для Traefik — создаётся вручную один раз: docker network create traefik-proxy
-  # Все сервисы которые должны быть доступны снаружи подключаются к этой сети.
-  # SillyTavern (st_app) тоже подключён к ней через свой docker-compose.
+  # Сервисы которые должны быть доступны снаружи подключаются к этой сети.
   traefik-proxy:
     external: true
   # internal: java-bot ↔ worker ↔ redis (только внутренний трафик)

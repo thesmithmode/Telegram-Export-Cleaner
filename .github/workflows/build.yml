@@ -226,7 +226,7 @@ jobs:
 
             # Clean up only our project images (avoid deleting other containers on server).
             # Фильтруем по label=project=telegram-cleaner (задан в Dockerfile), чтобы НЕ снести образы
-            # SillyTavern и других сервисов, живущих на том же хосте.
+            # других сервисов, живущих на том же хосте.
             # until=24h убран намеренно: деплой каждые 2-4 часа, dangling образы моложе 24ч
             # не попадали под фильтр — отсюда накопление до 20+ образов (~6 GB).
             docker image prune --filter "label=project=telegram-cleaner" -f

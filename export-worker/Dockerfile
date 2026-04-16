@@ -4,7 +4,7 @@
 FROM python:3.11-slim
 
 # LABEL нужен для фильтрованного docker prune в CI/CD — чтобы не снести образы
-# чужих проектов, живущих на том же хосте (SillyTavern и др).
+# других проектов на том же хосте.
 LABEL project=telegram-cleaner
 
 # Set working directory
