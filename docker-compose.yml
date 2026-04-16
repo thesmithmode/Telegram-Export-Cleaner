@@ -116,7 +116,6 @@ services:
 
       # Java Bot API
       - JAVA_API_BASE_URL=${JAVA_API_BASE_URL:-http://java-bot:8080}
-      - JAVA_API_KEY=${JAVA_API_KEY}
 
       # Worker (optimized for weak server: 1 core, 3-4GB RAM)
       - WORKER_NAME=${WORKER_NAME:-export-worker-docker}

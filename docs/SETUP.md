@@ -76,9 +76,6 @@ TELEGRAM_API_HASH=abcdef1234567890abcdef1234567890
 TELEGRAM_BOT_TOKEN=123456:ABCDEFGhIjKlMnOpQrStUvWxYz-_=
 TELEGRAM_SESSION_STRING=BQF...
 
-# Java API Security
-JAVA_API_KEY=your-super-secret-key-min-32-chars-long
-
 # Redis (optional, defaults shown)
 REDIS_HOST=redis
 REDIS_PORT=6379
@@ -170,7 +167,6 @@ docker logs st_python | grep -i "error\|exception"
 **Environment Variables:**
 ```env
 TELEGRAM_BOT_TOKEN=...       # Bot token from @BotFather
-JAVA_API_KEY=...             # API key for /api/convert authentication
 spring.redis.host=redis      # Redis host
 spring.redis.port=6379       # Redis port
 ```
@@ -187,7 +183,6 @@ TELEGRAM_API_HASH=...            # API Hash from my.telegram.org
 TELEGRAM_SESSION_STRING=...      # Pyrogram session string
 TELEGRAM_PHONE_NUMBER=...        # Phone (only for file-based auth)
 JAVA_API_URL=http://java:8080   # Java Bot URL
-JAVA_API_KEY=...                # Must match Java bot's key
 REDIS_HOST=redis                # Redis host
 REDIS_PORT=6379                 # Redis port
 CACHE_ENABLED=true              # Enable message caching
@@ -226,7 +221,6 @@ services:
       - "8080:8080"
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - JAVA_API_KEY=${JAVA_API_KEY}
     depends_on:
       - redis
     restart: unless-stopped
@@ -237,7 +231,6 @@ services:
       - TELEGRAM_API_ID=${TELEGRAM_API_ID}
       - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
       - TELEGRAM_SESSION_STRING=${TELEGRAM_SESSION_STRING}
-      - JAVA_API_KEY=${JAVA_API_KEY}
     depends_on:
       - redis
     restart: unless-stopped
@@ -374,7 +367,6 @@ docker compose restart redis
 
 ### Security Checklist
 
-- [ ] Change `JAVA_API_KEY` to random 32+ char string
 - [ ] Set `TELEGRAM_SESSION_STRING` not in git (use .env)
 - [ ] Enable HTTPS (use nginx reverse proxy)
 - [ ] Restrict Redis to internal network only
