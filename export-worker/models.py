@@ -177,6 +177,7 @@ class SendResponsePayload(BaseModel):
     error: Optional[str] = Field(None, description="Error message if status=failed")
     error_code: Optional[str] = Field(None, description="Error code for retries")
     user_chat_id: Optional[int] = Field(None, description="User chat ID to send result")
+    user_id: Optional[int] = Field(None, description="Telegram bot user_id for stats (bot_user_id)")
     chat_title: Optional[str] = Field(None, description="Chat title for filename")
     from_date: Optional[str] = Field(None, description="Date range filter start")
     to_date: Optional[str] = Field(None, description="Date range filter end")

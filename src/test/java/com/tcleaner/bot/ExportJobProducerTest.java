@@ -1,6 +1,7 @@
 package com.tcleaner.bot;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tcleaner.dashboard.events.StatsStreamPublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -8,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.redis.core.ListOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
@@ -23,6 +25,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -46,7 +49,10 @@ class ExportJobProducerTest {
     void setUp() {
         lenient().when(redis.opsForValue()).thenReturn(valueOps);
         lenient().when(redis.opsForList()).thenReturn(listOps);
-        jobProducer = new ExportJobProducer(redis, new ObjectMapper(), "telegram_export");
+        @SuppressWarnings("unchecked")
+        ObjectProvider<StatsStreamPublisher> noPublisher = mock(ObjectProvider.class);
+        lenient().when(noPublisher.getIfAvailable()).thenReturn(null);
+        jobProducer = new ExportJobProducer(redis, new ObjectMapper(), "telegram_export", noPublisher);
     }
 
     @Nested

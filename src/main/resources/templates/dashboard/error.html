@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title th:text="#{error.title}">Ошибка — Dashboard</title>
+    <link rel="stylesheet" th:href="@{/dashboard/css/app.css}">
+</head>
+<body class="error-body">
+<main class="error-wrap">
+    <h1 class="error-code" th:text="${status ?: 'Error'}">500</h1>
+    <p class="error-message"
+       th:text="${message} ?: #{error.generic}">Что-то пошло не так.</p>
+    <a th:href="@{/dashboard/overview}" class="error-back"
+       th:text="#{error.backToOverview}">К обзору</a>
+</main>
+</body>
+</html>

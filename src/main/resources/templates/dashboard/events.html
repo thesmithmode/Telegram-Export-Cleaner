@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{dashboard/layout :: layout(title=#{events.title}, content=~{::events-content})}">
+<body>
+
+<!--
+  Страница последних экспортов (raw-лог). Данные — GET /dashboard/api/stats/events.
+  Поддерживает фильтр по статусу через select.
+-->
+<div th:fragment="events-content" class="events">
+    <h1 th:text="#{events.heading}">Последние экспорты</h1>
+
+    <div class="period-filter" style="align-items:center">
+        <label>
+            <span th:text="#{events.filter.status}">Фильтр: статус</span>
+            <select id="status-filter" style="width:auto">
+                <option value="">Все</option>
+                <option value="completed">completed</option>
+                <option value="failed">failed</option>
+                <option value="processing">processing</option>
+                <option value="queued">queued</option>
+                <option value="cancelled">cancelled</option>
+            </select>
+        </label>
+    </div>
+
+    <div class="table-wrap">
+        <table class="data-table" id="events-table">
+            <thead>
+            <tr>
+                <th th:text="#{events.col.user}">Пользователь</th>
+                <th th:text="#{events.col.chat}">Чат</th>
+                <th th:text="#{events.col.status}">Статус</th>
+                <th th:text="#{events.col.messages}">Сообщений</th>
+                <th th:text="#{events.col.bytes}">Объём</th>
+                <th th:text="#{events.col.started}">Начало</th>
+            </tr>
+            </thead>
+            <tbody id="events-tbody">
+            <tr>
+                <td colspan="6" style="text-align:center;color:var(--muted)"
+                    th:text="#{overview.loading}">Загрузка…</td>
+            </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <script th:src="@{/dashboard/js/pages/events.js}" defer></script>
+</div>
+
+</body>
+</html>

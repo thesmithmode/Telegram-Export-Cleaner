@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{dashboard/layout :: layout(title=#{userDetail.title}, content=~{::user-detail-content})}">
+<body>
+
+<!--
+  Карточка пользователя. botUserId передаётся из контроллера и читается overview.js
+  через data-атрибут. RBAC на данные — в /dashboard/api/stats/user/{id}.
+-->
+<div th:fragment="user-detail-content" class="user-detail"
+     th:attr="data-bot-user-id=${botUserId}">
+    <h1 th:text="#{userDetail.heading}">Пользователь</h1>
+
+    <div th:replace="~{dashboard/fragments/period-filter :: period-filter}"></div>
+
+    <div class="kpi-grid">
+        <div class="kpi" id="kpi-exports">
+            <div class="kpi__label" th:text="#{overview.kpi.exports}">Экспортов</div>
+            <div class="kpi__value" data-kpi="totalExports">—</div>
+        </div>
+        <div class="kpi" id="kpi-messages">
+            <div class="kpi__label" th:text="#{overview.kpi.messages}">Сообщений</div>
+            <div class="kpi__value" data-kpi="totalMessages">—</div>
+        </div>
+        <div class="kpi" id="kpi-bytes">
+            <div class="kpi__label" th:text="#{overview.kpi.bytes}">Объём</div>
+            <div class="kpi__value" data-kpi="totalBytes">—</div>
+        </div>
+    </div>
+
+    <div th:replace="~{dashboard/fragments/chart-block :: chart(
+            id='chart-timeseries', title=#{userDetail.chart.timeseries}, height=260)}"></div>
+
+    <div th:replace="~{dashboard/fragments/chart-block :: chart(
+            id='chart-top-chats', title=#{userDetail.chart.topChats}, height=260)}"></div>
+
+    <script th:src="@{/dashboard/js/pages/user-detail.js}" defer></script>
+</div>
+
+</body>
+</html>
