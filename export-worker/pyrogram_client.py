@@ -1,7 +1,7 @@
 
 import asyncio
 import logging
-from typing import Any, Awaitable, Callable, Dict, Optional, AsyncGenerator, Union
+from typing import Awaitable, Callable, Dict, Optional, AsyncGenerator, Union
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -222,7 +222,7 @@ class TelegramClient:
                             if (
                                 is_cancelled_fn is not None
                                 and message_count
-                                and message_count % _CANCEL_CHECK_EVERY == 0
+                                and message_count % self._CANCEL_CHECK_EVERY == 0
                             ):
                                 try:
                                     if await is_cancelled_fn():
