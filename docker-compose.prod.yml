@@ -57,12 +57,9 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - traefik_acme:/acme
-      # Логи на хост — fail2ban читает /root/traefik/logs/access.log
-      - /root/traefik/logs:/logs
-      # Локальные конфиги (не в репо) — маршруты других сервисов на хосте
-      - /root/traefik/config:/config:ro
-      # Файлы авторизации (htpasswd и др.) — создаются вручную на сервере
-      - /root/traefik/auth:/auth:ro
+      - ${TRAEFIK_DATA_PATH}/logs:/logs
+      - ${TRAEFIK_DATA_PATH}/config:/config:ro
+      - ${TRAEFIK_DATA_PATH}/auth:/auth:ro
     networks:
       - traefik-proxy
     restart: unless-stopped
