@@ -193,6 +193,7 @@ jobs:
             TRAEFIK_DASHBOARD_DOMAIN=${{ secrets.TRAEFIK_DASHBOARD_DOMAIN }}
             TRAEFIK_ACME_EMAIL=${{ secrets.TRAEFIK_ACME_EMAIL }}
             TRAEFIK_DATA_PATH=${{ secrets.TRAEFIK_DATA_PATH }}
+            HOST_DATA_PATH=${{ secrets.HOST_DATA_PATH }}
             ENVEOF
 
             echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin

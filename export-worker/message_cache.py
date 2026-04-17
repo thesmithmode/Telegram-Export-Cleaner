@@ -1,4 +1,5 @@
 
+import asyncio
 import logging
 import os
 import time
@@ -497,7 +498,23 @@ class MessageCache:
             (time.time(), chat_id, topic_id),
         )
 
-    async def evict_if_needed(self) -> int:
+    async def evict_if_needed(self, max_retries: int = 3) -> int:
+        for attempt in range(max_retries):
+            try:
+                return await self._evict_impl()
+            except aiosqlite.OperationalError as exc:
+                msg = str(exc).lower()
+                if "locked" not in msg and "busy" not in msg:
+                    raise
+                if attempt == max_retries - 1:
+                    logger.warning(
+                        "evict_if_needed: database busy after %d retries, skipping cycle",
+                        max_retries,
+                    )
+                    return 0
+                await asyncio.sleep(0.1 * (2 ** attempt))
+
+    async def _evict_impl(self) -> int:
         if self._db is None:
             return 0
 

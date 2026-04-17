@@ -2,6 +2,9 @@
 import time
 import pytest
 import asyncio
+from unittest.mock import patch
+
+import aiosqlite
 
 from models import ExportedMessage
 from message_cache import MessageCache
@@ -235,6 +238,65 @@ class TestEviction:
         await cache.store_messages(123, _make_messages(range(1, 16)))
         assert await cache.count_messages(123, 1, 15) == 15
         assert await cache.count_messages(123, 5, 10) == 6
+
+    @pytest.mark.asyncio
+    async def test_evict_retries_on_busy(self, tmp_path):
+        cache = MessageCache(db_path=str(tmp_path / "retry.db"), max_disk_bytes=0)
+        await cache.initialize()
+        try:
+            call_count = 0
+            raised_errors: list[aiosqlite.OperationalError] = []
+            original = cache._evict_impl
+
+            async def flaky_evict():
+                nonlocal call_count
+                call_count += 1
+                if call_count < 3:
+                    err = aiosqlite.OperationalError("database is locked")
+                    raised_errors.append(err)
+                    raise err
+                return await original()
+
+            with patch.object(cache, "_evict_impl", side_effect=flaky_evict):
+                result = await cache.evict_if_needed(max_retries=3)
+
+            assert call_count == 3
+            assert len(raised_errors) == 2  # первые 2 попытки упали с busy
+            assert all("locked" in str(e) for e in raised_errors)
+            assert result == 0  # бюджет 0 → таргет 0 → nothing to evict
+        finally:
+            await cache.close()
+
+    @pytest.mark.asyncio
+    async def test_evict_gives_up_after_max_retries(self, tmp_path, caplog):
+        cache = MessageCache(db_path=str(tmp_path / "busy.db"), max_disk_bytes=0)
+        await cache.initialize()
+        try:
+            async def always_busy():
+                raise aiosqlite.OperationalError("database is locked")
+
+            with patch.object(cache, "_evict_impl", side_effect=always_busy):
+                with caplog.at_level("WARNING"):
+                    result = await cache.evict_if_needed(max_retries=3)
+
+            assert result == 0
+            assert any("busy" in r.message.lower() for r in caplog.records)
+        finally:
+            await cache.close()
+
+    @pytest.mark.asyncio
+    async def test_evict_reraises_other_errors(self, tmp_path):
+        cache = MessageCache(db_path=str(tmp_path / "err.db"), max_disk_bytes=0)
+        await cache.initialize()
+        try:
+            async def bad_error():
+                raise aiosqlite.OperationalError("no such table: chat_meta")
+
+            with patch.object(cache, "_evict_impl", side_effect=bad_error):
+                with pytest.raises(aiosqlite.OperationalError, match="no such table"):
+                    await cache.evict_if_needed(max_retries=3)
+        finally:
+            await cache.close()
 
 class TestCacheDisabled:
 
