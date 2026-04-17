@@ -19,9 +19,10 @@ import java.time.Instant;
 
 /**
  * Учётная запись веб-UI дашборда.
- * {@code botUserId} связывает USER-роль с Telegram-id (личный кабинет);
- * для ADMIN — {@code null}. Поле {@code provider} готовит задел под будущий
- * Telegram Login Widget (значение {@link AuthProvider#TELEGRAM}) без миграции.
+ * {@code telegramId} — Telegram user_id, основной идентификатор при логине (Telegram Login Widget).
+ * {@code botUserId} связывает USER-роль с записью в {@code bot_users} (личный кабинет);
+ * для ADMIN — {@code null}. {@code passwordHash} оставлен NOT NULL для совместимости,
+ * новые записи содержат пустую строку — пароли не используются.
  */
 @Entity
 @Table(name = "dashboard_users")
@@ -47,6 +48,9 @@ public class DashboardUser {
     @Enumerated(EnumType.STRING)
     @Column(name = "role", nullable = false)
     private DashboardRole role;
+
+    @Column(name = "telegram_id", unique = true)
+    private Long telegramId;
 
     @Column(name = "bot_user_id")
     private Long botUserId;

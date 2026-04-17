@@ -94,4 +94,21 @@ class DashboardSecurityIntegrationTest {
                 .andExpect(header().string("Content-Security-Policy",
                         org.hamcrest.Matchers.containsString("default-src 'none'")));
     }
+
+    @Test
+    @DisplayName("GET /dashboard/login/telegram без аутентификации → не 401/403 (permitAll)")
+    void telegramCallbackIsPermitted() throws Exception {
+        int status = mockMvc.perform(get("/dashboard/login/telegram")
+                        .param("id", "1").param("auth_date", "1").param("hash", "bad"))
+                .andReturn().getResponse().getStatus();
+        org.assertj.core.api.Assertions.assertThat(status).isNotIn(401, 403);
+    }
+
+    @Test
+    @DisplayName("dashboard CSP содержит разрешение для telegram.org")
+    void dashboardCspContainsTelegramOrg() throws Exception {
+        mockMvc.perform(get("/dashboard/login"))
+                .andExpect(header().string("Content-Security-Policy",
+                        org.hamcrest.Matchers.containsString("https://telegram.org")));
+    }
 }

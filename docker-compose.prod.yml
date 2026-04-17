@@ -103,16 +103,12 @@ services:
       - REDIS_PORT=6379
       - REDIS_QUEUE_NAME=telegram_export
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - TELEGRAM_BOT_USERNAME=ExportCleanerBot
+      - TELEGRAM_BOT_USERNAME=${TELEGRAM_BOT_USERNAME}
       # Dashboard SQLite
       - DASHBOARD_DB_PATH=${DASHBOARD_DB_PATH:-/data/stats/dashboard.db}
-      # Dashboard auth bootstrap
+      # Dashboard auth (Telegram Login Widget)
       - DASHBOARD_ENABLE_BOOTSTRAP=${DASHBOARD_ENABLE_BOOTSTRAP:-true}
-      - DASHBOARD_ADMIN_USERNAME=${DASHBOARD_ADMIN_USERNAME:-admin}
-      - DASHBOARD_ADMIN_PASSWORD=${DASHBOARD_ADMIN_PASSWORD}
-      - DASHBOARD_TEST_USERNAME=${DASHBOARD_TEST_USERNAME:-user}
-      - DASHBOARD_TEST_PASSWORD=${DASHBOARD_TEST_PASSWORD}
-      - DASHBOARD_TEST_BOT_USER_ID=${DASHBOARD_TEST_BOT_USER_ID:-0}
+      - DASHBOARD_ADMIN_TG_ID=${DASHBOARD_ADMIN_TG_ID}
       # Redis Streams для ingestion статистики
       - STATS_STREAM_KEY=${STATS_STREAM_KEY:-stats:events}
       - STATS_STREAM_GROUP=${STATS_STREAM_GROUP:-dashboard-writer}

@@ -39,22 +39,20 @@ class DashboardPageControllerTest {
     private static final DashboardUserDetails ADMIN = DashboardTestUsers.admin();
 
     @Test
-    @DisplayName("GET /dashboard/login — 200, рендерится форма с CSRF")
+    @DisplayName("GET /dashboard/login — 200, рендерится Telegram Widget")
     void loginPageRenders() throws Exception {
         mockMvc.perform(get("/dashboard/login"))
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith("text/html"))
-                .andExpect(content().string(containsString("name=\"username\"")))
-                .andExpect(content().string(containsString("name=\"password\"")))
-                .andExpect(content().string(containsString("_csrf")));
+                .andExpect(content().string(containsString("telegram-widget.js")));
     }
 
     @Test
-    @DisplayName("GET /dashboard/login?error — показывает сообщение об ошибке")
+    @DisplayName("GET /dashboard/login?error=invalid — показывает сообщение об ошибке")
     void loginWithErrorFlag() throws Exception {
-        mockMvc.perform(get("/dashboard/login").param("error", ""))
+        mockMvc.perform(get("/dashboard/login").param("error", "invalid"))
                 .andExpect(status().isOk())
-                .andExpect(content().string(containsString("Неверный логин")));
+                .andExpect(content().string(containsString("Не удалось подтвердить вход")));
     }
 
     @Test

@@ -1,5 +1,6 @@
 package com.tcleaner.dashboard.web;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -8,12 +9,15 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 
 /**
- * HTML-страницы дашборда (Thymeleaf). FormLogin/logout обслуживает Spring Security;
- * здесь — только GET-рендер (login, overview, error) и root-redirect на overview.
+ * HTML-страницы дашборда (Thymeleaf). Logout обслуживает Spring Security;
+ * здесь — GET-рендер страниц и root-redirect на overview.
  */
 @Controller
 @RequestMapping("/dashboard")
 public class DashboardPageController {
+
+    @Value("${telegram.bot.username:}")
+    private String botUsername;
 
     @GetMapping({"", "/"})
     public String root() {
@@ -21,15 +25,8 @@ public class DashboardPageController {
     }
 
     @GetMapping("/login")
-    public String login(@RequestParam(required = false) String error,
-                        @RequestParam(required = false) String logout,
-                        Model model) {
-        if (error != null) {
-            model.addAttribute("loginError", true);
-        }
-        if (logout != null) {
-            model.addAttribute("loggedOut", true);
-        }
+    public String login(Model model) {
+        model.addAttribute("botUsername", botUsername);
         return "dashboard/login";
     }
 

@@ -6,5 +6,9 @@ package com.tcleaner.dashboard.domain;
  */
 public enum DashboardRole {
     ADMIN,
-    USER
+    USER;
+
+    public String authority() {
+        return "ROLE_" + name();
+    }
 }
