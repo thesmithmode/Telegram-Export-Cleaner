@@ -2,6 +2,7 @@ package com.tcleaner.dashboard.web;
 
 import com.tcleaner.core.TelegramExporter;
 import com.tcleaner.dashboard.DashboardTestUsers;
+import com.tcleaner.dashboard.auth.DashboardUserDetails;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
