@@ -7,6 +7,7 @@ import com.tcleaner.dashboard.domain.DashboardUser;
 import com.tcleaner.dashboard.repository.BotUserRepository;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -46,6 +47,10 @@ public class TelegramAuthController {
                                   DashboardUserService userService,
                                   BotUserRepository botUsers,
                                   @Value("${dashboard.auth.admin.telegram-id}") long adminTelegramId) {
+        if (adminTelegramId <= 0) {
+            throw new IllegalArgumentException(
+                    "DASHBOARD_ADMIN_TG_ID не настроен (=" + adminTelegramId + ") — запуск невозможен");
+        }
         this.verifier = verifier;
         this.userService = userService;
         this.botUsers = botUsers;
@@ -91,6 +96,12 @@ public class TelegramAuthController {
                 user.getUsername(), "",
                 List.of(new SimpleGrantedAuthority(role.authority())),
                 role, user.getBotUserId());
+
+        HttpSession oldSession = request.getSession(false);
+        if (oldSession != null) {
+            oldSession.invalidate();
+        }
+        request.getSession(true);
 
         UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
                 principal, null, principal.getAuthorities());

@@ -14,6 +14,7 @@
 -- =============================================================================
 
 --changeset app:001-init-dashboard-schema splitStatements:true endDelimiter:;
+--validCheckSum 9:f2a8e79be9ea0baed44724cd2c9026a1
 
 -- -----------------------------------------------------------------------------
 -- bot_users — Telegram users who interacted with the bot.

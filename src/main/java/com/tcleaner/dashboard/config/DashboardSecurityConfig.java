@@ -48,6 +48,7 @@ public class DashboardSecurityConfig {
             .logout(logout -> logout
                 .logoutUrl("/dashboard/logout")
                 .logoutSuccessUrl("/dashboard/login?logout")
+                .invalidateHttpSession(true)
                 .deleteCookies("JSESSIONID")
                 .permitAll()
             );
