@@ -3,7 +3,7 @@
 #
 # Usage on host (cron):
 #   BASE=/var/lib/telegram-cleaner (or override via env)
-#   0 1 * * * root TELEGRAM_CLEANER_BASE=/path /opt/telegram-cleaner/backup-cache.sh \
+#   0 4 * * * root TELEGRAM_CLEANER_BASE=/path /opt/telegram-cleaner/backup-cache.sh \
 #       >> /var/log/telegram-cleaner-backup.log 2>&1
 #
 # Expects the following layout under $BASE:
@@ -11,11 +11,11 @@
 #   dashboard/dashboard.db   — written by java-bot
 #   backups/                 — created here
 #
-# Rotation: keeps $KEEP most recent files per DB, deletes older ones.
+# Rotation: keeps $KEEP most recent .db.gz files per DB, deletes older ones.
 # sqlite3 .backup performs a WAL-safe atomic snapshot on a live open DB;
 # plain cp/rsync can miss WAL pages and yield a corrupted copy.
 
-set -euo pipefail
+set -uo pipefail
 
 BASE="${TELEGRAM_CLEANER_BASE:-/var/lib/telegram-cleaner}"
 BACKUPS="$BASE/backups"
@@ -27,9 +27,11 @@ mkdir -p "$BACKUPS"
 
 exec 9> "$LOCKFILE"
 if ! flock -n 9; then
-    echo "[$(date -u +%FT%TZ)] another backup is running, skipping"
-    exit 0
+    echo "[$(date -u +%FT%TZ)] WARN: another backup is running, cannot acquire lock" >&2
+    exit 1
 fi
+
+had_error=0
 
 backup_db() {
     local src="$1" name="$2"
@@ -37,22 +39,43 @@ backup_db() {
         echo "[$(date -u +%FT%TZ)] WARN: $src not found, skipping $name"
         return 0
     fi
-    local out="$BACKUPS/${name}-${STAMP}.db"
+    local tmp="$BACKUPS/${name}-${STAMP}.db.tmp"
+    local out="$BACKUPS/${name}-${STAMP}.db.gz"
     local start=$SECONDS
-    sqlite3 "$src" ".backup '$out'"
+
+    sqlite3 "$src" ".backup '$tmp'"
+
+    # Integrity check before compressing — catch corruption early.
+    # PRAGMA integrity_check returns "ok" or one error per line.
+    local integrity
+    integrity=$(sqlite3 "$tmp" "PRAGMA integrity_check;" 2>&1)
+    if [[ "$integrity" != "ok" ]]; then
+        echo "[$(date -u +%FT%TZ)] ERROR: integrity check failed for $name: $integrity" >&2
+        rm -f "$tmp"
+        return 1
+    fi
+
+    gzip -f "$tmp" || { echo "[$(date -u +%FT%TZ)] ERROR: gzip failed for $name" >&2; rm -f "$tmp"; return 1; }
+    mv "${tmp}.gz" "$out" || { echo "[$(date -u +%FT%TZ)] ERROR: mv failed for $name" >&2; return 1; }
+
     local elapsed=$((SECONDS - start))
     local size
     size=$(du -h "$out" | cut -f1)
     echo "[$(date -u +%FT%TZ)] OK: $name -> $out ($size, ${elapsed}s)"
 
     # shellcheck disable=SC2012
-    ls -1t "$BACKUPS/${name}-"*.db 2>/dev/null | tail -n +$((KEEP + 1)) | while read -r old; do
+    ls -1t "$BACKUPS/${name}-"*.db.gz 2>/dev/null | tail -n +$((KEEP + 1)) | while read -r old; do
         rm -f -- "$old"
         echo "[$(date -u +%FT%TZ)] rotated out: $old"
     done
 }
 
-backup_db "$BASE/cache/messages.db"      "messages"
-backup_db "$BASE/dashboard/dashboard.db" "dashboard"
+backup_db "$BASE/cache/messages.db"      "messages" || had_error=1
+backup_db "$BASE/dashboard/dashboard.db" "dashboard" || had_error=1
 
-echo "[$(date -u +%FT%TZ)] backup cycle complete"
+if [[ "$had_error" -eq 0 ]]; then
+    echo "[$(date -u +%FT%TZ)] backup cycle complete"
+else
+    echo "[$(date -u +%FT%TZ)] backup cycle finished with errors" >&2
+    exit 1
+fi

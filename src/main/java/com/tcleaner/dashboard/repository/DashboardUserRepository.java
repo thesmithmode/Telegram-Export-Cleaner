@@ -10,12 +10,14 @@ import java.util.Optional;
 
 /**
  * JPA-репозиторий для {@link DashboardUser}.
- * {@link #findByUsername} нужен Spring Security's UserDetailsService.
  */
 @Repository
 public interface DashboardUserRepository extends JpaRepository<DashboardUser, Long> {
 
     Optional<DashboardUser> findByUsername(String username);
 
+    Optional<DashboardUser> findByTelegramId(Long telegramId);
+
     List<DashboardUser> findAllByRole(DashboardRole role);
+
 }
