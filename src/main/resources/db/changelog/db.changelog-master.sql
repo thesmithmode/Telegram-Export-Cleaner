@@ -105,3 +105,18 @@ CREATE TABLE dashboard_users (
 );
 
 CREATE INDEX idx_dashboard_users_bot_user_id ON dashboard_users (bot_user_id);
+
+-- =============================================================================
+-- 002: Telegram Login Widget support.
+-- Добавляет telegram_id для идентификации по Telegram ID вместо пароля.
+-- password_hash остаётся NOT NULL для обратной совместимости — новые записи
+-- получают пустую строку; old credentials не используются.
+-- =============================================================================
+
+--changeset app:002-telegram-login splitStatements:true endDelimiter:;
+
+ALTER TABLE dashboard_users ADD COLUMN telegram_id BIGINT;
+
+CREATE UNIQUE INDEX idx_dashboard_users_telegram_id
+    ON dashboard_users (telegram_id)
+    WHERE telegram_id IS NOT NULL;

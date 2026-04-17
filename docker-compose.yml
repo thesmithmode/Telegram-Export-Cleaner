@@ -64,6 +64,9 @@ services:
       - TELEGRAM_BOT_USERNAME=${TELEGRAM_BOT_USERNAME:-ExportCleanerBot}
       # Dashboard SQLite — путь внутри контейнера, файл живёт в volume dashboard_data
       - DASHBOARD_DB_PATH=${DASHBOARD_DB_PATH:-/data/stats/dashboard.db}
+      # Dashboard auth (Telegram Login Widget)
+      - DASHBOARD_ADMIN_TG_ID=${DASHBOARD_ADMIN_TG_ID}
+      - DASHBOARD_ENABLE_BOOTSTRAP=${DASHBOARD_ENABLE_BOOTSTRAP:-false}
     volumes:
       - java_import:/data/import
       - java_export:/data/export

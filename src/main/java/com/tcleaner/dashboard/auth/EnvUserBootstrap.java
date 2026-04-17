@@ -9,83 +9,67 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 
 /**
- * Создаёт начальных пользователей дашборда при старте приложения.
- * Активируется только при {@code dashboard.auth.bootstrap.enabled=true}.
- * Пароль обновляется, только если текущий хэш не совпадает — избегаем лишних write.
+ * При старте гарантирует существование ADMIN-записи в dashboard_users,
+ * связанной с {@code dashboard.auth.admin.telegram-id}.
+ * Пароли не используются — вход через Telegram Login Widget.
  */
 @Component
 @ConditionalOnProperty(name = "dashboard.auth.bootstrap.enabled", havingValue = "true")
 public class EnvUserBootstrap implements CommandLineRunner {
 
     private static final Logger log = LoggerFactory.getLogger(EnvUserBootstrap.class);
+    private static final String DEFAULT_ADMIN_USERNAME = "admin";
 
-    @Value("${dashboard.auth.admin.username}")
-    private String adminUsername;
-
-    @Value("${dashboard.auth.admin.password}")
-    private String adminPassword;
-
-    @Value("${dashboard.auth.test.username:}")
-    private String testUsername;
-
-    @Value("${dashboard.auth.test.password:}")
-    private String testPassword;
-
-    @Value("${dashboard.auth.test.bot-user-id:0}")
-    private long testBotUserId;
+    @Value("${dashboard.auth.admin.telegram-id}")
+    private long adminTelegramId;
 
     private final DashboardUserRepository repository;
-    private final PasswordEncoder passwordEncoder;
 
-    public EnvUserBootstrap(DashboardUserRepository repository, PasswordEncoder passwordEncoder) {
+    public EnvUserBootstrap(DashboardUserRepository repository) {
         this.repository = repository;
-        this.passwordEncoder = passwordEncoder;
     }
 
     @Override
     @Transactional
     public void run(String... args) {
-        // Удаляем устаревших ADMIN-пользователей с другим username (смена логина через env)
+        if (adminTelegramId <= 0) {
+            throw new IllegalStateException(
+                    "Некорректный DASHBOARD_ADMIN_TG_ID=" + adminTelegramId +
+                    " — должен быть положительным Telegram User ID");
+        }
         repository.findAllByRole(DashboardRole.ADMIN).stream()
-                .filter(u -> !u.getUsername().equals(adminUsername))
+                .filter(u -> u.getTelegramId() == null || u.getTelegramId() != adminTelegramId)
                 .forEach(u -> {
                     repository.delete(u);
-                    log.info("Dashboard: удалён устаревший admin '{}'", u.getUsername());
+                    log.info("Dashboard: удалён устаревший admin (id={})", u.getId());
                 });
-        upsert(adminUsername, adminPassword, DashboardRole.ADMIN, null);
-        if (!testUsername.isBlank() && !testPassword.isBlank()) {
-            Long botId = testBotUserId > 0 ? testBotUserId : null;
-            upsert(testUsername, testPassword, DashboardRole.USER, botId);
-        }
-    }
 
-    private void upsert(String username, String rawPassword, DashboardRole role, Long botUserId) {
         Instant now = Instant.now();
-        DashboardUser existing = repository.findByUsername(username).orElse(null);
-        if (existing == null) {
+        DashboardUser admin = repository.findByTelegramId(adminTelegramId).orElse(null);
+        if (admin == null) {
             repository.save(DashboardUser.builder()
-                    .username(username)
-                    .passwordHash(passwordEncoder.encode(rawPassword))
-                    .role(role)
-                    .botUserId(botUserId)
-                    .provider(AuthProvider.LOCAL)
+                    .telegramId(adminTelegramId)
+                    .username(DEFAULT_ADMIN_USERNAME)
+                    .passwordHash("")
+                    .role(DashboardRole.ADMIN)
+                    .botUserId(null)
+                    .provider(AuthProvider.TELEGRAM)
                     .createdAt(now)
                     .enabled(true)
                     .build());
-            log.info("Dashboard: создан пользователь '{}' (role={})", username, role);
-        } else {
-            if (!passwordEncoder.matches(rawPassword, existing.getPasswordHash())) {
-                existing.setPasswordHash(passwordEncoder.encode(rawPassword));
-                repository.save(existing);
-                log.info("Dashboard: обновлён пароль пользователя '{}'", username);
-            }
+            log.info("Dashboard: создан admin по telegram_id={}", adminTelegramId);
+        } else if (admin.getRole() != DashboardRole.ADMIN) {
+            admin.setRole(DashboardRole.ADMIN);
+            admin.setProvider(AuthProvider.TELEGRAM);
+            admin.setEnabled(true);
+            repository.save(admin);
+            log.info("Dashboard: роль admin восстановлена для telegram_id={}", adminTelegramId);
         }
     }
 }
