@@ -2,7 +2,6 @@ package com.tcleaner.dashboard.web;
 
 import com.tcleaner.core.TelegramExporter;
 import com.tcleaner.dashboard.DashboardTestUsers;
-import com.tcleaner.dashboard.auth.DashboardUserDetails;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -158,6 +157,28 @@ class DashboardPageControllerTest {
                 .andExpect(content().contentTypeCompatibleWith("text/html"))
                 .andExpect(content().string(containsString("kpi-grid")))
                 .andExpect(content().string(containsString("dashboard/js/pages/user-detail.js")));
+    }
+
+    @Test
+    @DisplayName("GET /dashboard/user/999 (USER с botUserId=1) — 403 IDOR защита")
+    void userDetailBlockedForWrongUser() throws Exception {
+        mockMvc.perform(get("/dashboard/user/999").with(user(USER)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("GET /dashboard/user/999 (ADMIN) — 200, ADMIN видит любого пользователя")
+    void userDetailAccessibleForAdmin() throws Exception {
+        mockMvc.perform(get("/dashboard/user/999").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith("text/html"));
+    }
+
+    @Test
+    @DisplayName("GET /dashboard/user/1 (USER без botUserId) — 403")
+    void userDetailBlockedForUnboundUser() throws Exception {
+        mockMvc.perform(get("/dashboard/user/1").with(user(DashboardTestUsers.unboundUser())))
+                .andExpect(status().isForbidden());
     }
 
     // ─── PR-12: chats / events pages ─────────────────────────────────────────

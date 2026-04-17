@@ -1,6 +1,10 @@
 package com.tcleaner.dashboard.web;
 
+import com.tcleaner.dashboard.auth.DashboardUserDetails;
+import com.tcleaner.dashboard.security.BotUserAccessPolicy;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -18,6 +22,12 @@ public class DashboardPageController {
 
     @Value("${telegram.bot.username:}")
     private String botUsername;
+
+    private final BotUserAccessPolicy accessPolicy;
+
+    public DashboardPageController(BotUserAccessPolicy accessPolicy) {
+        this.accessPolicy = accessPolicy;
+    }
 
     @GetMapping({"", "/"})
     public String root() {
@@ -41,9 +51,13 @@ public class DashboardPageController {
         return "dashboard/users";
     }
 
-    /** Карточка одного пользователя. RBAC на данные — в /dashboard/api/stats/user/{id}. */
     @GetMapping("/user/{botUserId}")
-    public String userDetail(@PathVariable long botUserId, Model model) {
+    public String userDetail(@PathVariable long botUserId,
+                             @AuthenticationPrincipal DashboardUserDetails principal,
+                             Model model) {
+        if (!accessPolicy.canSeeUser(principal.getDashboardRole(), principal.getBotUserId(), botUserId)) {
+            throw new AccessDeniedException("Доступ запрещён");
+        }
         model.addAttribute("botUserId", botUserId);
         return "dashboard/user-detail";
     }
