@@ -1,0 +1,22 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../colors_and_type.css"><style>
+body{margin:0;padding:20px;background:var(--tec-surface);font-family:var(--tec-font-sans);color:var(--tec-text)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.box{padding:14px;border:1px solid var(--tec-border);border-radius:6px;background:var(--tec-bg)}
+.lbl{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--tec-muted);margin-bottom:6px}
+.sans{font-family:var(--tec-font-sans);font-size:14px}
+.mono{font-family:var(--tec-font-mono);font-size:13px;color:var(--tec-text)}
+</style></head><body>
+<div class="grid">
+  <div class="box">
+    <div class="lbl">Sans — system stack</div>
+    <div class="sans">The quick brown fox · Быстрая коричневая лиса</div>
+    <div class="sans" style="font-size:11px;color:var(--tec-muted);margin-top:6px">-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto…</div>
+  </div>
+  <div class="box">
+    <div class="lbl">Mono — for IDs &amp; handles</div>
+    <div class="mono">task_id: 4f3a9c1e-82d0</div>
+    <div class="mono">@durov · t.me/durov</div>
+    <div class="sans" style="font-size:11px;color:var(--tec-muted);margin-top:6px">ui-monospace, SFMono-Regular, Menlo…</div>
+  </div>
+</div>
+</body></html>

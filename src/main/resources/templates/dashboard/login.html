@@ -1,26 +1,22 @@
 <!DOCTYPE html>
-<html lang="ru" xmlns:th="http://www.thymeleaf.org">
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Вход — Dashboard</title>
+    <title>Sign in — Dashboard</title>
     <link rel="stylesheet" th:href="@{/dashboard/css/app.css}">
 </head>
 <body class="login-body">
 <main class="login-wrap">
     <div class="login-form">
-        <h1 class="login-form__title">Вход в дашборд</h1>
+        <h1 class="login-form__title">Sign in</h1>
 
-        <div th:if="${param.error != null and param.error[0] == 'forbidden'}"
-             class="login-form__error">
-            У этого Telegram-аккаунта нет доступа к дашборду.
-        </div>
         <div th:if="${param.error != null and param.error[0] == 'invalid'}"
              class="login-form__error">
-            Не удалось подтвердить вход. Попробуй ещё раз.
+            Sign-in verification failed. Please try again.
         </div>
         <div th:if="${param.logout != null}" class="login-form__notice">
-            Вы вышли из системы.
+            You have been signed out.
         </div>
 
         <div class="login-form__widget">
