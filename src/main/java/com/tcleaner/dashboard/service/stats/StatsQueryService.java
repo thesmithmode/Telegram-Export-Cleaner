@@ -6,6 +6,7 @@ import com.tcleaner.dashboard.dto.OverviewDto;
 import com.tcleaner.dashboard.dto.TimeSeriesPointDto;
 import com.tcleaner.dashboard.dto.UserDetailDto;
 import com.tcleaner.dashboard.dto.UserStatsRow;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -13,6 +14,10 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+
+import static com.tcleaner.dashboard.config.CacheConfig.HISTORICAL;
+import static com.tcleaner.dashboard.config.CacheConfig.LIVE;
+import static com.tcleaner.dashboard.config.CacheConfig.PROFILE;
 
 /**
  * Читающая сторона дашборда: агрегации через native SQL (SQLite + strftime-bucket'ы).
@@ -30,6 +35,7 @@ public class StatsQueryService {
 
     // ─── Overview ────────────────────────────────────────────────────────────
 
+    @Cacheable(value = LIVE, key = "#period.toString() + '_' + #botUserId")
     public OverviewDto overview(StatsPeriod period, Long botUserId) {
         String from = period.from().toString();
         String to = period.to().toString() + "T23:59:59Z";
@@ -63,6 +69,7 @@ public class StatsQueryService {
 
     // ─── Users ───────────────────────────────────────────────────────────────
 
+    @Cacheable(value = HISTORICAL, key = "#limit + '_' + #botUserId")
     public List<UserStatsRow> topUsers(int limit, Long botUserId) {
         if (botUserId != null && botUserId > 0) {
             return jdbc.query(
@@ -90,6 +97,7 @@ public class StatsQueryService {
 
     // ─── Chats ───────────────────────────────────────────────────────────────
 
+    @Cacheable(value = HISTORICAL, key = "#period.toString() + '_' + #botUserId + '_' + #limit")
     public List<ChatStatsRow> topChats(StatsPeriod period, Long botUserId, int limit) {
         String from = period.from().toString();
         String to = period.to().toString() + "T23:59:59Z";
@@ -125,6 +133,7 @@ public class StatsQueryService {
 
     // ─── Status breakdown ────────────────────────────────────────────────────
 
+    @Cacheable(value = HISTORICAL, key = "#period.toString() + '_' + #botUserId")
     public Map<String, Long> statusBreakdown(StatsPeriod period, Long botUserId) {
         String from = period.from().toString();
         String to = period.to().toString() + "T23:59:59Z";
@@ -152,6 +161,7 @@ public class StatsQueryService {
 
     // ─── Time series ─────────────────────────────────────────────────────────
 
+    @Cacheable(value = HISTORICAL, key = "#period.toString() + '_' + #metric + '_' + #botUserId")
     public List<TimeSeriesPointDto> timeSeries(StatsPeriod period, String metric, Long botUserId) {
         String fmt = period.strftimeFormat();
         String from = period.from().toString();
@@ -186,6 +196,7 @@ public class StatsQueryService {
      * {@code events.html}. Чувствительно к RBAC — контроллер обязан передать
      * эффективный {@code botUserId} (0 = «все», только ADMIN).
      */
+    @Cacheable(value = LIVE, key = "#botUserId + '_' + #chatRefId + '_' + #status + '_' + #limit")
     public List<EventRowDto> recentEvents(Long botUserId, Long chatRefId,
                                           String status, int limit) {
         StringBuilder sql = new StringBuilder(
@@ -232,6 +243,7 @@ public class StatsQueryService {
 
     // ─── User detail ─────────────────────────────────────────────────────────
 
+    @Cacheable(value = PROFILE, key = "#botUserId")
     public UserDetailDto userDetail(long botUserId) {
         return jdbc.queryForObject(
                 "SELECT bot_user_id, username, display_name, total_exports, " +

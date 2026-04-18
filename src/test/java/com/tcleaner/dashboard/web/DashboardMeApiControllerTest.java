@@ -14,9 +14,11 @@ import com.tcleaner.dashboard.repository.ExportEventRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import jakarta.persistence.EntityManager;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.cache.CacheManager;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
@@ -45,6 +47,8 @@ class DashboardMeApiControllerTest {
     @Autowired private BotUserRepository botUserRepo;
     @Autowired private ChatRepository chatRepo;
     @Autowired private ExportEventRepository eventRepo;
+    @Autowired private EntityManager em;
+    @Autowired private CacheManager cacheManager;
 
     @MockitoBean private TelegramExporter mockExporter;
 
@@ -77,6 +81,8 @@ class DashboardMeApiControllerTest {
                 Instant.parse("2026-04-12T12:00:00Z"), ExportStatus.COMPLETED, 200L, 2000L));
         eventRepo.save(ev("m1", 999L, chat.getId(),
                 Instant.parse("2026-04-14T12:00:00Z"), ExportStatus.COMPLETED, 5000L, 50000L));
+        em.flush();
+        cacheManager.getCacheNames().forEach(n -> cacheManager.getCache(n).clear());
     }
 
     // ─── /overview ──────────────────────────────────────────────────────────

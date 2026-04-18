@@ -45,7 +45,7 @@
         const params = { limit: 100 };
         if (status) { params.status = status; }
         try {
-            const events = await fetchJson("/dashboard/api/stats/events", params);
+            const events = await fetchJson("/dashboard/api/stats/recent", params);
             tbody.innerHTML = events.length
                 ? events.map(row).join("")
                 : `<tr><td colspan="6" style="text-align:center;color:var(--muted)">Нет данных</td></tr>`;

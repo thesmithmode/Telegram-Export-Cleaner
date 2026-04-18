@@ -14,9 +14,11 @@ import com.tcleaner.dashboard.repository.ExportEventRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import jakarta.persistence.EntityManager;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.cache.CacheManager;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,20 +42,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @DisplayName("DashboardApiController")
 class DashboardApiControllerTest {
 
-    @Autowired
-    private MockMvc mockMvc;
+    @Autowired private MockMvc mockMvc;
+    @Autowired private BotUserRepository botUserRepo;
+    @Autowired private ChatRepository chatRepo;
+    @Autowired private ExportEventRepository eventRepo;
+    @Autowired private EntityManager em;
+    @Autowired private CacheManager cacheManager;
 
-    @Autowired
-    private BotUserRepository botUserRepo;
-
-    @Autowired
-    private ChatRepository chatRepo;
-
-    @Autowired
-    private ExportEventRepository eventRepo;
-
-    @MockitoBean
-    private TelegramExporter mockExporter;
+    @MockitoBean private TelegramExporter mockExporter;
 
     private static final DashboardUserDetails ADMIN = DashboardTestUsers.admin();
     private static final DashboardUserDetails USER_1 = DashboardTestUsers.user("alice", 1L);
@@ -83,6 +79,8 @@ class DashboardApiControllerTest {
                 Instant.parse("2026-04-12T12:00:00Z"), ExportStatus.COMPLETED, 200L, 2000L));
         eventRepo.save(event("t3", 2L, chat.getId(),
                 Instant.parse("2026-04-14T12:00:00Z"), ExportStatus.FAILED, 50L, 500L));
+        em.flush();
+        cacheManager.getCacheNames().forEach(n -> cacheManager.getCache(n).clear());
     }
 
     // ─── /me ─────────────────────────────────────────────────────────────────
@@ -257,38 +255,38 @@ class DashboardApiControllerTest {
                 .andExpect(jsonPath("$.FAILED").value(1));
     }
 
-    // ─── /stats/events ───────────────────────────────────────────────────────
+    // ─── /stats/recent ───────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("ADMIN: /stats/events — 3 записи DESC по started_at")
+    @DisplayName("ADMIN: /stats/recent — 3 записи DESC по started_at")
     void eventsAdmin() throws Exception {
-        mockMvc.perform(get("/dashboard/api/stats/events").with(user(ADMIN)))
+        mockMvc.perform(get("/dashboard/api/stats/recent").with(user(ADMIN)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$", org.hamcrest.Matchers.hasSize(3)))
                 .andExpect(jsonPath("$[0].taskId").value("t3"));
     }
 
     @Test
-    @DisplayName("USER_1: /stats/events — только свои 2 записи")
+    @DisplayName("USER_1: /stats/recent — только свои 2 записи")
     void eventsUserOnlyOwn() throws Exception {
-        mockMvc.perform(get("/dashboard/api/stats/events").with(user(USER_1)))
+        mockMvc.perform(get("/dashboard/api/stats/recent").with(user(USER_1)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$", org.hamcrest.Matchers.hasSize(2)));
     }
 
     @Test
-    @DisplayName("USER_1: /stats/events?userId=2 — 403")
+    @DisplayName("USER_1: /stats/recent?userId=2 — 403")
     void eventsUserForbidden() throws Exception {
-        mockMvc.perform(get("/dashboard/api/stats/events")
+        mockMvc.perform(get("/dashboard/api/stats/recent")
                         .param("userId", "2")
                         .with(user(USER_1)))
                 .andExpect(status().isForbidden());
     }
 
     @Test
-    @DisplayName("ADMIN: /stats/events?status=FAILED — только 1 запись")
+    @DisplayName("ADMIN: /stats/recent?status=FAILED — только 1 запись")
     void eventsFilterByStatus() throws Exception {
-        mockMvc.perform(get("/dashboard/api/stats/events")
+        mockMvc.perform(get("/dashboard/api/stats/recent")
                         .param("status", "FAILED")
                         .with(user(ADMIN)))
                 .andExpect(status().isOk())

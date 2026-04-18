@@ -68,6 +68,16 @@
             <artifactId>spring-security-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Dashboard stats caching: Spring Cache + Caffeine in-memory -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-cache</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
+
         <!-- Thymeleaf SSR для dashboard-страниц -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

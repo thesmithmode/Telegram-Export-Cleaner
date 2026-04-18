@@ -134,9 +134,11 @@ public class DashboardApiController {
         return statsQueryService.statusBreakdown(s.period(), s.botUserId());
     }
 
-    // ─── /dashboard/api/stats/events ─────────────────────────────────────────
+    // ─── /dashboard/api/stats/recent ─────────────────────────────────────────
+    // Прежний путь /stats/events переименован: EasyPrivacy/uBlock блокирует
+    // паттерн "stats/events" как tracking endpoint — запрос не доходил до сервера.
 
-    @GetMapping("/stats/events")
+    @GetMapping("/stats/recent")
     public List<EventRowDto> events(
             @AuthenticationPrincipal DashboardUserDetails principal,
             @RequestParam(required = false) Long userId,
