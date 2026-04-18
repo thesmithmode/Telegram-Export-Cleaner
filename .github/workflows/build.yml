@@ -192,6 +192,7 @@ jobs:
             TRAEFIK_ACME_EMAIL=${{ secrets.TRAEFIK_ACME_EMAIL }}
             TRAEFIK_DATA_PATH=${{ secrets.TRAEFIK_DATA_PATH }}
             HOST_DATA_PATH=${{ secrets.HOST_DATA_PATH }}
+            TELEGRAM_BOT_USERNAME=${{ secrets.TELEGRAM_BOT_USERNAME }}
             ENVEOF
 
             echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin

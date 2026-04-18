@@ -12,7 +12,7 @@
         const name = escapeHtml(u.displayName || u.username || `id ${u.botUserId}`);
         const link = `/dashboard/user/${encodeURIComponent(u.botUserId)}`;
         return `<tr>
-          <td><a href="${link}">${name}</a> <small style="color:var(--muted)">@${escapeHtml(u.username || "")}</small></td>
+          <td><a href="${link}">${name}</a> <small style="color:var(--muted)"><code>@${escapeHtml(u.username || "")}</code></small></td>
           <td>${formatNumber(u.totalExports)}</td>
           <td>${formatNumber(u.totalMessages)}</td>
           <td>${formatBytes(u.totalBytes)}</td>

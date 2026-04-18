@@ -1,0 +1,48 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../colors_and_type.css"><style>
+body{margin:0;padding:20px;background:var(--tec-bg);font-family:var(--tec-font-sans);color:var(--tec-text);font-size:13px}
+.card{background:#fff;border:1px solid var(--tec-border);border-radius:8px;padding:20px;box-shadow:0 1px 2px rgba(0,0,0,.05);max-width:620px}
+.card__title{margin:0 0 4px;font-size:15px;font-weight:600}
+.card__sub{margin:0 0 18px;font-size:12px;color:var(--tec-muted)}
+.grid{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:14px}
+.field{display:flex;flex-direction:column;gap:6px;min-width:0}
+.field.full{grid-column:1/-1}
+.field.half{grid-column:span 1}
+.field__label{font-size:11px;font-weight:500;color:var(--tec-muted);text-transform:uppercase;letter-spacing:.4px;display:flex;align-items:center;gap:4px}
+.field__hint{font-size:10px;color:var(--tec-muted);font-weight:400;text-transform:none;letter-spacing:0}
+.input{height:36px;border:1px solid var(--tec-border);border-radius:6px;padding:0 12px;background:#fff;color:var(--tec-text);font:inherit;font-size:13px;width:100%;box-sizing:border-box;transition:border-color .12s, box-shadow .12s}
+.input:focus{outline:none;border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.15)}
+.input-group{position:relative;display:flex;align-items:center}
+.input-group .prefix{position:absolute;left:12px;color:var(--tec-muted);font-size:13px;font-family:var(--tec-font-mono);pointer-events:none}
+.input-group .input{padding-left:28px;font-family:var(--tec-font-mono)}
+select.input{appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%23666e7b' stroke-width='1.4' fill='none' stroke-linecap='round'/></svg>");background-repeat:no-repeat;background-position:right 12px center;padding-right:32px}
+.actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;padding-top:16px;border-top:1px solid var(--tec-border)}
+.btn{height:34px;padding:0 14px;border-radius:6px;border:1px solid var(--tec-border);font:inherit;font-size:13px;cursor:pointer;background:#fff;color:var(--tec-text)}
+.btn--primary{background:#2563eb;color:#fff;border-color:#2563eb}
+</style></head><body>
+<div class="card">
+  <h3 class="card__title">Новый экспорт</h3>
+  <p class="card__sub">Введите цель и диапазон дат</p>
+  <div class="grid">
+    <div class="field full">
+      <label class="field__label">Чат <span class="field__hint">@username или t.me ссылка</span></label>
+      <div class="input-group"><span class="prefix">@</span><input class="input" value="durov"></div>
+    </div>
+    <div class="field">
+      <label class="field__label">От</label>
+      <input class="input" type="date" value="2024-01-01">
+    </div>
+    <div class="field">
+      <label class="field__label">До</label>
+      <input class="input" type="date" value="2024-12-31">
+    </div>
+    <div class="field">
+      <label class="field__label">Статус</label>
+      <select class="input"><option>Все</option><option>completed</option><option>failed</option></select>
+    </div>
+  </div>
+  <div class="actions">
+    <button class="btn">Отмена</button>
+    <button class="btn btn--primary">Экспортировать</button>
+  </div>
+</div>
+</body></html>

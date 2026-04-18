@@ -1,0 +1,69 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../colors_and_type.css"><style>
+body{margin:0;padding:16px;background:var(--tec-bg);font-family:var(--tec-font-sans);color:var(--tec-text);font-size:13px}
+.wrap{background:#fff;border:1px solid var(--tec-border);border-radius:6px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.05)}
+.toolbar{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--tec-border);background:var(--tec-bg)}
+.toolbar__title{font-weight:600;color:var(--tec-text);font-size:13px}
+.toolbar__count{font-size:11px;color:var(--tec-muted);font-family:var(--tec-font-mono);padding:2px 8px;border-radius:12px;background:#fff;border:1px solid var(--tec-border)}
+.toolbar__spacer{flex:1}
+.toolbar__act{color:var(--tec-accent);font-size:12px;font-weight:500;cursor:pointer}
+table{width:100%;border-collapse:collapse}
+th,td{padding:11px 14px;text-align:left;font-size:13px;vertical-align:middle}
+th{background:#fafbfc;color:var(--tec-muted);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--tec-border)}
+th.num,td.num{text-align:right;font-variant-numeric:tabular-nums}
+tbody tr{border-bottom:1px solid #f0f2f5}
+tbody tr:last-child{border-bottom:none}
+tbody tr:hover{background:#fafbfc}
+.avatar{display:inline-grid;place-items:center;width:26px;height:26px;border-radius:50%;font-size:11px;font-weight:700;color:#fff;margin-right:10px;vertical-align:middle;flex-shrink:0}
+.a1{background:#2563eb}.a2{background:#7b61ff}.a3{background:#d64545}.a4{background:#2b8a3e}.a5{background:#b7791f}
+.handle{display:flex;align-items:center}
+.handle__name{font-family:var(--tec-font-mono);font-weight:500;color:var(--tec-text)}
+.handle__sub{display:block;font-family:var(--tec-font-sans);font-size:11px;color:var(--tec-muted);font-weight:400}
+.chip{padding:2px 9px;border-radius:12px;font-size:11px;font-weight:500;display:inline-flex;align-items:center;gap:5px}
+.chip::before{content:'';width:6px;height:6px;border-radius:50%;background:currentColor}
+.c-ok{background:#e8f5ea;color:#2b8a3e}.c-fail{background:#fbe9e9;color:#d64545}.c-proc{background:#fff4e5;color:#b7791f}.c-queue{background:#e5edff;color:#3358d4}
+.bar{display:inline-block;width:56px;height:4px;border-radius:2px;background:#eef1f5;margin-right:8px;vertical-align:middle;overflow:hidden}
+.bar>i{display:block;height:100%;background:#2563eb;border-radius:2px}
+.muted{color:var(--tec-muted)}
+</style></head><body>
+<div class="wrap">
+  <div class="toolbar">
+    <span class="toolbar__title">Последние экспорты</span>
+    <span class="toolbar__count">4 записи</span>
+    <div class="toolbar__spacer"></div>
+    <a class="toolbar__act">Экспорт CSV ↓</a>
+  </div>
+  <table>
+    <thead><tr><th>Чат</th><th>Статус</th><th class="num">Сообщений</th><th class="num">Объём</th><th class="num">Начало</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><span class="handle"><span class="avatar a1">D</span><span><span class="handle__name">@durov</span><span class="handle__sub">channel · 2.1M subs</span></span></span></td>
+        <td><span class="chip c-ok">completed</span></td>
+        <td class="num">12 483</td>
+        <td class="num"><span class="bar"><i style="width:78%"></i></span>2.4 MB</td>
+        <td class="num muted">17 апр, 14:32</td>
+      </tr>
+      <tr>
+        <td><span class="handle"><span class="avatar a2">T</span><span><span class="handle__name">@tgcrm</span><span class="handle__sub">topic · id 1842</span></span></span></td>
+        <td><span class="chip c-proc">processing</span></td>
+        <td class="num">3 102</td>
+        <td class="num"><span class="bar"><i style="width:22%"></i></span>540 KB</td>
+        <td class="num muted">17 апр, 14:28</td>
+      </tr>
+      <tr>
+        <td><span class="handle"><span class="avatar a3">N</span><span><span class="handle__name">@news_ru</span><span class="handle__sub">channel</span></span></span></td>
+        <td><span class="chip c-fail">failed</span></td>
+        <td class="num muted">—</td>
+        <td class="num muted">—</td>
+        <td class="num muted">17 апр, 14:12</td>
+      </tr>
+      <tr>
+        <td><span class="handle"><span class="avatar a4">B</span><span><span class="handle__name">@build_log</span><span class="handle__sub">group · 48 members</span></span></span></td>
+        <td><span class="chip c-queue">queued</span></td>
+        <td class="num muted">—</td>
+        <td class="num muted">—</td>
+        <td class="num muted">17 апр, 14:05</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+</body></html>

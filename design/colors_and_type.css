@@ -1,0 +1,147 @@
+/* ──────────────────────────────────────────────────────────────────────── */
+/*  Telegram Export Cleaner — Design System Tokens                           */
+/*  Source: src/main/resources/static/dashboard/css/app.css + messages.props */
+/* ──────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* ─── Color: surfaces + text ─────────────────────────────────── */
+  --tec-bg:            #f5f6f8;   /* page background, cool off-white */
+  --tec-surface:       #ffffff;   /* cards, tables, header */
+  --tec-surface-alt:   #f5f6f8;   /* hover rows, subtle zebra      */
+  --tec-border:        #e3e6ea;   /* hairline, 1px everywhere       */
+  --tec-text:          #1f2430;   /* body, headings                 */
+  --tec-muted:         #666e7b;   /* labels, nav, captions          */
+
+  /* ─── Color: accent + semantics ──────────────────────────────── */
+  --tec-accent:        #2563eb;   /* single accent: buttons, links  */
+  --tec-accent-hover:  #1e50c8;
+  --tec-danger:        #d64545;
+  --tec-success:       #2b8a3e;
+  --tec-warning:       #b7791f;   /* processing status              */
+  --tec-info:          #3358d4;   /* queued status                  */
+
+  /* ─── Status-chip tints (bg / fg pairs) ──────────────────────── */
+  --tec-chip-success-bg: #e8f5ea;
+  --tec-chip-success-fg: #2b8a3e;
+  --tec-chip-danger-bg:  #fbe9e9;
+  --tec-chip-danger-fg:  #d64545;
+  --tec-chip-warn-bg:    #fff4e5;
+  --tec-chip-warn-fg:    #b7791f;
+  --tec-chip-info-bg:    #e5edff;
+  --tec-chip-info-fg:    #3358d4;
+  --tec-chip-neutral-bg: #f5f6f8;
+  --tec-chip-neutral-fg: #666e7b;
+
+  /* ─── Telegram-context (bot surfaces) ────────────────────────── */
+  --tec-tg-blue:         #229ed9;   /* Telegram brand blue           */
+  --tec-tg-bubble-in:    #ffffff;   /* incoming bubble (light mode)  */
+  --tec-tg-bubble-out:   #eeffde;   /* outgoing bubble (light mode)  */
+  --tec-tg-chat-bg:      #aebbd0;   /* chat wallpaper tint base      */
+  --tec-tg-link:         #168acd;   /* Telegram hyperlink blue       */
+  --tec-tg-kbd-bg:       rgba(255,255,255,.9);
+  --tec-tg-kbd-fg:       #168acd;
+
+  /* ─── Typography ─────────────────────────────────────────────── */
+  --tec-font-sans:  -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  --tec-font-mono:  ui-monospace, SFMono-Regular, Menlo, Consolas, "Courier New", monospace;
+  --tec-font-tg:    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+
+  /* Base size + semantic scale */
+  --tec-fs-base:   14px;
+  --tec-fs-xs:     11px;   /* status chips */
+  --tec-fs-sm:     12px;   /* kpi labels (uppercase) */
+  --tec-fs-body:   13px;   /* table cells, secondary */
+  --tec-fs-md:     14px;   /* default */
+  --tec-fs-lg:     15px;   /* chart-block title */
+  --tec-fs-h1:     20px;   /* page title */
+  --tec-fs-kpi:    24px;   /* big numbers */
+  --tec-fs-hero:   32px;   /* marketing-sized, rarely used */
+
+  --tec-fw-regular: 400;
+  --tec-fw-medium:  500;
+  --tec-fw-semibold:600;
+
+  --tec-lh-tight:   1.25;
+  --tec-lh-base:    1.5;
+  --tec-ls-caps:    0.5px;
+
+  /* ─── Spacing (4px grid) ─────────────────────────────────────── */
+  --tec-space-1:  4px;
+  --tec-space-2:  8px;
+  --tec-space-3:  12px;
+  --tec-space-4:  16px;
+  --tec-space-5:  24px;
+  --tec-space-6:  32px;
+  --tec-space-7:  48px;
+
+  /* ─── Radius ─────────────────────────────────────────────────── */
+  --tec-radius-sm:  4px;
+  --tec-radius:     6px;    /* THE radius — buttons, cards, inputs */
+  --tec-radius-pill:12px;   /* status chips only */
+  --tec-radius-bubble: 18px;/* Telegram-bubble context */
+
+  /* ─── Elevation ──────────────────────────────────────────────── */
+  --tec-shadow-sm:  0 1px 2px rgba(0,0,0,.05);    /* the only shadow */
+  --tec-shadow-md:  0 2px 6px rgba(0,0,0,.08);    /* hover, rarely  */
+
+  /* ─── Motion ─────────────────────────────────────────────────── */
+  --tec-ease:       ease-in-out;
+  --tec-dur-fast:   100ms;
+  --tec-dur-base:   150ms;
+
+  /* ─── Layout ─────────────────────────────────────────────────── */
+  --tec-container-max: 1200px;
+  --tec-gutter:        24px;
+}
+
+/* ─── Semantic type recipes ────────────────────────────────────── */
+.tec-h1 {
+  font-family: var(--tec-font-sans);
+  font-size: var(--tec-fs-h1);
+  font-weight: var(--tec-fw-semibold);
+  color: var(--tec-text);
+  line-height: var(--tec-lh-tight);
+  margin: 0 0 var(--tec-space-4);
+}
+
+.tec-h2 {
+  font-family: var(--tec-font-sans);
+  font-size: var(--tec-fs-lg);
+  font-weight: var(--tec-fw-medium);
+  color: var(--tec-muted);
+  margin: 0 0 var(--tec-space-3);
+}
+
+.tec-body {
+  font-family: var(--tec-font-sans);
+  font-size: var(--tec-fs-md);
+  color: var(--tec-text);
+  line-height: var(--tec-lh-base);
+}
+
+.tec-caption {
+  font-family: var(--tec-font-sans);
+  font-size: var(--tec-fs-body);
+  color: var(--tec-muted);
+}
+
+.tec-label-caps {
+  font-family: var(--tec-font-sans);
+  font-size: var(--tec-fs-sm);
+  color: var(--tec-muted);
+  text-transform: uppercase;
+  letter-spacing: var(--tec-ls-caps);
+}
+
+.tec-kpi {
+  font-family: var(--tec-font-sans);
+  font-size: var(--tec-fs-kpi);
+  font-weight: var(--tec-fw-semibold);
+  color: var(--tec-text);
+}
+
+.tec-mono {
+  font-family: var(--tec-font-mono);
+  font-size: var(--tec-fs-body);
+  color: var(--tec-text);
+}

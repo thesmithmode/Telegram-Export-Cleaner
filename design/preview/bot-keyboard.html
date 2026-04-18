@@ -1,0 +1,59 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../colors_and_type.css"><style>
+body{margin:0;padding:22px;background:#7a93b5;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;color:#000;min-height:100vh;box-sizing:border-box;-webkit-font-smoothing:antialiased}
+.wrap{max-width:340px;margin:0 auto}
+
+/* Real Telegram: bubble and inline keyboard are ONE connected unit, same width,
+   keyboard sits directly under with 2px gap, both wrapped in the same 14px radius shell */
+.unit{display:flex;flex-direction:column;align-items:flex-start;gap:2px}
+.bubble{background:#fff;border-radius:14px 14px 14px 4px;padding:7px 10px 6px;font-size:15px;line-height:1.3;color:#000;max-width:85%;box-shadow:0 1px 0.5px rgba(0,0,0,.13);position:relative}
+.bubble .meta{float:right;font-size:11px;color:#a0acb6;margin:5px 0 0 8px;font-variant-numeric:tabular-nums}
+.bubble .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;color:#168acd}
+
+/* inline keyboard — tg mobile spec: light translucent buttons, bold blue text, compact rows */
+.kbd{display:flex;flex-direction:column;gap:2px;width:100%;max-width:85%}
+.kbd-row{display:flex;gap:2px}
+.kbd button{
+  flex:1;
+  background:rgba(255,255,255,.95);
+  color:#168acd;
+  border:none;
+  padding:10px 6px;
+  font:inherit;
+  font-size:14px;
+  font-weight:500;
+  cursor:pointer;
+  text-align:center;
+  border-radius:6px;
+  box-shadow:0 1px 0.5px rgba(0,0,0,.13);
+  font-family:inherit;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:5px;
+  min-height:38px;
+  transition:background-color .1s;
+}
+.kbd button:hover{background:#fff}
+.kbd button:active{background:rgba(255,255,255,.75)}
+.kbd .emoji{font-family:"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji","Twemoji Mozilla",sans-serif;font-size:15px;line-height:1}
+.kbd button.back{color:#8b9097;font-size:13px}
+
+/* corner rounding matches real TG: first row top-corners slight, last row bottom-corners extended */
+.kbd-row:first-child button:first-child{border-top-left-radius:4px}
+.kbd-row:first-child button:last-child{border-top-right-radius:4px}
+.kbd-row:last-child button{border-bottom-left-radius:14px;border-bottom-right-radius:14px}
+.kbd-row:last-child button:only-child{border-bottom-left-radius:14px;border-bottom-right-radius:14px}
+</style></head><body>
+<div class="wrap">
+  <div class="unit">
+    <div class="bubble">Чат: <span class="mono">@durov</span><br>Выберите период экспорта:<span class="meta">14:32</span></div>
+    <div class="kbd">
+      <div class="kbd-row"><button><span class="emoji">📦</span>Весь чат</button></div>
+      <div class="kbd-row"><button><span class="emoji">⏱</span>1 день</button><button><span class="emoji">🗓</span>3 дня</button></div>
+      <div class="kbd-row"><button><span class="emoji">🗓</span>7 дней</button><button><span class="emoji">🗓</span>30 дней</button></div>
+      <div class="kbd-row"><button><span class="emoji">📅</span>Указать диапазон</button></div>
+      <div class="kbd-row"><button class="back">◀ Назад</button></div>
+    </div>
+  </div>
+</div>
+</body></html>

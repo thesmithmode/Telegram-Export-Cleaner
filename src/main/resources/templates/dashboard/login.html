@@ -9,7 +9,12 @@
 <body class="login-body">
 <main class="login-wrap">
     <div class="login-form">
-        <h1 class="login-form__title">Sign in</h1>
+        <div class="login-form__brand">
+            <img th:src="@{/dashboard/img/logo-mark.svg}" alt=""
+                 class="login-form__logo" width="48" height="48">
+            <h1 class="login-form__title">Telegram Export Cleaner</h1>
+            <p class="login-form__subtitle">Sign in with your Telegram account</p>
+        </div>
 
         <div th:if="${param.error != null and param.error[0] == 'invalid'}"
              class="login-form__error">
