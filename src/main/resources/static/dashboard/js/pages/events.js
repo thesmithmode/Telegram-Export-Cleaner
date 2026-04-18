@@ -23,10 +23,15 @@
     }
 
     function row(e) {
-        const user = e.username ? `@${escapeHtml(e.username)}` : (e.botUserId || "—");
+        const user = e.username
+            ? `<code>@${escapeHtml(e.username)}</code>`
+            : (e.botUserId ? `<code>${escapeHtml(String(e.botUserId))}</code>` : "—");
+        const chat = e.chatTitle
+            ? escapeHtml(e.chatTitle)
+            : (e.canonicalChatId ? `<code>${escapeHtml(String(e.canonicalChatId))}</code>` : "—");
         return `<tr>
           <td>${user}</td>
-          <td>${escapeHtml(e.chatTitle || e.canonicalChatId || "—")}</td>
+          <td>${chat}</td>
           <td>${chip(e.status)}</td>
           <td>${formatNumber(e.messagesCount)}</td>
           <td>${formatBytes(e.bytesCount)}</td>

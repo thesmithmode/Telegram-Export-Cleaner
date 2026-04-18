@@ -10,7 +10,9 @@
     if (!fetchJson) { return; }
 
     function row(c) {
-        const name = escapeHtml(c.chatTitle || c.canonicalChatId);
+        const name = c.chatTitle
+            ? escapeHtml(c.chatTitle)
+            : `<code>${escapeHtml(String(c.canonicalChatId))}</code>`;
         return `<tr>
           <td>${name}</td>
           <td>${formatNumber(c.exportCount)}</td>
