@@ -115,6 +115,7 @@ CREATE INDEX idx_dashboard_users_bot_user_id ON dashboard_users (bot_user_id);
 -- =============================================================================
 
 --changeset app:002-telegram-login splitStatements:true endDelimiter:;
+--validCheckSum 9:eb4454a2498905dc7ed47cd0daaefc52
 
 ALTER TABLE dashboard_users ADD COLUMN telegram_id BIGINT;
 
