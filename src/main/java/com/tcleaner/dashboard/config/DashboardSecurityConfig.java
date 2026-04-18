@@ -38,7 +38,8 @@ public class DashboardSecurityConfig {
                 .requestMatchers(
                     "/dashboard/login", "/dashboard/login/telegram",
                     "/dashboard/assets/**", "/dashboard/css/**",
-                    "/dashboard/js/**", "/dashboard/vendor/**").permitAll()
+                    "/dashboard/js/**", "/dashboard/vendor/**",
+                    "/dashboard/img/**").permitAll()
                 // Admin-only: глобальные страницы и API (USER → silent redirect на /me)
                 .requestMatchers(
                     "/dashboard/overview",
