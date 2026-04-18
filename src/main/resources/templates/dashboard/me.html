@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{dashboard/layout :: layout(title='My Dashboard', content=~{::me-content})}">
+<body>
+
+<!--
+  Персональный дашборд. Скоуп = principal.botUserId (внутри /api/me/**).
+  Если у пользователя ещё нет записи в bot_users (свежий логин), JS получит
+  пустые DTO, а верх страницы покажет empty-state баннер.
+-->
+<div th:fragment="me-content" class="user-detail"
+     th:attr="data-has-bot-user-id=${hasBotUserId}">
+    <h1>My Dashboard</h1>
+
+    <div th:if="${!hasBotUserId}" class="empty-state" role="status">
+        No exports yet. Run <code>/export</code> in the bot to get started.
+    </div>
+
+    <div th:replace="~{dashboard/fragments/period-filter :: period-filter}"></div>
+
+    <div class="kpi-grid">
+        <div class="kpi" id="kpi-exports">
+            <div class="kpi__label">Exports</div>
+            <div class="kpi__value" data-kpi="totalExports">—</div>
+        </div>
+        <div class="kpi" id="kpi-messages">
+            <div class="kpi__label">Messages</div>
+            <div class="kpi__value" data-kpi="totalMessages">—</div>
+        </div>
+        <div class="kpi" id="kpi-bytes">
+            <div class="kpi__label">Bytes</div>
+            <div class="kpi__value" data-kpi="totalBytes">—</div>
+        </div>
+    </div>
+
+    <div th:replace="~{dashboard/fragments/chart-block :: chart(
+            id='chart-timeseries', title='Exports over time', height=260)}"></div>
+
+    <div th:replace="~{dashboard/fragments/chart-block :: chart(
+            id='chart-status', title='Status breakdown', height=260)}"></div>
+
+    <section class="table-block">
+        <h2>My Chats</h2>
+        <table class="data-table">
+            <thead>
+            <tr>
+                <th>Chat</th>
+                <th>Exports</th>
+                <th>Messages</th>
+                <th>Bytes</th>
+            </tr>
+            </thead>
+            <tbody id="my-chats-body">
+            <tr><td colspan="4">—</td></tr>
+            </tbody>
+        </table>
+    </section>
+
+    <section class="table-block">
+        <h2>My Recent Events</h2>
+        <table class="data-table">
+            <thead>
+            <tr>
+                <th>Started</th>
+                <th>Chat</th>
+                <th>Status</th>
+                <th>Messages</th>
+            </tr>
+            </thead>
+            <tbody id="my-events-body">
+            <tr><td colspan="4">—</td></tr>
+            </tbody>
+        </table>
+    </section>
+
+    <script th:src="@{/dashboard/js/pages/me.js}" defer></script>
+</div>
+
+</body>
+</html>

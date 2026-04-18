@@ -52,7 +52,7 @@ class DashboardPageControllerTest {
     void loginWithErrorFlag() throws Exception {
         mockMvc.perform(get("/dashboard/login").param("error", "invalid"))
                 .andExpect(status().isOk())
-                .andExpect(content().string(containsString("Не удалось подтвердить вход")));
+                .andExpect(content().string(containsString("Sign-in verification failed")));
     }
 
     @Test
@@ -60,7 +60,7 @@ class DashboardPageControllerTest {
     void loginWithLogoutFlag() throws Exception {
         mockMvc.perform(get("/dashboard/login").param("logout", ""))
                 .andExpect(status().isOk())
-                .andExpect(content().string(containsString("вышли")));
+                .andExpect(content().string(containsString("signed out")));
     }
 
     @Test
@@ -72,11 +72,35 @@ class DashboardPageControllerTest {
     }
 
     @Test
-    @DisplayName("GET /dashboard/ (auth) — 302 на /dashboard/overview")
-    void rootRedirectsAuthenticatedToOverview() throws Exception {
-        mockMvc.perform(get("/dashboard/").with(user(USER)))
+    @DisplayName("GET /dashboard/ (ADMIN) — 302 на /dashboard/overview")
+    void rootRedirectsAdminToOverview() throws Exception {
+        mockMvc.perform(get("/dashboard/").with(user(ADMIN)))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl("/dashboard/overview"));
+    }
+
+    @Test
+    @DisplayName("GET /dashboard/ (USER) — 302 на /dashboard/me")
+    void rootRedirectsUserToMe() throws Exception {
+        mockMvc.perform(get("/dashboard/").with(user(USER)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/dashboard/me"));
+    }
+
+    @Test
+    @DisplayName("GET /dashboard/login (ADMIN) — 302 на /dashboard/overview")
+    void loginRedirectsAdmin() throws Exception {
+        mockMvc.perform(get("/dashboard/login").with(user(ADMIN)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/dashboard/overview"));
+    }
+
+    @Test
+    @DisplayName("GET /dashboard/login (USER) — 302 на /dashboard/me")
+    void loginRedirectsUser() throws Exception {
+        mockMvc.perform(get("/dashboard/login").with(user(USER)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/dashboard/me"));
     }
 
     @Test
@@ -88,13 +112,12 @@ class DashboardPageControllerTest {
     }
 
     @Test
-    @DisplayName("GET /dashboard/overview (auth) — 200, KPI + period-filter + chart canvases")
-    void overviewRendersForAuthenticatedUser() throws Exception {
-        mockMvc.perform(get("/dashboard/overview").with(user(USER)))
+    @DisplayName("GET /dashboard/overview (ADMIN) — 200, KPI + period-filter + chart canvases")
+    void overviewRendersForAdmin() throws Exception {
+        mockMvc.perform(get("/dashboard/overview").with(user(ADMIN)))
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith("text/html"))
                 .andExpect(content().string(containsString("Обзор")))
-                .andExpect(content().string(containsString("alice")))
                 // KPI-grid со всеми четырьмя метриками
                 .andExpect(content().string(containsString("kpi-grid")))
                 .andExpect(content().string(containsString("kpi-exports")))
@@ -116,6 +139,14 @@ class DashboardPageControllerTest {
     }
 
     @Test
+    @DisplayName("GET /dashboard/overview (USER) — 302 на /dashboard/me (silent redirect, admin-only)")
+    void overviewRedirectsUserToMe() throws Exception {
+        mockMvc.perform(get("/dashboard/overview").with(user(USER)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/dashboard/me"));
+    }
+
+    @Test
     @DisplayName("GET /dashboard/error — 200, generic error page")
     void errorPageRenders() throws Exception {
         mockMvc.perform(get("/dashboard/error").with(user(USER)))
@@ -134,10 +165,11 @@ class DashboardPageControllerTest {
     }
 
     @Test
-    @DisplayName("GET /dashboard/users (USER) — 403")
+    @DisplayName("GET /dashboard/users (USER) — 302 silent redirect на /dashboard/me")
     void usersBlockedForUser() throws Exception {
         mockMvc.perform(get("/dashboard/users").with(user(USER)))
-                .andExpect(status().isForbidden());
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/dashboard/me"));
     }
 
     @Test
@@ -151,9 +183,9 @@ class DashboardPageControllerTest {
     }
 
     @Test
-    @DisplayName("GET /dashboard/user/1 (auth USER) — 200, рендерится карточка пользователя")
-    void userDetailRendersForAuthenticatedUser() throws Exception {
-        mockMvc.perform(get("/dashboard/user/1").with(user(USER)))
+    @DisplayName("GET /dashboard/user/1 (ADMIN) — 200, рендерится карточка пользователя")
+    void userDetailRendersForAdmin() throws Exception {
+        mockMvc.perform(get("/dashboard/user/1").with(user(ADMIN)))
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith("text/html"))
                 .andExpect(content().string(containsString("kpi-grid")))
@@ -161,10 +193,20 @@ class DashboardPageControllerTest {
     }
 
     @Test
-    @DisplayName("GET /dashboard/user/999 (USER с botUserId=1) — 403 IDOR защита")
-    void userDetailBlockedForWrongUser() throws Exception {
+    @DisplayName("GET /dashboard/user/999 (USER) — 302 silent redirect (admin-only URL)")
+    void userDetailBlockedForUser() throws Exception {
         mockMvc.perform(get("/dashboard/user/999").with(user(USER)))
-                .andExpect(status().isForbidden());
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/dashboard/me"));
+    }
+
+    @Test
+    @DisplayName("GET /dashboard/user/1 (USER с тем же botUserId) — 302 (admin-only URL, не даём IDOR)")
+    void userDetailBlockedEvenForOwnIdForUser() throws Exception {
+        // Даже «свой» botUserId через admin-URL не отдаём — у USER есть только /me.
+        mockMvc.perform(get("/dashboard/user/1").with(user(USER)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/dashboard/me"));
     }
 
     @Test
@@ -176,10 +218,11 @@ class DashboardPageControllerTest {
     }
 
     @Test
-    @DisplayName("GET /dashboard/user/1 (USER без botUserId) — 403")
+    @DisplayName("GET /dashboard/user/1 (USER без botUserId) — 302 silent redirect")
     void userDetailBlockedForUnboundUser() throws Exception {
         mockMvc.perform(get("/dashboard/user/1").with(user(DashboardTestUsers.unboundUser())))
-                .andExpect(status().isForbidden());
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/dashboard/me"));
     }
 
     // ─── PR-12: chats / events pages ─────────────────────────────────────────
@@ -193,14 +236,22 @@ class DashboardPageControllerTest {
     }
 
     @Test
-    @DisplayName("GET /dashboard/chats (auth) — 200, рендерится таблица чатов + chart")
-    void chatsRendersForAuthenticatedUser() throws Exception {
-        mockMvc.perform(get("/dashboard/chats").with(user(USER)))
+    @DisplayName("GET /dashboard/chats (ADMIN) — 200, рендерится таблица чатов + chart")
+    void chatsRendersForAdmin() throws Exception {
+        mockMvc.perform(get("/dashboard/chats").with(user(ADMIN)))
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith("text/html"))
                 .andExpect(content().string(containsString("data-table")))
                 .andExpect(content().string(containsString("id=\"chart-top-chats\"")))
                 .andExpect(content().string(containsString("dashboard/js/pages/chats.js")));
+    }
+
+    @Test
+    @DisplayName("GET /dashboard/chats (USER) — 302 silent redirect")
+    void chatsBlockedForUser() throws Exception {
+        mockMvc.perform(get("/dashboard/chats").with(user(USER)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/dashboard/me"));
     }
 
     @Test
@@ -212,12 +263,20 @@ class DashboardPageControllerTest {
     }
 
     @Test
-    @DisplayName("GET /dashboard/events (auth) — 200, рендерится таблица событий")
-    void eventsRendersForAuthenticatedUser() throws Exception {
-        mockMvc.perform(get("/dashboard/events").with(user(USER)))
+    @DisplayName("GET /dashboard/events (ADMIN) — 200, рендерится таблица событий")
+    void eventsRendersForAdmin() throws Exception {
+        mockMvc.perform(get("/dashboard/events").with(user(ADMIN)))
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith("text/html"))
                 .andExpect(content().string(containsString("data-table")))
                 .andExpect(content().string(containsString("dashboard/js/pages/events.js")));
+    }
+
+    @Test
+    @DisplayName("GET /dashboard/events (USER) — 302 silent redirect")
+    void eventsBlockedForUser() throws Exception {
+        mockMvc.perform(get("/dashboard/events").with(user(USER)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/dashboard/me"));
     }
 }

@@ -4,7 +4,7 @@ import com.tcleaner.dashboard.auth.DashboardUserDetails;
 import com.tcleaner.dashboard.auth.DashboardUserService;
 import com.tcleaner.dashboard.domain.DashboardRole;
 import com.tcleaner.dashboard.domain.DashboardUser;
-import com.tcleaner.dashboard.repository.BotUserRepository;
+import com.tcleaner.dashboard.service.ingestion.BotUserUpserter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
@@ -23,12 +23,15 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 
+import java.time.Instant;
 import java.util.List;
 
 /**
  * Обрабатывает callback от Telegram Login Widget:
  * GET /dashboard/login/telegram?id=...&first_name=...&hash=...
  * Верифицирует HMAC-SHA256, определяет роль, создаёт Spring Security сессию.
+ * ADMIN → /dashboard/overview; USER → /dashboard/me (запись в bot_users создаётся
+ * автоматически при первом входе — даже если юзер ни разу не писал боту).
  */
 @Controller
 @RequestMapping("/dashboard/login/telegram")
@@ -38,14 +41,14 @@ public class TelegramAuthController {
 
     private final TelegramAuthVerifier verifier;
     private final DashboardUserService userService;
-    private final BotUserRepository botUsers;
+    private final BotUserUpserter botUserUpserter;
     private final long adminTelegramId;
     private final SecurityContextRepository contextRepository =
             new HttpSessionSecurityContextRepository();
 
     public TelegramAuthController(TelegramAuthVerifier verifier,
                                   DashboardUserService userService,
-                                  BotUserRepository botUsers,
+                                  BotUserUpserter botUserUpserter,
                                   @Value("${dashboard.auth.admin.telegram-id}") long adminTelegramId) {
         if (adminTelegramId <= 0) {
             throw new IllegalArgumentException(
@@ -53,7 +56,7 @@ public class TelegramAuthController {
         }
         this.verifier = verifier;
         this.userService = userService;
-        this.botUsers = botUsers;
+        this.botUserUpserter = botUserUpserter;
         this.adminTelegramId = adminTelegramId;
     }
 
@@ -83,10 +86,9 @@ public class TelegramAuthController {
             role = DashboardRole.ADMIN;
             botUserId = null;
         } else {
-            if (botUsers.findById(id).isEmpty()) {
-                log.warn("Telegram login rejected (forbidden): id={} не найден в bot_users", id);
-                return "redirect:/dashboard/login?error=forbidden";
-            }
+            // USER: upsert в bot_users — создаёт пустой профиль, если юзер ни разу
+            // не писал боту. Это гарантирует личный кабинет каждому TG-аккаунту.
+            botUserUpserter.upsert(id, username, firstName, Instant.ofEpochSecond(authDate));
             role = DashboardRole.USER;
             botUserId = id;
         }
@@ -111,6 +113,8 @@ public class TelegramAuthController {
         contextRepository.saveContext(context, request, response);
 
         log.info("Telegram login: tgId={} role={} user='{}'", id, role, user.getUsername());
-        return "redirect:/dashboard/overview";
+        return role == DashboardRole.ADMIN
+                ? "redirect:/dashboard/overview"
+                : "redirect:/dashboard/me";
     }
 }

@@ -121,3 +121,12 @@ ALTER TABLE dashboard_users ADD COLUMN telegram_id BIGINT;
 CREATE UNIQUE INDEX idx_dashboard_users_telegram_id
     ON dashboard_users (telegram_id)
     WHERE telegram_id IS NOT NULL;
+
+-- =============================================================================
+-- 003: Очистка orphan-записей dashboard_users без telegram_id.
+-- Остатки прошлых экспериментов — пустой telegram_id = не привязан к TG-аккаунту.
+-- =============================================================================
+
+--changeset app:003-cleanup-orphaned-dashboard-users splitStatements:true endDelimiter:;
+
+DELETE FROM dashboard_users WHERE telegram_id IS NULL;

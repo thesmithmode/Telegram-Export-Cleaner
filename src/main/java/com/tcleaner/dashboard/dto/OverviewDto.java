@@ -16,4 +16,9 @@ public record OverviewDto(
         List<UserStatsRow> topUsers,
         List<ChatStatsRow> topChats,
         Map<String, Long> statusBreakdown
-) {}
+) {
+    /** Пустой DTO — для /api/me/overview когда у пользователя ещё нет данных. */
+    public static OverviewDto empty() {
+        return new OverviewDto(0L, 0L, 0L, 0L, List.of(), List.of(), Map.of());
+    }
+}
