@@ -53,7 +53,7 @@ public class DashboardSecurityConfig {
                 .requestMatchers(
                     "/dashboard/api/stats/overview",
                     "/dashboard/api/stats/user/**",
-                    "/dashboard/api/stats/events").authenticated()
+                    "/dashboard/api/stats/recent").authenticated()
                 // Личный кабинет доступен любому авторизованному
                 .requestMatchers(
                     "/dashboard/me", "/dashboard/me/**",

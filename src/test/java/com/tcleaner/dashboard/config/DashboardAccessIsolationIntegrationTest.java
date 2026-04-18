@@ -14,9 +14,11 @@ import com.tcleaner.dashboard.repository.ExportEventRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import jakarta.persistence.EntityManager;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.cache.CacheManager;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
@@ -48,6 +50,8 @@ class DashboardAccessIsolationIntegrationTest {
     @Autowired private BotUserRepository botUserRepo;
     @Autowired private ChatRepository chatRepo;
     @Autowired private ExportEventRepository eventRepo;
+    @Autowired private EntityManager em;
+    @Autowired private CacheManager cacheManager;
 
     @MockitoBean private TelegramExporter mockExporter;
 
@@ -86,6 +90,8 @@ class DashboardAccessIsolationIntegrationTest {
                 .source(ExportSource.BOT)
                 .createdAt(Instant.parse("2026-04-14T12:00:00Z"))
                 .updatedAt(Instant.parse("2026-04-14T12:00:00Z")).build());
+        em.flush();
+        cacheManager.getCacheNames().forEach(n -> cacheManager.getCache(n).clear());
     }
 
     // ─── Публичный login ─────────────────────────────────────────────────────
@@ -187,7 +193,7 @@ class DashboardAccessIsolationIntegrationTest {
                 .andExpect(status().isOk());
         mockMvc.perform(get("/dashboard/api/stats/user/42").with(user(USER_42)))
                 .andExpect(status().isOk());
-        mockMvc.perform(get("/dashboard/api/stats/events").with(user(USER_42)))
+        mockMvc.perform(get("/dashboard/api/stats/recent").with(user(USER_42)))
                 .andExpect(status().isOk());
     }
 
