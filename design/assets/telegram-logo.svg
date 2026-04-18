@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" fill="none">
+  <defs>
+    <linearGradient id="tgBlue" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#37aee2"></stop>
+      <stop offset="1" stop-color="#1e96c8"></stop>
+    </linearGradient>
+  </defs>
+  <circle cx="120" cy="120" r="120" fill="url(#tgBlue)"></circle>
+  <path d="M53 116l121-47c5.6-2.1 10.5 1.4 8.7 9.8l-20.6 97c-1.4 6.6-5.3 8.2-10.7 5.1l-29.6-21.8-14.3 13.7c-1.6 1.6-2.9 2.9-5.9 2.9l2.1-29.9 54.5-49.2c2.4-2.1-.5-3.3-3.7-1.2L74.8 132 50.6 124.5c-5.2-1.6-5.3-5.2 1.1-8.5z" fill="#fff"></path>
+</svg>

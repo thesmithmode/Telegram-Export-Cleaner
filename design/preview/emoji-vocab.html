@@ -1,0 +1,62 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../colors_and_type.css"><style>
+body{margin:0;padding:20px;background:var(--tec-bg);font-family:var(--tec-font-sans);color:var(--tec-text)}
+.sheet{max-width:660px;background:#fff;border:1px solid var(--tec-border);border-radius:var(--tec-radius);padding:18px 20px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-weight:500;color:var(--tec-muted);font-family:var(--tec-font-mono);font-size:10px;letter-spacing:.5px;text-transform:uppercase;padding:0 0 10px;border-bottom:1px solid var(--tec-border)}
+td{padding:9px 0;border-bottom:1px dashed var(--tec-border);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+td.g{width:24px;color:var(--tec-muted);font-family:var(--tec-font-mono);font-size:10px;font-variant-numeric:tabular-nums}
+td.e{width:36px;text-align:center}
+td.e span{font-family:"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji","Twemoji Mozilla",sans-serif;font-size:17px;line-height:1}
+td.k{width:110px;color:var(--tec-text);font-weight:500;font-family:var(--tec-font-mono);font-size:12px}
+td.u{font-family:var(--tec-font-mono);font-size:10px;color:var(--tec-muted);width:70px;letter-spacing:.3px}
+td.d{color:var(--tec-text);font-size:13px}
+td.ctx{color:var(--tec-muted);font-size:11px;font-family:var(--tec-font-mono);text-align:right;white-space:nowrap}
+
+.sec{margin-top:16px}
+.sec:first-child{margin-top:0}
+.sec__h{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--tec-text);font-weight:600;padding-bottom:6px;display:flex;align-items:baseline;gap:8px;border-bottom:1px solid var(--tec-text);margin-bottom:0}
+.sec__h small{font-family:var(--tec-font-mono);color:var(--tec-muted);font-weight:400;letter-spacing:.3px}
+
+.foot{margin-top:14px;font-size:10px;color:var(--tec-muted);font-family:var(--tec-font-mono);letter-spacing:.4px;display:flex;justify-content:space-between;border-top:1px solid var(--tec-border);padding-top:10px}
+</style></head><body>
+<div class="sheet">
+
+  <div class="sec">
+    <div class="sec__h">I · Range <small>— what window to export</small></div>
+    <table>
+      <tr><td class="g">01</td><td class="e"><span>📦</span></td><td class="k">all</td><td class="u">U+1F4E6</td><td class="d">Весь чат</td><td class="ctx">menu button</td></tr>
+      <tr><td class="g">02</td><td class="e"><span>⏱</span></td><td class="k">hours</td><td class="u">U+23F1</td><td class="d">1 / 3 часа</td><td class="ctx">menu button</td></tr>
+      <tr><td class="g">03</td><td class="e"><span>🗓</span></td><td class="k">days</td><td class="u">U+1F5D3</td><td class="d">3 / 7 / 30 дней</td><td class="ctx">menu button</td></tr>
+      <tr><td class="g">04</td><td class="e"><span>📅</span></td><td class="k">date-range</td><td class="u">U+1F4C5</td><td class="d">Указать диапазон</td><td class="ctx">menu button</td></tr>
+    </table>
+  </div>
+
+  <div class="sec">
+    <div class="sec__h">II · Nav <small>— movement inside menus</small></div>
+    <table>
+      <tr><td class="g">05</td><td class="e"><span>◀</span></td><td class="k">back</td><td class="u">U+25C0</td><td class="d">Назад</td><td class="ctx">text prefix</td></tr>
+      <tr><td class="g">06</td><td class="e"><span>⏮</span></td><td class="k">from-start</td><td class="u">U+23EE</td><td class="d">С начала чата</td><td class="ctx">menu button</td></tr>
+      <tr><td class="g">07</td><td class="e"><span>⏭</span></td><td class="k">to-today</td><td class="u">U+23ED</td><td class="d">До сегодня</td><td class="ctx">menu button</td></tr>
+    </table>
+  </div>
+
+  <div class="sec">
+    <div class="sec__h">III · Status <small>— system speaks back</small></div>
+    <table>
+      <tr><td class="g">08</td><td class="e"><span>📋</span></td><td class="k">menu</td><td class="u">U+1F4CB</td><td class="d">Меню / контекст чата</td><td class="ctx">header line</td></tr>
+      <tr><td class="g">09</td><td class="e"><span>⏳</span></td><td class="k">queued</td><td class="u">U+23F3</td><td class="d">Задача принята</td><td class="ctx">bold header</td></tr>
+      <tr><td class="g">10</td><td class="e"><span>⚙️</span></td><td class="k">processing</td><td class="u">U+2699</td><td class="d">Экспорт запущен</td><td class="ctx">bold header</td></tr>
+      <tr><td class="g">11</td><td class="e"><span>⚡</span></td><td class="k">cache-hit</td><td class="u">U+26A1</td><td class="d">Данные в кэше</td><td class="ctx">inline note</td></tr>
+      <tr><td class="g">12</td><td class="e"><span>✅</span></td><td class="k">success</td><td class="u">U+2705</td><td class="d">Экспорт готов</td><td class="ctx">bold header</td></tr>
+      <tr><td class="g">13</td><td class="e"><span>❌</span></td><td class="k">cancel·err</td><td class="u">U+274C</td><td class="d">Отменить · ошибка</td><td class="ctx">button · header</td></tr>
+      <tr><td class="g">14</td><td class="e"><span>📄</span></td><td class="k">file-plain</td><td class="u">U+1F4C4</td><td class="d">Результат в виде txt</td><td class="ctx">alt to doc-card</td></tr>
+    </table>
+  </div>
+
+  <div class="foot">
+    <span>14 glyphs · U-series · Unicode-only · no custom SVG</span>
+    <span>TEC · 2026</span>
+  </div>
+</div>
+</body></html>

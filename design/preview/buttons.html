@@ -1,0 +1,92 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../colors_and_type.css"><style>
+body{margin:0;padding:18px;background:var(--tec-bg);font-family:var(--tec-font-sans);color:var(--tec-text);font-size:13px}
+.section{margin-bottom:16px}
+.section:last-child{margin-bottom:0}
+.section__head{display:flex;align-items:baseline;gap:10px;margin-bottom:8px}
+.section__lbl{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--tec-muted);font-weight:600}
+.section__hint{font-size:11px;color:var(--tec-muted)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+
+/* ── shared base ─────────────────────────────────── */
+.btn{
+  font:inherit;
+  height:34px;
+  padding:0 14px;
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  border-radius:6px;
+  border:1px solid var(--tec-border);
+  background:#fff;
+  color:var(--tec-text);
+  cursor:pointer;
+  font-size:13px;
+  line-height:1;
+  transition:background-color .1s ease-in-out, border-color .1s, color .1s;
+  white-space:nowrap;
+}
+
+/* ── ACTION buttons (change state / submit) ─── solid fills ── */
+.btn--primary{background:#2563eb;color:#fff;border-color:#2563eb}
+.btn--primary:hover{background:#1e50c8;border-color:#1e50c8}
+
+.btn--danger{background:#d64545;color:#fff;border-color:#d64545}
+.btn--danger:hover{background:#b83535;border-color:#b83535}
+
+.btn--ghost{background:#fff;color:var(--tec-text)}
+.btn--ghost:hover{background:var(--tec-bg)}
+
+/* ── TOGGLE buttons (select one of N) ─── pill group with shared track ── */
+.toggle{
+  display:inline-flex;
+  padding:3px;
+  background:#eef1f5;
+  border-radius:8px;
+  gap:2px;
+}
+.toggle .btn--t{
+  height:28px;
+  padding:0 12px;
+  border:none;
+  background:transparent;
+  color:var(--tec-muted);
+  border-radius:5px;
+  font-size:12px;
+  font-weight:500;
+}
+.toggle .btn--t:hover{color:var(--tec-text)}
+.toggle .btn--t.is-active{
+  background:#fff;
+  color:var(--tec-text);
+  box-shadow:0 1px 2px rgba(0,0,0,.08);
+}
+</style></head><body>
+
+<div class="section">
+  <div class="section__head">
+    <span class="section__lbl">Actions</span>
+    <span class="section__hint">solid fill = changes state / commits something</span>
+  </div>
+  <div class="row">
+    <button class="btn btn--primary">Экспортировать</button>
+    <button class="btn btn--ghost">Отмена</button>
+    <button class="btn btn--danger">Выйти</button>
+    <button class="btn btn--danger">❌ Отменить экспорт</button>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section__head">
+    <span class="section__lbl">Toggle · period filter</span>
+    <span class="section__hint">segmented pill = pick one view; no commit</span>
+  </div>
+  <div class="row">
+    <div class="toggle">
+      <button class="btn--t">Всё</button>
+      <button class="btn--t">Год</button>
+      <button class="btn--t is-active">Месяц</button>
+      <button class="btn--t">Неделя</button>
+      <button class="btn--t">Сутки</button>
+    </div>
+  </div>
+</div>
+
+</body></html>

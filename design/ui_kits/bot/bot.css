@@ -1,0 +1,203 @@
+/* Bot UI kit — Telegram chat shell */
+:root {
+  --tg-bg: #aebbd0;
+  --tg-chat-pattern: #9fb0ca;
+  --tg-header: #517da2;
+  --tg-header-fg: #ffffff;
+  --tg-in: #ffffff;
+  --tg-out: #eeffde;
+  --tg-text: #1a1a1a;
+  --tg-muted: #707579;
+  --tg-link: #168acd;
+  --tg-meta: #8b9097;
+  --tg-danger: #d64545;
+  --tg-kbd-bg: rgba(255,255,255,.92);
+  --tg-kbd-hover: rgba(255,255,255,1);
+  --tg-divider: rgba(0,0,0,.08);
+  --tg-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --tg-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; font-family: var(--tg-font); background: #1e2530; color: var(--tg-text); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+
+.tg-phone {
+  width: 380px;
+  height: 720px;
+  background: var(--tg-bg);
+  border-radius: 24px;
+  border: 1px solid rgba(255,255,255,.08);
+  box-shadow: 0 20px 60px rgba(0,0,0,.5), 0 0 0 8px #0b0f14;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* Status bar */
+.tg-status {
+  height: 28px;
+  background: var(--tg-header);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Chat header */
+.tg-header {
+  background: var(--tg-header);
+  color: var(--tg-header-fg);
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 1px 0 rgba(0,0,0,.12);
+}
+.tg-header__back { font-size: 22px; color: #fff; line-height: 1; cursor: pointer; padding: 2px 4px; }
+.tg-header__avatar {
+  width: 36px; height: 36px; border-radius: 50%;
+  background: #2563eb;
+  display: grid; place-items: center;
+  color: #fff; font-weight: 700; font-size: 14px;
+  flex-shrink: 0;
+}
+.tg-header__meta { display: flex; flex-direction: column; line-height: 1.2; }
+.tg-header__name { font-size: 14px; font-weight: 600; color: #fff; }
+.tg-header__status { font-size: 11px; color: rgba(255,255,255,.72); }
+.tg-header__more { margin-left: auto; color: #fff; font-size: 20px; opacity: .8; cursor: pointer; }
+
+/* Chat wallpaper — subtle pattern */
+.tg-chat {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 10px 6px;
+  background:
+    radial-gradient(circle at 10% 15%, rgba(255,255,255,.05) 0 2px, transparent 3px),
+    radial-gradient(circle at 70% 35%, rgba(255,255,255,.05) 0 2px, transparent 3px),
+    radial-gradient(circle at 40% 75%, rgba(255,255,255,.05) 0 2px, transparent 3px),
+    radial-gradient(circle at 85% 85%, rgba(255,255,255,.05) 0 2px, transparent 3px),
+    linear-gradient(180deg, #a8b6ce 0%, #b4becf 100%);
+  display: flex; flex-direction: column; gap: 4px;
+}
+
+.tg-day {
+  align-self: center;
+  background: rgba(0,0,0,.18);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 10px;
+  margin: 6px 0;
+}
+
+/* Bubble */
+.tg-bubble-row { display: flex; padding: 1px 0; }
+.tg-bubble-row.out { justify-content: flex-end; }
+.tg-bubble {
+  max-width: 78%;
+  background: var(--tg-in);
+  padding: 6px 10px 6px 10px;
+  border-radius: 12px;
+  position: relative;
+  box-shadow: 0 1px 0 rgba(0,0,0,.06);
+  font-size: 14px;
+  line-height: 1.35;
+  color: var(--tg-text);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  animation: tg-in .18s ease-out;
+}
+.tg-bubble.out { background: var(--tg-out); }
+.tg-bubble.tail-in  { border-top-left-radius: 12px; border-bottom-left-radius: 4px; }
+.tg-bubble.tail-out { border-top-right-radius: 12px; border-bottom-right-radius: 4px; }
+
+.tg-bubble__meta { font-size: 10px; color: var(--tg-meta); margin-left: 6px; float: right; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.tg-bubble__meta .check { color: #4fae4e; margin-left: 2px; }
+
+.tg-bubble code, .tg-mono { font-family: var(--tg-mono); font-size: 13px; }
+.tg-link { color: var(--tg-link); }
+
+@keyframes tg-in { from { opacity: 0; transform: translateY(4px);} to { opacity: 1; transform: none; } }
+
+/* Inline keyboard */
+.tg-kbd {
+  display: grid;
+  gap: 4px;
+  margin-top: 4px;
+  max-width: 78%;
+}
+.tg-kbd-row { display: grid; gap: 4px; grid-auto-flow: column; grid-auto-columns: 1fr; }
+.tg-kbd button {
+  background: var(--tg-kbd-bg);
+  color: var(--tg-link);
+  border: none;
+  border-radius: 8px;
+  padding: 10px 8px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: center;
+  transition: background-color .12s;
+  font-family: var(--tg-font);
+}
+.tg-kbd button:hover { background: var(--tg-kbd-hover); }
+.tg-kbd button:active { background: rgba(255,255,255,.75); }
+
+/* Composer */
+.tg-composer {
+  background: #fff;
+  border-top: 1px solid var(--tg-divider);
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tg-composer__icon { color: var(--tg-muted); font-size: 20px; cursor: pointer; }
+.tg-composer__input {
+  flex: 1;
+  border: none;
+  background: #f1f3f5;
+  border-radius: 18px;
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+  font-family: var(--tg-font);
+}
+.tg-send-btn {
+  width: 36px; height: 36px; border-radius: 50%;
+  background: #2481cc;
+  border: none;
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
+  display: grid; place-items: center;
+}
+.tg-send-btn:disabled { background: #a8c6e1; cursor: default; }
+
+/* Reset button */
+.tg-reset {
+  position: absolute;
+  top: 40px; right: 12px;
+  background: rgba(0,0,0,.3);
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  z-index: 10;
+}
+
+/* Typing indicator */
+.tg-typing { display: inline-flex; gap: 2px; padding: 4px 0; }
+.tg-typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--tg-muted); animation: tg-typing 1.2s infinite; }
+.tg-typing span:nth-child(2){ animation-delay:.2s;} .tg-typing span:nth-child(3){ animation-delay:.4s;}
+@keyframes tg-typing { 0%,60%,100%{opacity:.3;transform:translateY(0)} 30%{opacity:1;transform:translateY(-2px)} }
