@@ -1,6 +1,7 @@
 package com.tcleaner.dashboard.web;
 
 import com.tcleaner.dashboard.auth.DashboardUserDetails;
+import com.tcleaner.dashboard.domain.DashboardRole;
 import com.tcleaner.dashboard.security.BotUserAccessPolicy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.access.AccessDeniedException;
@@ -30,14 +31,27 @@ public class DashboardPageController {
     }
 
     @GetMapping({"", "/"})
-    public String root() {
-        return "redirect:/dashboard/overview";
+    public String root(@AuthenticationPrincipal DashboardUserDetails principal) {
+        if (principal == null) {
+            return "redirect:/dashboard/login";
+        }
+        return landingFor(principal);
     }
 
     @GetMapping("/login")
-    public String login(Model model) {
+    public String login(@AuthenticationPrincipal DashboardUserDetails principal, Model model) {
+        if (principal != null) {
+            return landingFor(principal);
+        }
         model.addAttribute("botUsername", botUsername);
         return "dashboard/login";
+    }
+
+    /** ADMIN → /overview, любой другой авторизованный → /me. */
+    private String landingFor(DashboardUserDetails principal) {
+        return principal.getDashboardRole() == DashboardRole.ADMIN
+                ? "redirect:/dashboard/overview"
+                : "redirect:/dashboard/me";
     }
 
     @GetMapping("/overview")

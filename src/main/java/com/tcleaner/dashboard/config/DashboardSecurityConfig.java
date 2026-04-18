@@ -19,7 +19,8 @@ import org.springframework.security.web.authentication.LoginUrlAuthenticationEnt
 public class DashboardSecurityConfig {
 
     @Bean
-    public SecurityFilterChain dashboardFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain dashboardFilterChain(HttpSecurity http,
+                                                     DashboardAccessDeniedHandler accessDeniedHandler) throws Exception {
         http
             .securityMatcher("/dashboard/**")
             .headers(headers -> headers
@@ -38,11 +39,29 @@ public class DashboardSecurityConfig {
                     "/dashboard/login", "/dashboard/login/telegram",
                     "/dashboard/assets/**", "/dashboard/css/**",
                     "/dashboard/js/**", "/dashboard/vendor/**").permitAll()
-                .requestMatchers("/dashboard/users", "/dashboard/api/stats/users").hasRole("ADMIN")
+                // Admin-only: глобальные страницы и API (USER → silent redirect на /me)
+                .requestMatchers(
+                    "/dashboard/overview",
+                    "/dashboard/users", "/dashboard/user/**",
+                    "/dashboard/chats", "/dashboard/events",
+                    "/dashboard/api/stats/users",
+                    "/dashboard/api/stats/chats",
+                    "/dashboard/api/stats/timeseries",
+                    "/dashboard/api/stats/status-breakdown").hasRole("ADMIN")
+                // USER может видеть свои данные; IDOR-контроль — в BotUserAccessPolicy, не здесь
+                .requestMatchers(
+                    "/dashboard/api/stats/overview",
+                    "/dashboard/api/stats/user/**",
+                    "/dashboard/api/stats/events").authenticated()
+                // Личный кабинет доступен любому авторизованному
+                .requestMatchers(
+                    "/dashboard/me", "/dashboard/me/**",
+                    "/dashboard/api/me", "/dashboard/api/me/**").authenticated()
                 .anyRequest().authenticated()
             )
             .exceptionHandling(ex -> ex
-                .authenticationEntryPoint(new LoginUrlAuthenticationEntryPoint("/dashboard/login")))
+                .authenticationEntryPoint(new LoginUrlAuthenticationEntryPoint("/dashboard/login"))
+                .accessDeniedHandler(accessDeniedHandler))
             .csrf(csrf -> csrf
                 .ignoringRequestMatchers("/dashboard/login/telegram"))
             .logout(logout -> logout

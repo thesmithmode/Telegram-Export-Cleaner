@@ -102,10 +102,11 @@ class TelegramAuthControllerTest {
     }
 
     @Test
-    @DisplayName("известный бот-пользователь успешно логинится как USER")
+    @DisplayName("известный бот-пользователь логинится как USER и попадает на /dashboard/me")
     void knownBotUserLoginSucceeds() throws Exception {
         botUsers.save(BotUser.builder().botUserId(111L).username("johnny")
-                .displayName("John").firstSeen(Instant.now()).lastSeen(Instant.now())
+                .displayName("John").firstSeen(Instant.ofEpochSecond(500_000L))
+                .lastSeen(Instant.ofEpochSecond(500_000L))
                 .totalExports(0).totalMessages(0L).totalBytes(0L).build());
 
         String data = "auth_date=1000000\nfirst_name=John\nid=111\nusername=johnny";
@@ -118,14 +119,25 @@ class TelegramAuthControllerTest {
                         .param("auth_date", "1000000")
                         .param("hash", hash))
                 .andExpect(status().is3xxRedirection())
-                .andExpect(redirectedUrl("/dashboard/overview"));
+                .andExpect(redirectedUrl("/dashboard/me"));
 
-        assertThat(dashboardUsers.findByTelegramId(111L)).isPresent();
+        assertThat(dashboardUsers.findByTelegramId(111L))
+                .isPresent()
+                .hasValueSatisfying(u -> {
+                    assertThat(u.getRole()).isEqualTo(
+                            com.tcleaner.dashboard.domain.DashboardRole.USER);
+                    assertThat(u.getBotUserId()).isEqualTo(111L);
+                });
+        // last_seen обновился после логина
+        assertThat(botUsers.findById(111L))
+                .isPresent()
+                .hasValueSatisfying(b -> assertThat(b.getLastSeen())
+                        .isAfter(Instant.ofEpochSecond(500_000L)));
     }
 
     @Test
-    @DisplayName("неизвестный пользователь без BotUser получает 403 forbidden")
-    void unknownUserIsForbidden() throws Exception {
+    @DisplayName("новый TG-аккаунт (ни разу не писал боту) получает пустой личный кабинет")
+    void newUserGetsEmptyDashboard() throws Exception {
         String data = "auth_date=1000000\nfirst_name=Stranger\nid=222";
         String hash = sign(data);
 
@@ -135,9 +147,24 @@ class TelegramAuthControllerTest {
                         .param("auth_date", "1000000")
                         .param("hash", hash))
                 .andExpect(status().is3xxRedirection())
-                .andExpect(redirectedUrl("/dashboard/login?error=forbidden"));
+                .andExpect(redirectedUrl("/dashboard/me"));
 
-        assertThat(dashboardUsers.findByTelegramId(222L)).isEmpty();
+        // Создана запись в dashboard_users (роль USER)
+        assertThat(dashboardUsers.findByTelegramId(222L))
+                .isPresent()
+                .hasValueSatisfying(u -> {
+                    assertThat(u.getRole()).isEqualTo(
+                            com.tcleaner.dashboard.domain.DashboardRole.USER);
+                    assertThat(u.getBotUserId()).isEqualTo(222L);
+                });
+        // Создана пустая запись в bot_users (нулевые счётчики)
+        assertThat(botUsers.findById(222L))
+                .isPresent()
+                .hasValueSatisfying(b -> {
+                    assertThat(b.getTotalExports()).isZero();
+                    assertThat(b.getTotalMessages()).isZero();
+                    assertThat(b.getTotalBytes()).isZero();
+                });
     }
 
     @Test
