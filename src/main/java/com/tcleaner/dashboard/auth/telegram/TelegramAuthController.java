@@ -74,6 +74,10 @@ public class TelegramAuthController {
         }
 
         long id = data.id();
+        if (id <= 0) {
+            log.warn("Telegram Mini App login rejected: отсутствует user.id в initData");
+            return "redirect:/dashboard/login?error=invalid";
+        }
         String firstName = data.firstName();
         String username = data.username();
 

@@ -1,12 +1,19 @@
 package com.tcleaner.dashboard.auth.telegram;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
 
-public record TelegramMiniAppLoginData(Map<String, String> params) {
+public record TelegramMiniAppLoginData(Map<String, String> params, Map<String, Object> user) {
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final TypeReference<Map<String, Object>> USER_TYPE =
+            new TypeReference<>() { };
 
     public static TelegramMiniAppLoginData parse(String initData) {
         Map<String, String> map = new TreeMap<>();
@@ -18,7 +25,16 @@ public record TelegramMiniAppLoginData(Map<String, String> params) {
                 map.put(key, value);
             }
         }
-        return new TelegramMiniAppLoginData(map);
+        Map<String, Object> user = Map.of();
+        String userJson = map.get("user");
+        if (userJson != null && !userJson.isBlank()) {
+            try {
+                user = MAPPER.readValue(userJson, USER_TYPE);
+            } catch (Exception ignored) {
+                user = Map.of();
+            }
+        }
+        return new TelegramMiniAppLoginData(map, user);
     }
 
     public String toDataCheckString() {
@@ -29,19 +45,35 @@ public record TelegramMiniAppLoginData(Map<String, String> params) {
     }
 
     public long id() {
-        return Long.parseLong(params.getOrDefault("id", "0"));
+        Object v = user.get("id");
+        if (v instanceof Number n) {
+            return n.longValue();
+        }
+        if (v instanceof String s && !s.isBlank()) {
+            try {
+                return Long.parseLong(s);
+            } catch (NumberFormatException ignored) {
+                return 0L;
+            }
+        }
+        return 0L;
     }
 
     public String firstName() {
-        return params.get("first_name");
+        return stringField("first_name");
     }
 
     public String lastName() {
-        return params.get("last_name");
+        return stringField("last_name");
     }
 
     public String username() {
-        return params.get("username");
+        return stringField("username");
+    }
+
+    private String stringField(String key) {
+        Object v = user.get(key);
+        return v == null ? null : v.toString();
     }
 
     public long authDate() {

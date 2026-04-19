@@ -21,8 +21,6 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
-import java.util.HashMap;
-import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -74,12 +72,7 @@ class TelegramAuthControllerTest {
     }
 
     private String buildInitData(long id, String firstName, String username, long authDate) throws Exception {
-        Map<String, String> fields = new HashMap<>();
-        fields.put("auth_date", String.valueOf(authDate));
-        fields.put("id", String.valueOf(id));
-        if (firstName != null) fields.put("first_name", firstName);
-        if (username != null) fields.put("username", username);
-        return TelegramAuthTestUtils.buildInitData(TOKEN, fields);
+        return TelegramAuthTestUtils.buildMiniAppInitData(TOKEN, id, firstName, username, authDate);
     }
 
     @Test
