@@ -3,36 +3,29 @@ package com.tcleaner.dashboard.auth.telegram;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.HexFormat;
 
-/**
- * Проверяет подлинность данных Telegram Login Widget.
- * Алгоритм (core.telegram.org/widgets/login):
- *   secret_key = SHA256(bot_token)
- *   hash = HMAC-SHA256(data_check_string, secret_key)
- * Плюс проверка auth_date (не старше {@link #MAX_AGE}).
- */
-public class TelegramAuthVerifier {
+public class TelegramMiniAppAuthVerifier {
 
     public static final Duration MAX_AGE = Duration.ofMinutes(5);
 
     private final byte[] secretKey;
     private final Clock clock;
 
-    public TelegramAuthVerifier(String botToken, Clock clock) {
+    public TelegramMiniAppAuthVerifier(String botToken, Clock clock) {
         try {
-            this.secretKey = MessageDigest.getInstance("SHA-256")
-                    .digest(botToken.getBytes(StandardCharsets.UTF_8));
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec("WebAppData".getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            this.secretKey = mac.doFinal(botToken.getBytes(StandardCharsets.UTF_8));
         } catch (Exception e) {
-            throw new IllegalStateException("SHA-256 unavailable", e);
+            throw new IllegalStateException("HmacSHA256 unavailable", e);
         }
         this.clock = clock;
     }
 
-    public void verify(TelegramLoginData data) {
+    public void verify(TelegramMiniAppLoginData data) {
         if (data.hash() == null || data.hash().isBlank()) {
             throw new TelegramAuthenticationException("Отсутствует hash");
         }

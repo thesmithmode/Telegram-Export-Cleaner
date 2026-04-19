@@ -21,6 +21,7 @@ import org.telegram.telegrambots.meta.api.objects.message.Message;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardRow;
+import org.telegram.telegrambots.meta.api.objects.webapp.WebAppInfo;
 
 import jakarta.annotation.PostConstruct;
 import java.time.Duration;
@@ -78,17 +79,28 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     private final BotMessenger messenger;
     private final ObjectProvider<StatsStreamPublisher> statsPublisherProvider;
     private final ConcurrentHashMap<Long, UserSession> sessions = new ConcurrentHashMap<>();
+    private final String miniAppUrl;
+    private final InlineKeyboardMarkup dashKeyboard;
 
     public ExportBot(
             @Value("${telegram.bot.token}") String botToken,
+            @Value("${dashboard.mini-app.url}") String miniAppUrl,
             ExportJobProducer jobProducer,
             BotMessenger messenger,
             ObjectProvider<StatsStreamPublisher> statsPublisherProvider
     ) {
         this.botToken = botToken;
+        this.miniAppUrl = miniAppUrl;
         this.jobProducer = jobProducer;
         this.messenger = messenger;
         this.statsPublisherProvider = statsPublisherProvider;
+        this.dashKeyboard = InlineKeyboardMarkup.builder()
+                .keyboardRow(new InlineKeyboardRow(
+                        InlineKeyboardButton.builder()
+                                .text("📊 Dashboard")
+                                .webApp(new WebAppInfo(miniAppUrl))
+                                .build()))
+                .build();
         log.info("Telegram-бот инициализирован");
     }
 
@@ -98,6 +110,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
                 new BotCommand("/start", "Запустить бота и показать справку"),
                 new BotCommand("/cancel", "Отменить активный экспорт")
         ));
+        messenger.setChatMenuButton(miniAppUrl, "Dashboard");
     }
 
     @Override
@@ -148,9 +161,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     private void handleMessageText(long chatId, long userId, String text) {
         if (text.startsWith("/start")) {
             getSession(userId).reset();
-            // Снимаем устаревшую reply-клавиатуру (кнопки «Выбрать группу/канал»
-            // из прежних версий, закэшированные в Telegram-клиенте пользователя).
-            messenger.sendRemoveReplyKeyboard(chatId, HELP_TEXT);
+            messenger.sendWithKeyboard(chatId, HELP_TEXT, dashKeyboard);
         } else if (text.startsWith("/cancel")) {
             handleCancel(chatId, userId);
         } else {

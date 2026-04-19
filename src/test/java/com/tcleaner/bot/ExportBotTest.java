@@ -56,7 +56,7 @@ class ExportBotTest {
         @SuppressWarnings("unchecked")
         ObjectProvider<StatsStreamPublisher> noPublisher = mock(ObjectProvider.class);
         when(noPublisher.getIfAvailable()).thenReturn(null);
-        bot = new ExportBot("token", jobProducerMock, messengerMock, noPublisher);
+        bot = new ExportBot("token", "http://localhost/dashboard/mini-app", jobProducerMock, messengerMock, noPublisher);
     }
 
     @Test
@@ -222,11 +222,11 @@ class ExportBotTest {
     class CommandsAndSessions {
 
         @Test
-        @DisplayName("/start снимает устаревшую reply-клавиатуру")
-        void testStartRemovesReplyKeyboard() {
+        @DisplayName("/start отправляет HELP_TEXT с кнопкой Dashboard")
+        void testStartSendsDashboardButton() {
             bot.consume(createTextMessageUpdate(123L, "/start"));
 
-            verify(messengerMock).sendRemoveReplyKeyboard(eq(123L), contains("Этот бот экспортирует"));
+            verify(messengerMock).sendWithKeyboard(eq(123L), contains("Этот бот экспортирует"), any(InlineKeyboardMarkup.class));
         }
 
         @Test

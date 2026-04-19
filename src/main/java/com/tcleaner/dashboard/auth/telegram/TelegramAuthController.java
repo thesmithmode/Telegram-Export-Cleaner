@@ -19,34 +19,27 @@ import org.springframework.security.web.context.HttpSessionSecurityContextReposi
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.stereotype.Controller;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 
 import java.time.Instant;
 import java.util.List;
 
-/**
- * Обрабатывает callback от Telegram Login Widget:
- * GET /dashboard/login/telegram?id=...&first_name=...&hash=...
- * Верифицирует HMAC-SHA256, определяет роль, создаёт Spring Security сессию.
- * ADMIN → /dashboard/overview; USER → /dashboard/me (запись в bot_users создаётся
- * автоматически при первом входе — даже если юзер ни разу не писал боту).
- */
 @Controller
 @RequestMapping("/dashboard/login/telegram")
 public class TelegramAuthController {
 
     private static final Logger log = LoggerFactory.getLogger(TelegramAuthController.class);
 
-    private final TelegramAuthVerifier verifier;
+    private final TelegramMiniAppAuthVerifier verifier;
     private final DashboardUserService userService;
     private final BotUserUpserter botUserUpserter;
     private final long adminTelegramId;
     private final SecurityContextRepository contextRepository =
             new HttpSessionSecurityContextRepository();
 
-    public TelegramAuthController(TelegramAuthVerifier verifier,
+    public TelegramAuthController(TelegramMiniAppAuthVerifier verifier,
                                   DashboardUserService userService,
                                   BotUserUpserter botUserUpserter,
                                   @Value("${dashboard.auth.admin.telegram-id}") long adminTelegramId) {
@@ -60,25 +53,29 @@ public class TelegramAuthController {
         this.adminTelegramId = adminTelegramId;
     }
 
-    @GetMapping
+    @PostMapping
     @Transactional
-    public String callback(@RequestParam("id") long id,
-                           @RequestParam(value = "first_name", required = false) String firstName,
-                           @RequestParam(value = "last_name", required = false) String lastName,
-                           @RequestParam(value = "username", required = false) String username,
-                           @RequestParam(value = "photo_url", required = false) String photoUrl,
-                           @RequestParam("auth_date") long authDate,
-                           @RequestParam("hash") String hash,
+    public String callback(@RequestParam("initData") String initData,
                            HttpServletRequest request,
                            HttpServletResponse response) {
-        TelegramLoginData data = new TelegramLoginData(
-                id, firstName, lastName, username, photoUrl, authDate, hash);
+        TelegramMiniAppLoginData data;
+        try {
+            data = TelegramMiniAppLoginData.parse(initData);
+        } catch (Exception e) {
+            log.warn("Telegram Mini App login: ошибка парсинга initData: {}", e.getMessage());
+            return "redirect:/dashboard/login?error=invalid";
+        }
+
         try {
             verifier.verify(data);
         } catch (TelegramAuthenticationException e) {
-            log.warn("Telegram login rejected (invalid): id={} reason={}", id, e.getMessage());
+            log.warn("Telegram Mini App login rejected: id={} reason={}", data.id(), e.getMessage());
             return "redirect:/dashboard/login?error=invalid";
         }
+
+        long id = data.id();
+        String firstName = data.firstName();
+        String username = data.username();
 
         DashboardRole role;
         Long botUserId;
@@ -86,9 +83,7 @@ public class TelegramAuthController {
             role = DashboardRole.ADMIN;
             botUserId = null;
         } else {
-            // USER: upsert в bot_users — создаёт пустой профиль, если юзер ни разу
-            // не писал боту. Это гарантирует личный кабинет каждому TG-аккаунту.
-            botUserUpserter.upsert(id, username, firstName, Instant.ofEpochSecond(authDate));
+            botUserUpserter.upsert(id, username, firstName, Instant.ofEpochSecond(data.authDate()));
             role = DashboardRole.USER;
             botUserId = id;
         }
@@ -112,7 +107,7 @@ public class TelegramAuthController {
         SecurityContextHolder.setContext(context);
         contextRepository.saveContext(context, request, response);
 
-        log.info("Telegram login: tgId={} role={} user='{}'", id, role, user.getUsername());
+        log.info("Telegram Mini App login: tgId={} role={} user='{}'", id, role, user.getUsername());
         return role == DashboardRole.ADMIN
                 ? "redirect:/dashboard/overview"
                 : "redirect:/dashboard/me";
