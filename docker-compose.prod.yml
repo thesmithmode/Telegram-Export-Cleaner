@@ -114,6 +114,7 @@ services:
       - STATS_STREAM_GROUP=${STATS_STREAM_GROUP:-dashboard-writer}
       - STATS_STREAM_CONSUMER=${STATS_STREAM_CONSUMER:-java-bot-1}
       - STATS_STREAM_MAXLEN=${STATS_STREAM_MAXLEN:-100000}
+      - TRAEFIK_DASHBOARD_DOMAIN=${TRAEFIK_DASHBOARD_DOMAIN}
     volumes:
       - export-data:/data/export
       # Dashboard SQLite — host bind mount вне docker volumes, чтобы переживать
