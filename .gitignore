@@ -74,6 +74,7 @@ CLAUDE.md
 .serena/
 # MCP config
 .mcp.json
+docs/superpowers/
 
 
 # Личные данные для тестирования (real Telegram exports)

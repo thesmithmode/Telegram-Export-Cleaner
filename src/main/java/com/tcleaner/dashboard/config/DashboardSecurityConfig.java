@@ -9,9 +9,9 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
 
 /**
- * Spring Security для дашборда: stateful сессии, вход через Telegram Login Widget.
+ * Spring Security для дашборда: stateful сессии, вход через Telegram Mini App.
  * {@code @Order(1)} — обрабатывается раньше API-цепочки (см. {@code SecurityConfig}).
- * FormLogin/BCrypt удалены — аутентификация через /dashboard/login/telegram
+ * Аутентификация через POST /dashboard/login/telegram с initData Mini App
  * (см. TelegramAuthController).
  */
 @Configuration
@@ -24,13 +24,13 @@ public class DashboardSecurityConfig {
         http
             .securityMatcher("/dashboard/**")
             .headers(headers -> headers
-                .frameOptions(frame -> frame.deny())
+                .frameOptions(frame -> frame.disable())
                 .contentSecurityPolicy(csp -> csp.policyDirectives(
                     "default-src 'self'; " +
                     "script-src 'self' https://telegram.org; " +
                     "style-src 'self' 'unsafe-inline'; " +
                     "img-src 'self' data: https://t.me; " +
-                    "frame-src https://oauth.telegram.org"))
+                    "frame-ancestors 'self' https://web.telegram.org"))
             )
             .sessionManagement(session -> session
                 .sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))

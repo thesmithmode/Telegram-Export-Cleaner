@@ -111,4 +111,35 @@ class DashboardSecurityIntegrationTest {
                 .andExpect(header().string("Content-Security-Policy",
                         org.hamcrest.Matchers.containsString("https://telegram.org")));
     }
+
+    @Test
+    @DisplayName("dashboard CSP содержит frame-ancestors для Telegram Web (Mini App iframe)")
+    void dashboardCspAllowsTelegramFrameAncestors() throws Exception {
+        mockMvc.perform(get("/dashboard/login"))
+                .andExpect(header().string("Content-Security-Policy",
+                        org.hamcrest.Matchers.containsString("frame-ancestors 'self' https://web.telegram.org")));
+    }
+
+    @Test
+    @DisplayName("dashboard CSP не содержит устаревший frame-src oauth.telegram.org")
+    void dashboardCspDoesNotContainLoginWidgetFrameSrc() throws Exception {
+        mockMvc.perform(get("/dashboard/login"))
+                .andExpect(header().string("Content-Security-Policy",
+                        org.hamcrest.Matchers.not(
+                                org.hamcrest.Matchers.containsString("oauth.telegram.org"))));
+    }
+
+    @Test
+    @DisplayName("dashboard не отправляет X-Frame-Options (использует frame-ancestors CSP)")
+    void dashboardDoesNotSendXFrameOptions() throws Exception {
+        mockMvc.perform(get("/dashboard/login"))
+                .andExpect(header().doesNotExist("X-Frame-Options"));
+    }
+
+    @Test
+    @DisplayName("GET /dashboard/js/mini-app.js → 200 (статический ресурс раздаётся без аутентификации)")
+    void miniAppJsIsPermitted() throws Exception {
+        mockMvc.perform(get("/dashboard/js/mini-app.js"))
+                .andExpect(status().isOk());
+    }
 }
