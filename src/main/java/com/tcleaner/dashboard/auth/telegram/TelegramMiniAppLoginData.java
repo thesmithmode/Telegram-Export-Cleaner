@@ -73,7 +73,7 @@ public record TelegramMiniAppLoginData(Map<String, String> params, Map<String, O
 
     private String stringField(String key) {
         Object v = user.get(key);
-        return v == null ? null : v.toString();
+        return v instanceof String s ? s : null;
     }
 
     public long authDate() {
