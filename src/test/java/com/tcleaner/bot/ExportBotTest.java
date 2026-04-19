@@ -14,6 +14,8 @@ import org.telegram.telegrambots.meta.api.objects.message.Message;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -56,7 +58,7 @@ class ExportBotTest {
         @SuppressWarnings("unchecked")
         ObjectProvider<StatsStreamPublisher> noPublisher = mock(ObjectProvider.class);
         when(noPublisher.getIfAvailable()).thenReturn(null);
-        bot = new ExportBot("token", jobProducerMock, messengerMock, noPublisher);
+        bot = new ExportBot("token", "https://test.example.com/dashboard/mini-app", jobProducerMock, messengerMock, noPublisher);
     }
 
     @Test
@@ -222,11 +224,11 @@ class ExportBotTest {
     class CommandsAndSessions {
 
         @Test
-        @DisplayName("/start снимает устаревшую reply-клавиатуру")
-        void testStartRemovesReplyKeyboard() {
+        @DisplayName("/start отправляет HELP_TEXT с кнопкой Dashboard")
+        void testStartSendsDashboardButton() {
             bot.consume(createTextMessageUpdate(123L, "/start"));
 
-            verify(messengerMock).sendRemoveReplyKeyboard(eq(123L), contains("Этот бот экспортирует"));
+            verify(messengerMock).sendWithKeyboard(eq(123L), contains("Этот бот экспортирует"), any(InlineKeyboardMarkup.class));
         }
 
         @Test
@@ -423,5 +425,57 @@ class ExportBotTest {
 
         update.setCallbackQuery(cb);
         return update;
+    }
+
+    @Nested
+    @DisplayName("Валидация dashboard.mini-app.url в конструкторе")
+    class MiniAppUrlValidation {
+
+        @SuppressWarnings("unchecked")
+        private ObjectProvider<StatsStreamPublisher> emptyPublisher() {
+            ObjectProvider<StatsStreamPublisher> p = mock(ObjectProvider.class);
+            when(p.getIfAvailable()).thenReturn(null);
+            return p;
+        }
+
+        private void newBot(String url) {
+            new ExportBot("token", url, jobProducerMock, messengerMock, emptyPublisher());
+        }
+
+        @Test
+        @DisplayName("http://localhost/... падает — Telegram Mini App требует публичный HTTPS")
+        void rejectsLocalhostUrl() {
+            assertThatThrownBy(() -> newBot("http://localhost/dashboard/mini-app"))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("dashboard.mini-app.url");
+        }
+
+        @Test
+        @DisplayName("https://localhost:8080/... тоже падает — даже HTTPS с localhost не принимается")
+        void rejectsHttpsLocalhostUrl() {
+            assertThatThrownBy(() -> newBot("https://localhost:8080/dashboard/mini-app"))
+                    .isInstanceOf(IllegalStateException.class);
+        }
+
+        @Test
+        @DisplayName("https://127.0.0.1/... падает")
+        void rejectsLoopbackIpUrl() {
+            assertThatThrownBy(() -> newBot("https://127.0.0.1/dashboard/mini-app"))
+                    .isInstanceOf(IllegalStateException.class);
+        }
+
+        @Test
+        @DisplayName("http:// (без TLS) падает — Telegram требует HTTPS")
+        void rejectsPlainHttpUrl() {
+            assertThatThrownBy(() -> newBot("http://example.com/dashboard/mini-app"))
+                    .isInstanceOf(IllegalStateException.class);
+        }
+
+        @Test
+        @DisplayName("Публичный HTTPS URL принимается")
+        void acceptsPublicHttpsUrl() {
+            assertThatCode(() -> newBot("https://tec.searchingforgamesforever.online/dashboard/mini-app"))
+                    .doesNotThrowAnyException();
+        }
     }
 }

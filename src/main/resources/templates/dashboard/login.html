@@ -25,12 +25,15 @@
         </div>
 
         <div class="login-form__widget">
-            <script async
-                    src="https://telegram.org/js/telegram-widget.js?22"
-                    th:attr="data-telegram-login=${botUsername}"
-                    data-size="large"
-                    data-auth-url="/dashboard/login/telegram"
-                    data-request-access="write"></script>
+            <p style="text-align:center;margin-bottom:16px;color:#555;font-size:15px;line-height:1.5">
+                Дашборд доступен только через Telegram.<br>
+                Откройте бота и нажмите кнопку <strong>Dashboard</strong>.
+            </p>
+            <a th:href="'https://t.me/' + ${botUsername}"
+               target="_blank"
+               style="display:block;text-align:center;padding:11px 20px;background:#0088cc;color:#fff;border-radius:6px;text-decoration:none;font-size:15px;font-weight:500">
+                Открыть в Telegram
+            </a>
         </div>
     </div>
 </main>

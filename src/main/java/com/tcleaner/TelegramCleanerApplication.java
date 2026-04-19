@@ -1,6 +1,6 @@
 package com.tcleaner;
 
-import com.tcleaner.dashboard.auth.telegram.TelegramAuthVerifier;
+import com.tcleaner.dashboard.auth.telegram.TelegramMiniAppAuthVerifier;
 import com.tcleaner.dashboard.events.StatsStreamProperties;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
@@ -29,8 +29,8 @@ public class TelegramCleanerApplication {
     }
 
     @Bean
-    TelegramAuthVerifier telegramAuthVerifier(
+    TelegramMiniAppAuthVerifier telegramMiniAppAuthVerifier(
             @Value("${telegram.bot.token}") String botToken, Clock clock) {
-        return new TelegramAuthVerifier(botToken, clock);
+        return new TelegramMiniAppAuthVerifier(botToken, clock);
     }
 }

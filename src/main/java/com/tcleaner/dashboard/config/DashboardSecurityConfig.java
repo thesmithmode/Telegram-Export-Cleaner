@@ -37,6 +37,7 @@ public class DashboardSecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(
                     "/dashboard/login", "/dashboard/login/telegram",
+                    "/dashboard/mini-app",
                     "/dashboard/assets/**", "/dashboard/css/**",
                     "/dashboard/js/**", "/dashboard/vendor/**",
                     "/dashboard/img/**").permitAll()

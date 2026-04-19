@@ -15,6 +15,9 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMa
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardRemove;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.telegram.telegrambots.meta.generics.TelegramClient;
+import org.telegram.telegrambots.meta.api.methods.menubutton.SetChatMenuButton;
+import org.telegram.telegrambots.meta.api.objects.menubutton.MenuButtonWebApp;
+import org.telegram.telegrambots.meta.api.objects.webapp.WebAppInfo;
 
 import java.util.List;
 
@@ -118,6 +121,19 @@ public class BotMessenger {
             log.info("Telegram slash-команды зарегистрированы: {}", commands.size());
         } catch (TelegramApiException e) {
             log.error("Не удалось зарегистрировать slash-команды: {}", e.getMessage());
+        }
+    }
+
+    public void setChatMenuButton(String url, String title) {
+        try {
+            telegramClient.execute(
+                    SetChatMenuButton.builder()
+                            .menuButton(new MenuButtonWebApp(title, new WebAppInfo(url)))
+                            .build()
+            );
+            log.info("Кнопка меню установлена: {}", url);
+        } catch (TelegramApiException e) {
+            log.error("Не удалось установить кнопку меню: {}", e.getMessage());
         }
     }
 }

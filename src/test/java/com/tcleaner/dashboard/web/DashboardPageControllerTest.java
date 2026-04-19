@@ -39,12 +39,12 @@ class DashboardPageControllerTest {
     private static final DashboardUserDetails ADMIN = DashboardTestUsers.admin();
 
     @Test
-    @DisplayName("GET /dashboard/login — 200, рендерится Telegram Widget")
+    @DisplayName("GET /dashboard/login — 200, показывает инструкцию открыть Telegram")
     void loginPageRenders() throws Exception {
         mockMvc.perform(get("/dashboard/login"))
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith("text/html"))
-                .andExpect(content().string(containsString("telegram-widget.js")));
+                .andExpect(content().string(containsString("Открыть в Telegram")));
     }
 
     @Test

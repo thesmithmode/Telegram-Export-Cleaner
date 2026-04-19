@@ -18,17 +18,14 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
-import java.util.HexFormat;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -56,8 +53,8 @@ class TelegramAuthControllerTest {
 
         @Bean
         @Primary
-        TelegramAuthVerifier testTelegramAuthVerifier() {
-            return new TelegramAuthVerifier(TOKEN, FIXED_CLOCK);
+        TelegramMiniAppAuthVerifier testTelegramMiniAppAuthVerifier() {
+            return new TelegramMiniAppAuthVerifier(TOKEN, FIXED_CLOCK);
         }
     }
 
@@ -76,25 +73,22 @@ class TelegramAuthControllerTest {
         botUsers.deleteAll();
     }
 
-    private String sign(String dataCheckString) throws Exception {
-        byte[] secret = MessageDigest.getInstance("SHA-256")
-                .digest(TOKEN.getBytes(StandardCharsets.UTF_8));
-        Mac mac = Mac.getInstance("HmacSHA256");
-        mac.init(new SecretKeySpec(secret, "HmacSHA256"));
-        return HexFormat.of().formatHex(mac.doFinal(dataCheckString.getBytes(StandardCharsets.UTF_8)));
+    private String buildInitData(long id, String firstName, String username, long authDate) throws Exception {
+        Map<String, String> fields = new HashMap<>();
+        fields.put("auth_date", String.valueOf(authDate));
+        fields.put("id", String.valueOf(id));
+        if (firstName != null) fields.put("first_name", firstName);
+        if (username != null) fields.put("username", username);
+        return TelegramAuthTestUtils.buildInitData(TOKEN, fields);
     }
 
     @Test
     @DisplayName("admin login создаёт сессию и редиректит на /dashboard/overview")
     void adminLoginSucceeds() throws Exception {
-        String data = "auth_date=1000000\nfirst_name=Admin\nid=999";
-        String hash = sign(data);
+        String initData = buildInitData(999L, "Admin", null, 1_000_000L);
 
-        mvc.perform(get("/dashboard/login/telegram")
-                        .param("id", "999")
-                        .param("first_name", "Admin")
-                        .param("auth_date", "1000000")
-                        .param("hash", hash))
+        mvc.perform(post("/dashboard/login/telegram")
+                        .param("initData", initData))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl("/dashboard/overview"));
 
@@ -109,15 +103,10 @@ class TelegramAuthControllerTest {
                 .lastSeen(Instant.ofEpochSecond(500_000L))
                 .totalExports(0).totalMessages(0L).totalBytes(0L).build());
 
-        String data = "auth_date=1000000\nfirst_name=John\nid=111\nusername=johnny";
-        String hash = sign(data);
+        String initData = buildInitData(111L, "John", "johnny", 1_000_000L);
 
-        mvc.perform(get("/dashboard/login/telegram")
-                        .param("id", "111")
-                        .param("first_name", "John")
-                        .param("username", "johnny")
-                        .param("auth_date", "1000000")
-                        .param("hash", hash))
+        mvc.perform(post("/dashboard/login/telegram")
+                        .param("initData", initData))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl("/dashboard/me"));
 
@@ -128,7 +117,6 @@ class TelegramAuthControllerTest {
                             com.tcleaner.dashboard.domain.DashboardRole.USER);
                     assertThat(u.getBotUserId()).isEqualTo(111L);
                 });
-        // last_seen обновился после логина
         assertThat(botUsers.findById(111L))
                 .isPresent()
                 .hasValueSatisfying(b -> assertThat(b.getLastSeen())
@@ -138,18 +126,13 @@ class TelegramAuthControllerTest {
     @Test
     @DisplayName("новый TG-аккаунт (ни разу не писал боту) получает пустой личный кабинет")
     void newUserGetsEmptyDashboard() throws Exception {
-        String data = "auth_date=1000000\nfirst_name=Stranger\nid=222";
-        String hash = sign(data);
+        String initData = buildInitData(222L, "Stranger", null, 1_000_000L);
 
-        mvc.perform(get("/dashboard/login/telegram")
-                        .param("id", "222")
-                        .param("first_name", "Stranger")
-                        .param("auth_date", "1000000")
-                        .param("hash", hash))
+        mvc.perform(post("/dashboard/login/telegram")
+                        .param("initData", initData))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl("/dashboard/me"));
 
-        // Создана запись в dashboard_users (роль USER)
         assertThat(dashboardUsers.findByTelegramId(222L))
                 .isPresent()
                 .hasValueSatisfying(u -> {
@@ -157,7 +140,6 @@ class TelegramAuthControllerTest {
                             com.tcleaner.dashboard.domain.DashboardRole.USER);
                     assertThat(u.getBotUserId()).isEqualTo(222L);
                 });
-        // Создана пустая запись в bot_users (нулевые счётчики)
         assertThat(botUsers.findById(222L))
                 .isPresent()
                 .hasValueSatisfying(b -> {
@@ -170,11 +152,8 @@ class TelegramAuthControllerTest {
     @Test
     @DisplayName("невалидный hash отклоняется")
     void invalidHashRejected() throws Exception {
-        mvc.perform(get("/dashboard/login/telegram")
-                        .param("id", "999")
-                        .param("first_name", "Admin")
-                        .param("auth_date", "1000000")
-                        .param("hash", "deadbeef"))
+        mvc.perform(post("/dashboard/login/telegram")
+                        .param("initData", "auth_date=1000000&id=999&first_name=Admin&hash=deadbeef"))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl("/dashboard/login?error=invalid"));
     }
@@ -184,14 +163,9 @@ class TelegramAuthControllerTest {
     void secondLoginUpdatesUsername() throws Exception {
         adminLoginSucceeds();
 
-        String data2 = "auth_date=1000050\nfirst_name=Admin\nid=999\nusername=newname";
-        String hash2 = sign(data2);
-        mvc.perform(get("/dashboard/login/telegram")
-                        .param("id", "999")
-                        .param("first_name", "Admin")
-                        .param("username", "newname")
-                        .param("auth_date", "1000050")
-                        .param("hash", hash2))
+        String initData2 = buildInitData(999L, "Admin", "newname", 1_000_050L);
+        mvc.perform(post("/dashboard/login/telegram")
+                        .param("initData", initData2))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl("/dashboard/overview"));
 
