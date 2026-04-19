@@ -89,6 +89,15 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
             BotMessenger messenger,
             ObjectProvider<StatsStreamPublisher> statsPublisherProvider
     ) {
+        String normalized = miniAppUrl.toLowerCase();
+        if (!normalized.startsWith("https://")
+                || normalized.contains("localhost")
+                || normalized.contains("127.0.0.1")) {
+            throw new IllegalStateException(
+                    "dashboard.mini-app.url некорректен: " + miniAppUrl
+                    + ". Требуется публичный HTTPS-URL (Telegram Mini App не принимает http/localhost)."
+                    + " Установите TRAEFIK_DASHBOARD_DOMAIN в окружении контейнера.");
+        }
         this.botToken = botToken;
         this.miniAppUrl = miniAppUrl;
         this.jobProducer = jobProducer;
