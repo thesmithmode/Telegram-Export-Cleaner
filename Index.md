@@ -136,6 +136,7 @@ static/dashboard/
   css/app.css                       Дизайн-система (--tec-* токены)
   img/logo-mark.svg                 Логотип
   js/app.js                         Общие утилиты (fetchJson, formatBytes…)
+  js/mini-app.js                    Telegram Mini App auto-login (читает initData, submit формы)
   js/pages/overview.js              Скрипт страницы overview
   js/pages/events.js                Скрипт страницы events
   js/pages/chats.js                 Скрипт страницы chats
