@@ -46,6 +46,8 @@ public class RedisStreamsConfig {
     /**
      * Создаёт consumer group один раз при старте.
      * BUSYGROUP (уже существует) — не ошибка, подавляем.
+     * Spring Data Redis оборачивает BUSYGROUP в generic "Error in execution",
+     * поэтому проверяем всю цепочку causes.
      */
     @PostConstruct
     void ensureConsumerGroup() {
@@ -53,13 +55,23 @@ public class RedisStreamsConfig {
             redis.opsForStream().createGroup(props.key(), ReadOffset.from("0"), props.group());
             log.info("Создана consumer group {}:{}", props.key(), props.group());
         } catch (Exception ex) {
-            String msg = ex.getMessage() == null ? "" : ex.getMessage();
-            if (msg.contains("BUSYGROUP")) {
+            if (isBusyGroup(ex)) {
                 log.debug("Consumer group {}:{} уже существует", props.key(), props.group());
             } else {
-                log.warn("Не удалось создать consumer group {}:{}: {}", props.key(), props.group(), msg);
+                log.warn("Не удалось создать consumer group {}:{}: {}",
+                        props.key(), props.group(), ex.getMessage());
             }
         }
+    }
+
+    private static boolean isBusyGroup(Throwable ex) {
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+            String m = t.getMessage();
+            if (m != null && m.contains("BUSYGROUP")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -83,7 +95,11 @@ public class RedisStreamsConfig {
                         .builder(StreamOffset.create(props.key(), ReadOffset.lastConsumed()))
                         .consumer(Consumer.from(props.group(), props.consumer()))
                         .autoAcknowledge(false)
-                        .errorHandler(ex -> log.warn("StreamMessageListener error: {}", ex.getMessage()))
+                        .errorHandler(ex -> {
+                            if (container != null && container.isRunning()) {
+                                log.warn("StreamMessageListener error: {}", ex.getMessage());
+                            }
+                        })
                         .build();
 
         container.register(request, consumer);
