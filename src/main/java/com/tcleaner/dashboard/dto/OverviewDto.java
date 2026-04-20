@@ -15,10 +15,19 @@ public record OverviewDto(
         long totalUsers,
         List<UserStatsRow> topUsers,
         List<ChatStatsRow> topChats,
-        Map<String, Long> statusBreakdown
+        Map<String, Long> statusBreakdown,
+        /** Изменение totalExports vs предыдущий период той же длины, %. null если нет данных. */
+        Double deltaExports,
+        /** Изменение totalMessages, %. null если нет данных. */
+        Double deltaMessages,
+        /** Изменение totalBytes, %. null если нет данных. */
+        Double deltaBytes,
+        /** Изменение totalUsers, %. null если нет данных (пока не поддерживается — всегда null). */
+        Double deltaUsers
 ) {
     /** Пустой DTO — для /api/me/overview когда у пользователя ещё нет данных. */
     public static OverviewDto empty() {
-        return new OverviewDto(0L, 0L, 0L, 0L, List.of(), List.of(), Map.of());
+        return new OverviewDto(0L, 0L, 0L, 0L, List.of(), List.of(), Map.of(),
+                null, null, null, null);
     }
 }

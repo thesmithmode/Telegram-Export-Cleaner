@@ -50,7 +50,7 @@ public class DashboardMeApiController {
         if (my == null) {
             return OverviewDto.empty();
         }
-        return stats.overview(periods.resolve(period, from, to), my);
+        return stats.overviewWithDelta(periods.resolve(period, from, to), my);
     }
 
     @GetMapping("/chats")

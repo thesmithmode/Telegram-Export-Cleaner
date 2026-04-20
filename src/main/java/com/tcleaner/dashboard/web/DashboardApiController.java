@@ -67,7 +67,7 @@ public class DashboardApiController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @RequestParam(required = false) Long userId) {
         Scope s = scope(principal, period, from, to, userId);
-        return statsQueryService.overview(s.period(), s.botUserId());
+        return statsQueryService.overviewWithDelta(s.period(), s.botUserId());
     }
 
     // ─── /dashboard/api/stats/users (ADMIN only, URL-guard в security config) ─

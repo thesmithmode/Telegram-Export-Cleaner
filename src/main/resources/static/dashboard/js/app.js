@@ -116,6 +116,148 @@
         if (el) { el.textContent = value; }
     }
 
+    /**
+     * Заполняет .kpi__delta рядом со значением. delta — число (абсолют или процент).
+     * opts.kind: "percent" (default) | "number" — формат, направление по знаку.
+     * Если delta === null/undefined — очищает (через :empty элемент скрывается).
+     */
+    function setKpiDelta(name, delta, opts) {
+        const el = document.querySelector(`[data-kpi-delta="${name}"]`);
+        if (!el) { return; }
+        el.classList.remove("up", "down", "flat");
+        if (delta === null || delta === undefined || Number.isNaN(Number(delta))) {
+            el.textContent = "";
+            return;
+        }
+        const n = Number(delta);
+        const kind = (opts && opts.kind) || "percent";
+        const sign = n > 0 ? "↑" : (n < 0 ? "↓" : "—");
+        const cls = n > 0 ? "up" : (n < 0 ? "down" : "flat");
+        el.classList.add(cls);
+        const abs = Math.abs(n);
+        const formatted = kind === "percent"
+            ? `${abs.toFixed(abs >= 10 ? 0 : 1)}%`
+            : formatNumber(Math.round(abs));
+        el.textContent = `${sign} ${formatted}`;
+    }
+
+    /**
+     * Заполняет .kpi__meta парами label/value.
+     * pairs — [{label:"/сут", value:"417"}, {label:"pk", value:"821"}]
+     * Строится безопасно через textContent (без innerHTML).
+     */
+    function setKpiMeta(name, pairs) {
+        const el = document.querySelector(`[data-kpi-meta="${name}"]`);
+        if (!el) { return; }
+        while (el.firstChild) { el.removeChild(el.firstChild); }
+        if (!Array.isArray(pairs) || pairs.length === 0) { return; }
+        pairs.forEach((p, i) => {
+            if (i > 0) {
+                const sep = document.createElement("span");
+                sep.className = "sep";
+                sep.textContent = "·";
+                el.appendChild(sep);
+            }
+            if (p.value !== null && p.value !== undefined && p.value !== "") {
+                const b = document.createElement("b");
+                b.textContent = String(p.value);
+                el.appendChild(b);
+            }
+            if (p.label) {
+                el.appendChild(document.createTextNode(` ${p.label}`));
+            }
+        });
+    }
+
+    /**
+     * Рисует sparkline в SVG-элементе.
+     * svgEl — <svg viewBox="0 0 60 22">, values — number[].
+     * Пустой/короткий массив → SVG очищается (graceful).
+     */
+    function renderSparkline(svgEl, values) {
+        if (!svgEl) { return; }
+        while (svgEl.firstChild) { svgEl.removeChild(svgEl.firstChild); }
+        if (!Array.isArray(values) || values.length < 2) { return; }
+        const w = 60, h = 22;
+        const min = Math.min(...values);
+        const max = Math.max(...values);
+        const range = max - min || 1;
+        const step = w / (values.length - 1);
+        const coords = values.map((v, i) => {
+            const x = i * step;
+            const y = h - ((v - min) / range) * (h - 2) - 1;
+            return [x, y];
+        });
+        const lineD = coords.map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(2)},${p[1].toFixed(2)}`).join(" ");
+        const areaD = `${lineD} L${w},${h} L0,${h} Z`;
+        const NS = "http://www.w3.org/2000/svg";
+        const area = document.createElementNS(NS, "path");
+        area.setAttribute("class", "area");
+        area.setAttribute("d", areaD);
+        svgEl.appendChild(area);
+        const line = document.createElementNS(NS, "path");
+        line.setAttribute("class", "line");
+        line.setAttribute("d", lineD);
+        svgEl.appendChild(line);
+    }
+
+    /** Медиана без мутации входа. */
+    function median(arr) {
+        if (!arr.length) { return 0; }
+        const sorted = [...arr].sort((a, b) => a - b);
+        const mid = Math.floor(sorted.length / 2);
+        return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+    }
+
+    /**
+     * Рисует stats-bar под канвасом.
+     * containerId — id контейнера (.chart-stats).
+     * points — массив {period, value} или массив чисел.
+     * opts.valueFormatter — fn(n) → string (default formatNumber).
+     */
+    function renderStatsBar(containerId, points, opts) {
+        const el = document.getElementById(containerId);
+        if (!el) { return; }
+        while (el.firstChild) { el.removeChild(el.firstChild); }
+        if (!Array.isArray(points) || points.length === 0) { return; }
+        const values = points.map(p => Number(typeof p === "object" ? p.value : p) || 0);
+        const fmt = (opts && opts.valueFormatter) || formatNumber;
+        const sum = values.reduce((a, b) => a + b, 0);
+        const avg = sum / values.length;
+        const peak = Math.max(...values);
+        const low = Math.min(...values);
+        const med = median(values);
+        const items = [
+            { label: "Σ всего", value: fmt(sum) },
+            { label: "среднее", value: fmt(Math.round(avg)) },
+            { label: "медиана", value: fmt(Math.round(med)) },
+            { label: "пик", value: fmt(peak) },
+            { label: "мин", value: fmt(low) },
+            { label: "точек", value: formatNumber(values.length) },
+        ];
+        for (const it of items) {
+            const wrap = document.createElement("div");
+            wrap.className = "chart-stats__item";
+            const lbl = document.createElement("div");
+            lbl.className = "chart-stats__label";
+            lbl.textContent = it.label;
+            const val = document.createElement("div");
+            val.className = "chart-stats__value";
+            val.textContent = it.value;
+            wrap.appendChild(lbl);
+            wrap.appendChild(val);
+            el.appendChild(wrap);
+        }
+    }
+
+    /** Заполняет .count-badge[data-count-target="name"]. */
+    function setCountBadge(target, count) {
+        const el = document.querySelector(`[data-count-target="${target}"]`);
+        if (!el) { return; }
+        if (count === null || count === undefined) { el.textContent = ""; return; }
+        el.textContent = formatNumber(count);
+    }
+
     function renderTimeseries(canvasId, points) {
         const ctx = makeCanvas(canvasId);
         if (!ctx || !window.Chart) { return; }
@@ -158,10 +300,44 @@
         }
     }
 
+    const STATUS_COLORS = {
+        completed: "#2b8a3e",
+        failed: "#d64545",
+        processing: "#b7791f",
+        queued: "#3358d4",
+        cancelled: "#666e7b",
+    };
+
+    function renderStatusDoughnut(canvasId, breakdown) {
+        const ctx = makeCanvas(canvasId);
+        if (!ctx || !window.Chart) { return; }
+        const labels = Object.keys(breakdown || {});
+        new Chart(ctx, {
+            type: "doughnut",
+            data: {
+                labels,
+                datasets: [{
+                    data: labels.map(k => breakdown[k]),
+                    backgroundColor: labels.map(k => STATUS_COLORS[k] || "#888"),
+                }],
+            },
+            options: { responsive: true, maintainAspectRatio: false },
+        });
+    }
+
+    function renderKpiSparkline(name, points) {
+        const svg = document.querySelector(`[data-kpi-spark="${name}"]`);
+        if (!svg || !Array.isArray(points)) { return; }
+        renderSparkline(svg, points.map(p => Number(p.value) || 0));
+    }
+
     window.Dashboard = {
         fetchJson, formatNumber, formatBytes, formatDate,
         readPeriodFromUrl, escapeHtml,
-        makeCanvas, setKpi, renderTimeseries, renderBarChart, onReady,
+        makeCanvas, setKpi, setKpiDelta, setKpiMeta,
+        renderSparkline, renderStatsBar, setCountBadge,
+        renderStatusDoughnut, renderKpiSparkline,
+        renderTimeseries, renderBarChart, onReady,
     };
 
     onReady(initPeriodFilter);

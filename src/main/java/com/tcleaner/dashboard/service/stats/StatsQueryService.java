@@ -37,26 +37,7 @@ public class StatsQueryService {
 
     @Cacheable(value = LIVE, key = "#period.toString() + '_' + #botUserId")
     public OverviewDto overview(StatsPeriod period, Long botUserId) {
-        String from = period.from().toString();
-        String to = period.to().toString() + "T23:59:59Z";
-
-        // Три агрегата одним запросом — экономит 2 round-trip'а к SQLite на каждый /overview.
-        String aggSql = "SELECT COUNT(*) AS exports, " +
-                "COALESCE(SUM(messages_count), 0) AS messages, " +
-                "COALESCE(SUM(bytes_count), 0) AS bytes " +
-                "FROM export_events WHERE started_at >= ? AND started_at <= ?" +
-                (botUserId != null && botUserId > 0 ? " AND bot_user_id = ?" : "");
-        Object[] args = botUserId != null && botUserId > 0
-                ? new Object[]{from, to, botUserId}
-                : new Object[]{from, to};
-
-        long[] totals = jdbc.queryForObject(aggSql,
-                (rs, n) -> new long[]{
-                        rs.getLong("exports"),
-                        rs.getLong("messages"),
-                        rs.getLong("bytes")},
-                args);
-
+        long[] totals = periodTotals(period, botUserId);
         Long users = jdbc.queryForObject("SELECT COUNT(*) FROM bot_users", Long.class);
 
         return new OverviewDto(
@@ -64,7 +45,79 @@ public class StatsQueryService {
                 users != null ? users : 0,
                 topUsers(10, botUserId),
                 topChats(period, botUserId, 10),
-                statusBreakdown(period, botUserId));
+                statusBreakdown(period, botUserId),
+                null, null, null, null);
+    }
+
+    /**
+     * Три агрегата (exports, messages, bytes) за период — без top/breakdown.
+     * Экономит round-trip'ы к SQLite для методов, которым нужны только тотали.
+     *
+     * @param period временной диапазон
+     * @param botUserId фильтр по юзеру (null или 0 = все юзеры)
+     * @return массив [exports, messages, bytes] длины 3
+     */
+    private long[] periodTotals(StatsPeriod period, Long botUserId) {
+        String from = period.from().toString();
+        String to = period.to().toString() + "T23:59:59Z";
+        String sql = "SELECT COUNT(*) AS exports, " +
+                "COALESCE(SUM(messages_count), 0) AS messages, " +
+                "COALESCE(SUM(bytes_count), 0) AS bytes " +
+                "FROM export_events WHERE started_at >= ? AND started_at <= ?" +
+                (botUserId != null && botUserId > 0 ? " AND bot_user_id = ?" : "");
+        Object[] args = botUserId != null && botUserId > 0
+                ? new Object[]{from, to, botUserId}
+                : new Object[]{from, to};
+        Long[] result = jdbc.queryForObject(sql,
+                (rs, n) -> new Long[]{
+                        rs.getLong("exports"),
+                        rs.getLong("messages"),
+                        rs.getLong("bytes")},
+                args);
+        return result != null
+                ? new long[]{result[0], result[1], result[2]}
+                : new long[]{0, 0, 0};
+    }
+
+    /**
+     * Overview + дельта vs предыдущий период той же длины.
+     * Delta = ((current - prev) / prev) * 100, в процентах.
+     * Если prev == 0 → delta = null (нечем делить).
+     * deltaUsers всегда null (bot_users не имеет точки во времени).
+     *
+     * @param period текущий период
+     * @param botUserId фильтр по юзеру (null или 0 = все юзеры)
+     * @return OverviewDto с заполненными deltaExports, deltaMessages, deltaBytes
+     */
+    @Cacheable(value = LIVE, key = "'wd_' + #period.toString() + '_' + #botUserId")
+    public OverviewDto overviewWithDelta(StatsPeriod period, Long botUserId) {
+        long[] current = periodTotals(period, botUserId);
+        long[] prev = periodTotals(period.previous(), botUserId);
+        Long users = jdbc.queryForObject("SELECT COUNT(*) FROM bot_users", Long.class);
+        return new OverviewDto(
+                current[0], current[1], current[2],
+                users != null ? users : 0,
+                topUsers(10, botUserId),
+                topChats(period, botUserId, 10),
+                statusBreakdown(period, botUserId),
+                computeDeltaPercent(current[0], prev[0]),
+                computeDeltaPercent(current[1], prev[1]),
+                computeDeltaPercent(current[2], prev[2]),
+                null);
+    }
+
+    /**
+     * Вычисляет дельту в процентах: ((current - previous) / previous) * 100.
+     *
+     * @param current текущее значение
+     * @param previous значение в предыдущий период
+     * @return дельта в %, или null если previous == 0
+     */
+    private static Double computeDeltaPercent(long current, long previous) {
+        if (previous == 0) {
+            return null;
+        }
+        return ((double) (current - previous) / previous) * 100.0;
     }
 
     // ─── Users ───────────────────────────────────────────────────────────────

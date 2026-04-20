@@ -16,19 +16,31 @@
     <div class="kpi-grid">
         <div class="kpi" id="kpi-exports">
             <div class="kpi__label" th:text="#{overview.kpi.exports}">Экспортов</div>
+            <div class="kpi__delta" data-kpi-delta="exports"></div>
             <div class="kpi__value" data-kpi="totalExports">—</div>
+            <svg class="kpi__spark" data-kpi-spark="exports" viewBox="0 0 60 22" preserveAspectRatio="none"></svg>
+            <div class="kpi__meta" data-kpi-meta="exports"></div>
         </div>
-        <div class="kpi" id="kpi-messages">
+        <div class="kpi info" id="kpi-messages">
             <div class="kpi__label" th:text="#{overview.kpi.messages}">Сообщений</div>
+            <div class="kpi__delta" data-kpi-delta="messages"></div>
             <div class="kpi__value" data-kpi="totalMessages">—</div>
+            <svg class="kpi__spark" data-kpi-spark="messages" viewBox="0 0 60 22" preserveAspectRatio="none"></svg>
+            <div class="kpi__meta" data-kpi-meta="messages"></div>
         </div>
-        <div class="kpi" id="kpi-bytes">
+        <div class="kpi warn" id="kpi-bytes">
             <div class="kpi__label" th:text="#{overview.kpi.bytes}">Объём</div>
+            <div class="kpi__delta" data-kpi-delta="bytes"></div>
             <div class="kpi__value" data-kpi="totalBytes">—</div>
+            <svg class="kpi__spark" data-kpi-spark="bytes" viewBox="0 0 60 22" preserveAspectRatio="none"></svg>
+            <div class="kpi__meta" data-kpi-meta="bytes"></div>
         </div>
-        <div class="kpi" id="kpi-users">
+        <div class="kpi ok" id="kpi-users">
             <div class="kpi__label" th:text="#{overview.kpi.users}">Пользователей</div>
+            <div class="kpi__delta" data-kpi-delta="users"></div>
             <div class="kpi__value" data-kpi="totalUsers">—</div>
+            <svg class="kpi__spark" data-kpi-spark="users" viewBox="0 0 60 22" preserveAspectRatio="none"></svg>
+            <div class="kpi__meta" data-kpi-meta="users"></div>
         </div>
     </div>
 

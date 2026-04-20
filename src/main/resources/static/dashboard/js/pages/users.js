@@ -5,7 +5,7 @@
 (function () {
     "use strict";
 
-    const { fetchJson, formatNumber, formatBytes, formatDate, escapeHtml, onReady } = window.Dashboard || {};
+    const { fetchJson, formatNumber, formatBytes, formatDate, escapeHtml, setCountBadge, onReady } = window.Dashboard || {};
     if (!fetchJson) { return; }
 
     function row(u) {
@@ -28,6 +28,7 @@
             tbody.innerHTML = rows.length
                 ? rows.map(row).join("")
                 : `<tr><td colspan="5" style="text-align:center;color:var(--muted)">Нет данных</td></tr>`;
+            setCountBadge("users", rows.length);
         } catch (e) {
             tbody.innerHTML =
                 `<tr><td colspan="5" style="color:var(--danger)">Ошибка загрузки: ${e.message}</td></tr>`;

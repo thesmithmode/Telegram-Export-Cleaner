@@ -6,33 +6,12 @@
     "use strict";
 
     const { fetchJson, formatNumber, formatBytes, readPeriodFromUrl,
-            setKpi, makeCanvas, renderTimeseries, onReady } = window.Dashboard || {};
+            setKpi, setKpiDelta, setKpiMeta, setCountBadge,
+            renderKpiSparkline, renderStatsBar, renderStatusDoughnut,
+            renderTimeseries, onReady } = window.Dashboard || {};
     if (!fetchJson) { return; }
 
-    const STATUS_COLORS = {
-        completed: "#2b8a3e",
-        failed: "#d64545",
-        processing: "#b7791f",
-        queued: "#3358d4",
-        cancelled: "#666e7b",
-    };
-
-    function renderStatus(breakdown) {
-        const ctx = makeCanvas("chart-status");
-        if (!ctx || !window.Chart) { return; }
-        const labels = Object.keys(breakdown);
-        new Chart(ctx, {
-            type: "doughnut",
-            data: {
-                labels,
-                datasets: [{
-                    data: labels.map(k => breakdown[k]),
-                    backgroundColor: labels.map(k => STATUS_COLORS[k] || "#888"),
-                }],
-            },
-            options: { responsive: true, maintainAspectRatio: false },
-        });
-    }
+    const METRICS = ["exports", "messages", "bytes"];
 
     function clear(el) { while (el.firstChild) { el.removeChild(el.firstChild); } }
 
@@ -71,6 +50,7 @@
                 formatBytes(r.totalBytes || 0),
             ]));
         }
+        setCountBadge("my-chats", rows.length);
     }
 
     function renderEventsTable(rows) {
@@ -89,16 +69,17 @@
                 formatNumber(r.messagesCount || 0),
             ]));
         }
+        setCountBadge("my-events", rows.length);
     }
 
     async function load() {
         const period = readPeriodFromUrl();
         const params = { period: period.period, from: period.from, to: period.to };
         try {
-            const [overview, timeseries, chats, events, status] = await Promise.all([
+            const [overview, tsExports, tsMessages, tsBytes, chats, events, status] = await Promise.all([
                 fetchJson("/dashboard/api/me/overview", params),
-                fetchJson("/dashboard/api/me/timeseries",
-                        { ...params, metric: "exports", granularity: "auto" }),
+                ...METRICS.map(m => fetchJson("/dashboard/api/me/timeseries",
+                        { ...params, metric: m, granularity: "auto" })),
                 fetchJson("/dashboard/api/me/chats", { ...params, limit: 20 }),
                 fetchJson("/dashboard/api/me/events", { limit: 50 }),
                 fetchJson("/dashboard/api/me/status-breakdown", params),
@@ -106,8 +87,29 @@
             setKpi("totalExports", formatNumber(overview.totalExports));
             setKpi("totalMessages", formatNumber(overview.totalMessages));
             setKpi("totalBytes", formatBytes(overview.totalBytes));
-            renderTimeseries("chart-timeseries", timeseries);
-            renderStatus(status || {});
+
+            setKpiDelta("exports", overview.deltaExports, { kind: "percent" });
+            setKpiDelta("messages", overview.deltaMessages, { kind: "percent" });
+            setKpiDelta("bytes", overview.deltaBytes, { kind: "percent" });
+
+            [tsExports, tsMessages, tsBytes].forEach((ts, i) => renderKpiSparkline(METRICS[i], ts));
+
+            const exportsCount = overview.totalExports || 1;
+            const peakExports = tsExports.length
+                ? Math.max(...tsExports.map(p => Number(p.value) || 0)) : null;
+            setKpiMeta("exports", peakExports !== null
+                ? [{ value: formatNumber(peakExports), label: "пик" }] : null);
+            setKpiMeta("messages", [
+                { value: formatNumber(Math.round((overview.totalMessages || 0) / exportsCount)), label: "/эксп" },
+            ]);
+            setKpiMeta("bytes", [
+                { value: formatBytes(Math.round((overview.totalBytes || 0) / exportsCount)), label: "/эксп" },
+            ]);
+
+            renderTimeseries("chart-timeseries", tsExports);
+            renderStatsBar("stats-chart-timeseries", tsExports);
+
+            renderStatusDoughnut("chart-status", status || {});
             renderChatsTable(chats);
             renderEventsTable(events);
         } catch (e) {

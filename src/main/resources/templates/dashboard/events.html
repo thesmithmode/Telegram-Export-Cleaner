@@ -8,7 +8,10 @@
   Поддерживает фильтр по статусу через select.
 -->
 <div th:fragment="events-content" class="events">
-    <h1 th:text="#{events.heading}">Последние экспорты</h1>
+    <div class="section-header">
+        <h1 th:text="#{events.heading}">Последние экспорты</h1>
+        <span class="count-badge" data-count-target="events"></span>
+    </div>
 
     <div class="period-filter" style="align-items:center">
         <label>

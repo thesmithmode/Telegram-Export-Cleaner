@@ -21,15 +21,24 @@
     <div class="kpi-grid">
         <div class="kpi" id="kpi-exports">
             <div class="kpi__label">Exports</div>
+            <div class="kpi__delta" data-kpi-delta="exports"></div>
             <div class="kpi__value" data-kpi="totalExports">—</div>
+            <svg class="kpi__spark" data-kpi-spark="exports" viewBox="0 0 60 22" preserveAspectRatio="none"></svg>
+            <div class="kpi__meta" data-kpi-meta="exports"></div>
         </div>
-        <div class="kpi" id="kpi-messages">
+        <div class="kpi info" id="kpi-messages">
             <div class="kpi__label">Messages</div>
+            <div class="kpi__delta" data-kpi-delta="messages"></div>
             <div class="kpi__value" data-kpi="totalMessages">—</div>
+            <svg class="kpi__spark" data-kpi-spark="messages" viewBox="0 0 60 22" preserveAspectRatio="none"></svg>
+            <div class="kpi__meta" data-kpi-meta="messages"></div>
         </div>
-        <div class="kpi" id="kpi-bytes">
+        <div class="kpi warn" id="kpi-bytes">
             <div class="kpi__label">Bytes</div>
+            <div class="kpi__delta" data-kpi-delta="bytes"></div>
             <div class="kpi__value" data-kpi="totalBytes">—</div>
+            <svg class="kpi__spark" data-kpi-spark="bytes" viewBox="0 0 60 22" preserveAspectRatio="none"></svg>
+            <div class="kpi__meta" data-kpi-meta="bytes"></div>
         </div>
     </div>
 
@@ -40,37 +49,47 @@
             id='chart-status', title='Status breakdown', height=260)}"></div>
 
     <section class="table-block">
-        <h2>My Chats</h2>
-        <table class="data-table">
-            <thead>
-            <tr>
-                <th>Chat</th>
-                <th>Exports</th>
-                <th>Messages</th>
-                <th>Bytes</th>
-            </tr>
-            </thead>
-            <tbody id="my-chats-body">
-            <tr><td colspan="4">—</td></tr>
-            </tbody>
-        </table>
+        <div class="section-header">
+            <h2>My Chats</h2>
+            <span class="count-badge" data-count-target="my-chats"></span>
+        </div>
+        <div class="table-wrap">
+            <table class="data-table">
+                <thead>
+                <tr>
+                    <th>Chat</th>
+                    <th>Exports</th>
+                    <th>Messages</th>
+                    <th>Bytes</th>
+                </tr>
+                </thead>
+                <tbody id="my-chats-body">
+                <tr><td colspan="4">—</td></tr>
+                </tbody>
+            </table>
+        </div>
     </section>
 
     <section class="table-block">
-        <h2>My Recent Events</h2>
-        <table class="data-table">
-            <thead>
-            <tr>
-                <th>Started</th>
-                <th>Chat</th>
-                <th>Status</th>
-                <th>Messages</th>
-            </tr>
-            </thead>
-            <tbody id="my-events-body">
-            <tr><td colspan="4">—</td></tr>
-            </tbody>
-        </table>
+        <div class="section-header">
+            <h2>My Recent Events</h2>
+            <span class="count-badge" data-count-target="my-events"></span>
+        </div>
+        <div class="table-wrap">
+            <table class="data-table">
+                <thead>
+                <tr>
+                    <th>Started</th>
+                    <th>Chat</th>
+                    <th>Status</th>
+                    <th>Messages</th>
+                </tr>
+                </thead>
+                <tbody id="my-events-body">
+                <tr><td colspan="4">—</td></tr>
+                </tbody>
+            </table>
+        </div>
     </section>
 
     <script th:src="@{/dashboard/js/pages/me.js}" defer></script>

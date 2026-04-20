@@ -6,7 +6,7 @@
     "use strict";
 
     const { fetchJson, formatNumber, formatBytes, readPeriodFromUrl, escapeHtml,
-            renderBarChart, onReady } = window.Dashboard || {};
+            renderBarChart, setCountBadge, onReady } = window.Dashboard || {};
     if (!fetchJson) { return; }
 
     function row(c) {
@@ -35,6 +35,7 @@
             tbody.innerHTML = chats.length
                 ? chats.map(row).join("")
                 : `<tr><td colspan="4" style="text-align:center;color:var(--muted)">Нет данных</td></tr>`;
+            setCountBadge("chats", chats.length);
         } catch (e) {
             if (tbody) {
                 tbody.innerHTML =

@@ -6,7 +6,7 @@
 (function () {
     "use strict";
 
-    const { fetchJson, formatNumber, formatBytes, formatDate, escapeHtml, onReady } = window.Dashboard || {};
+    const { fetchJson, formatNumber, formatBytes, formatDate, escapeHtml, setCountBadge, onReady } = window.Dashboard || {};
     if (!fetchJson) { return; }
 
     const STATUS_CLASS = {
@@ -49,6 +49,7 @@
             tbody.innerHTML = events.length
                 ? events.map(row).join("")
                 : `<tr><td colspan="6" style="text-align:center;color:var(--muted)">Нет данных</td></tr>`;
+            setCountBadge("events", events.length);
         } catch (e) {
             tbody.innerHTML =
                 `<tr><td colspan="6" style="color:var(--danger)">Ошибка: ${e.message}</td></tr>`;

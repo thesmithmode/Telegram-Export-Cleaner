@@ -20,6 +20,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.cache.CacheManager;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -51,6 +52,9 @@ class StatsQueryServiceTest {
     @Autowired
     private ExportEventRepository eventRepo;
 
+    @Autowired
+    private CacheManager cacheManager;
+
     @MockitoBean
     private TelegramExporter mockExporter;
 
@@ -64,6 +68,8 @@ class StatsQueryServiceTest {
 
     @BeforeEach
     void seed() {
+        cacheManager.getCacheNames().forEach(n -> cacheManager.getCache(n).clear());
+
         Instant now = Instant.parse("2026-04-15T00:00:00Z");
 
         // Два бот-юзера
@@ -120,6 +126,62 @@ class StatsQueryServiceTest {
         assertThat(dto.totalExports()).isEqualTo(2);
         assertThat(dto.totalMessages()).isEqualTo(300L);
         assertThat(dto.totalBytes()).isEqualTo(3000L);
+    }
+
+    // ─── overviewWithDelta ───────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("overviewWithDelta: previous period пустой → delta=null для всех метрик")
+    void overviewWithDeltaNullWhenPreviousEmpty() {
+        OverviewDto dto = svc.overviewWithDelta(PERIOD, null);
+
+        assertThat(dto.totalExports()).isEqualTo(3);
+        assertThat(dto.totalMessages()).isEqualTo(350L);
+        assertThat(dto.totalBytes()).isEqualTo(3500L);
+        assertThat(dto.deltaExports()).isNull();
+        assertThat(dto.deltaMessages()).isNull();
+        assertThat(dto.deltaBytes()).isNull();
+        assertThat(dto.deltaUsers()).isNull();
+    }
+
+    @Test
+    @DisplayName("overviewWithDelta: положительный рост → delta > 0")
+    void overviewWithDeltaPositiveDelta() {
+        // Добавим 1 экспорт в previous period (2026-03-31 .. 2026-04-07)
+        eventRepo.save(makeEvent("prev1", 1L, chatId,
+                Instant.parse("2026-04-05T12:00:00Z"),
+                ExportStatus.COMPLETED, 100L, 1000L));
+
+        OverviewDto dto = svc.overviewWithDelta(PERIOD, null);
+
+        // current = 3 экспорта (350 msg, 3500 b), previous = 1 экспорт (100 msg, 1000 b)
+        assertThat(dto.totalExports()).isEqualTo(3);
+        assertThat(dto.totalMessages()).isEqualTo(350L);
+        assertThat(dto.totalBytes()).isEqualTo(3500L);
+        assertThat(dto.deltaExports()).isEqualTo(200.0);  // (3-1)/1*100
+        assertThat(dto.deltaMessages()).isEqualTo(250.0); // (350-100)/100*100
+        assertThat(dto.deltaBytes()).isEqualTo(250.0);    // (3500-1000)/1000*100
+        assertThat(dto.deltaUsers()).isNull();
+    }
+
+    @Test
+    @DisplayName("overviewWithDelta: падение (current < previous) → delta отрицательная")
+    void overviewWithDeltaNegativeDelta() {
+        // Добавим 5 экспортов в previous period (2026-03-31 .. 2026-04-07)
+        // current период уже имеет 3 экспорта из seed()
+        for (int i = 0; i < 5; i++) {
+            eventRepo.save(makeEvent("prev" + i, 1L, chatId,
+                    Instant.parse("2026-04-0" + (i + 1) + "T12:00:00Z"),
+                    ExportStatus.COMPLETED, 100L, 1000L));
+        }
+
+        OverviewDto dto = svc.overviewWithDelta(PERIOD, null);
+
+        // current=3, previous=5 → (3-5)/5*100 = -40.0
+        assertThat(dto.totalExports()).isEqualTo(3);
+        assertThat(dto.deltaExports()).isEqualTo(-40.0);
+        assertThat(dto.deltaMessages()).isNegative();
+        assertThat(dto.deltaBytes()).isNegative();
     }
 
     // ─── topUsers ────────────────────────────────────────────────────────────

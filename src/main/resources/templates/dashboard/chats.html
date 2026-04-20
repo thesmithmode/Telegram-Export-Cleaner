@@ -7,7 +7,10 @@
   Страница чатов: бар-чарт топ-20 + таблица. Данные — GET /dashboard/api/stats/chats.
 -->
 <div th:fragment="chats-content" class="chats">
-    <h1 th:text="#{chats.heading}">Чаты</h1>
+    <div class="section-header">
+        <h1 th:text="#{chats.heading}">Чаты</h1>
+        <span class="count-badge" data-count-target="chats"></span>
+    </div>
 
     <div th:replace="~{dashboard/fragments/period-filter :: period-filter}"></div>
 

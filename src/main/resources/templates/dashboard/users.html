@@ -8,7 +8,10 @@
   Таблица загружается через GET /dashboard/api/stats/users из js/pages/users.js.
 -->
 <div th:fragment="users-content" class="users">
-    <h1 th:text="#{users.heading}">Пользователи</h1>
+    <div class="section-header">
+        <h1 th:text="#{users.heading}">Пользователи</h1>
+        <span class="count-badge" data-count-target="users"></span>
+    </div>
 
     <div th:replace="~{dashboard/fragments/period-filter :: period-filter}"></div>
 
