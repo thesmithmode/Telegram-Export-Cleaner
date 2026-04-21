@@ -8,6 +8,8 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
+import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
+import org.springframework.security.web.context.SecurityContextRepository;
 
 /**
  * Spring Security для дашборда: stateful сессии, вход через Telegram Mini App.
@@ -18,6 +20,11 @@ import org.springframework.security.web.authentication.LoginUrlAuthenticationEnt
 @Configuration
 @Order(1)
 public class DashboardSecurityConfig {
+
+    @Bean
+    public SecurityContextRepository securityContextRepository() {
+        return new HttpSessionSecurityContextRepository();
+    }
 
     @Bean
     public SecurityFilterChain dashboardFilterChain(HttpSecurity http,

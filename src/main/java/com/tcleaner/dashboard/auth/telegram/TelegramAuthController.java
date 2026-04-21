@@ -37,12 +37,12 @@ public class TelegramAuthController {
     private final DashboardUserService userService;
     private final BotUserUpserter botUserUpserter;
     private final long adminTelegramId;
-    private final SecurityContextRepository contextRepository =
-            new HttpSessionSecurityContextRepository();
+    private final SecurityContextRepository contextRepository;
 
     public TelegramAuthController(TelegramMiniAppAuthVerifier verifier,
                                   DashboardUserService userService,
                                   BotUserUpserter botUserUpserter,
+                                  SecurityContextRepository contextRepository,
                                   @Value("${dashboard.auth.admin.telegram-id}") long adminTelegramId) {
         if (adminTelegramId <= 0) {
             throw new IllegalArgumentException(
@@ -51,6 +51,7 @@ public class TelegramAuthController {
         this.verifier = verifier;
         this.userService = userService;
         this.botUserUpserter = botUserUpserter;
+        this.contextRepository = contextRepository;
         this.adminTelegramId = adminTelegramId;
     }
 

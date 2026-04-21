@@ -2,6 +2,8 @@ package com.tcleaner.api;
 
 import com.tcleaner.core.MessageFilter;
 import com.tcleaner.core.TelegramExporter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -24,6 +26,8 @@ import java.nio.file.Path;
  */
 @Service
 public class FileConversionService {
+
+    private static final Logger log = LoggerFactory.getLogger(FileConversionService.class);
 
     private final TelegramExporter exporter;
 
@@ -77,7 +81,7 @@ public class FileConversionService {
         try {
             Files.deleteIfExists(path);
         } catch (IOException e) {
-            // Temp file cleanup failure is non-critical
+            log.warn("Не удалось удалить temp file {}: {}", path, e.getMessage());
         }
     }
 }

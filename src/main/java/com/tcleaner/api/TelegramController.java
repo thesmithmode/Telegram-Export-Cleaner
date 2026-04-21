@@ -5,6 +5,9 @@ import com.tcleaner.core.TelegramExporter;
 import com.tcleaner.dashboard.events.StatsEventPayload;
 import com.tcleaner.dashboard.events.StatsEventType;
 import com.tcleaner.dashboard.events.StatsStreamPublisher;
+import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.PositiveOrZero;
+import jakarta.validation.constraints.Size;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -12,6 +15,7 @@ import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -36,6 +40,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api")
+@Validated
 public class TelegramController {
 
     private static final Logger log = LoggerFactory.getLogger(TelegramController.class);
@@ -57,13 +62,13 @@ public class TelegramController {
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
             @RequestParam(value = "endDate", required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
-            @RequestParam(value = "keywords", required = false) String keywords,
-            @RequestParam(value = "excludeKeywords", required = false) String excludeKeywords,
+            @RequestParam(value = "keywords", required = false) @Size(max = 4096) String keywords,
+            @RequestParam(value = "excludeKeywords", required = false) @Size(max = 4096) String excludeKeywords,
             // Опциональные статистические поля, заполняемые Python-воркером
-            @RequestParam(value = "taskId", required = false) String taskId,
-            @RequestParam(value = "botUserId", required = false) Long botUserId,
-            @RequestParam(value = "chatTitle", required = false) String chatTitle,
-            @RequestParam(value = "messagesCount", required = false) Long messagesCount
+            @RequestParam(value = "taskId", required = false) @Size(max = 128) String taskId,
+            @RequestParam(value = "botUserId", required = false) @Positive Long botUserId,
+            @RequestParam(value = "chatTitle", required = false) @Size(max = 1024) String chatTitle,
+            @RequestParam(value = "messagesCount", required = false) @PositiveOrZero Long messagesCount
     ) throws IOException {
 
         if (file == null || file.isEmpty()) {
@@ -125,7 +130,7 @@ public class TelegramController {
                     .ts(now)
                     .build());
         } catch (Exception ex) {
-            log.debug("bytes_measured не опубликовано: {}", ex.getMessage());
+            log.warn("bytes_measured не опубликовано: {}", ex.getMessage());
         }
         try {
             publisher.publish(StatsEventPayload.builder()
@@ -139,7 +144,7 @@ public class TelegramController {
                     .ts(now)
                     .build());
         } catch (Exception ex) {
-            log.debug("export.completed не опубликовано: {}", ex.getMessage());
+            log.warn("export.completed не опубликовано: {}", ex.getMessage());
         }
     }
 

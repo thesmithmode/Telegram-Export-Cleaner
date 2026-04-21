@@ -133,6 +133,9 @@ public class CacheMetricsService {
             String v = redis.opsForValue().get(key);
             return (v != null && !v.isBlank()) ? v : null;
         } catch (Exception e) {
+            // DEBUG, а не WARN: вызывается в цикле по каждому чату — падение Redis
+            // даст тысячи WARN. Недоступность Redis уже логируется один раз в get().
+            log.debug("Redis read failed for key={}: {}", key, e.getMessage());
             return null;
         }
     }

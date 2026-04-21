@@ -1,6 +1,7 @@
 package com.tcleaner.api;
 
 import com.tcleaner.core.TelegramExporterException;
+import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -12,6 +13,7 @@ import java.io.IOException;
 import java.time.format.DateTimeParseException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @ControllerAdvice
 public class ApiExceptionHandler {
@@ -33,11 +35,23 @@ public class ApiExceptionHandler {
                 "Невалидный формат параметра '" + ex.getName() + "'. Используйте YYYY-MM-DD для дат", ex));
     }
 
-    
+
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, String>> handleIllegalArgument(IllegalArgumentException ex) {
         log.warn("Validation error: {}", ex.getMessage());
         return ResponseEntity.badRequest().body(makeError(ex.getMessage(), ex));
+    }
+
+
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<Map<String, String>> handleConstraintViolation(ConstraintViolationException ex) {
+        String details = ex.getConstraintViolations().stream()
+                .map(v -> v.getPropertyPath() + " " + v.getMessage())
+                .collect(Collectors.joining("; "));
+        log.warn("Bean validation error: {}", details);
+        Map<String, String> error = makeError("Невалидные параметры запроса: " + details, ex);
+        error.put("error", "validation_failed");
+        return ResponseEntity.badRequest().body(error);
     }
 
     
