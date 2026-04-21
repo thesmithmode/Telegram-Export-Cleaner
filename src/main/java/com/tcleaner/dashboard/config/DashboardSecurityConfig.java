@@ -3,6 +3,7 @@ package com.tcleaner.dashboard.config;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
@@ -25,6 +26,8 @@ public class DashboardSecurityConfig {
             .securityMatcher("/dashboard/**")
             .headers(headers -> headers
                 .frameOptions(frame -> frame.disable())
+                // no-store для HTML дашборда — см. DashboardAccessIsolationIntegrationTest#htmlPagesAreNoStore
+                .cacheControl(Customizer.withDefaults())
                 .contentSecurityPolicy(csp -> csp.policyDirectives(
                     "default-src 'self'; " +
                     "script-src 'self' https://telegram.org; " +
@@ -71,7 +74,7 @@ public class DashboardSecurityConfig {
                 .logoutUrl("/dashboard/logout")
                 .logoutSuccessUrl("/dashboard/login?logout")
                 .invalidateHttpSession(true)
-                .deleteCookies("JSESSIONID")
+                .deleteCookies("JSESSIONID", "tg_uid")
                 .permitAll()
             );
 

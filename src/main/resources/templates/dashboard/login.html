@@ -5,6 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sign in — Dashboard</title>
     <link rel="stylesheet" th:href="@{/dashboard/css/app.css}">
+    <!-- Если страница открыта из Telegram (attachment menu / deep-link с
+         невалидной сессией) — guard автосабмитит initData на /login/telegram
+         до того как юзер успеет увидеть login widget. -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script th:src="@{/dashboard/js/tg-identity-guard.js}"></script>
 </head>
 <body class="login-body">
 <main class="login-wrap">

@@ -23,8 +23,11 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 
+import jakarta.servlet.http.Cookie;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.cookie;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -87,6 +90,42 @@ class TelegramAuthControllerTest {
                 .andExpect(redirectedUrl("/dashboard/overview"));
 
         assertThat(dashboardUsers.findByTelegramId(999L)).isPresent();
+    }
+
+    @Test
+    @DisplayName("login ставит readable cookie tg_uid=<user.id> (для identity-guard на клиенте)")
+    void loginSetsTgUidCookie() throws Exception {
+        String initData = buildInitData(111L, "John", "johnny", 1_000_000L);
+
+        Cookie tgUid = mvc.perform(post("/dashboard/login/telegram")
+                        .param("initData", initData))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(cookie().exists("tg_uid"))
+                .andExpect(cookie().value("tg_uid", "111"))
+                .andExpect(cookie().httpOnly("tg_uid", false))
+                .andExpect(cookie().path("tg_uid", "/dashboard"))
+                .andReturn().getResponse().getCookie("tg_uid");
+
+        assertThat(tgUid).isNotNull();
+        assertThat(tgUid.getAttribute("SameSite")).isEqualToIgnoringCase("Lax");
+    }
+
+    @Test
+    @DisplayName("при смене user.id cookie tg_uid обновляется на новый id")
+    void tgUidCookieUpdatedOnUserSwitch() throws Exception {
+        String initData1 = buildInitData(111L, "John", "johnny", 1_000_000L);
+        var result1 = mvc.perform(post("/dashboard/login/telegram")
+                        .param("initData", initData1))
+                .andExpect(cookie().value("tg_uid", "111"))
+                .andReturn();
+        var session1 = (org.springframework.mock.web.MockHttpSession)
+                result1.getRequest().getSession(false);
+
+        String initData2 = buildInitData(222L, "Stranger", null, 1_000_050L);
+        mvc.perform(post("/dashboard/login/telegram")
+                        .session(session1)
+                        .param("initData", initData2))
+                .andExpect(cookie().value("tg_uid", "222"));
     }
 
     @Test

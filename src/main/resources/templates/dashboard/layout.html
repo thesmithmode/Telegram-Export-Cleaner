@@ -9,6 +9,11 @@
     <meta name="_csrf_header" th:content="${_csrf?.headerName}">
     <title th:text="${title} ?: #{app.title}">Dashboard</title>
     <link rel="stylesheet" th:href="@{/dashboard/css/app.css}">
+    <!-- Telegram SDK + identity-guard грузятся синхронно до остальных скриптов:
+         guard сверяет cookie tg_uid с initData.user.id и форсит re-login
+         при mismatch (attachment menu WebView reuse). -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script th:src="@{/dashboard/js/tg-identity-guard.js}"></script>
     <!-- defer в <head> гарантирует что app.js выполнится до page-specific скриптов из <main> -->
     <script th:src="@{/dashboard/vendor/chart.min.js}" defer></script>
     <script th:src="@{/dashboard/js/app.js}" defer></script>

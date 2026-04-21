@@ -5,6 +5,7 @@ import com.tcleaner.dashboard.auth.DashboardUserService;
 import com.tcleaner.dashboard.domain.DashboardRole;
 import com.tcleaner.dashboard.domain.DashboardUser;
 import com.tcleaner.dashboard.service.ingestion.BotUserUpserter;
+import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
@@ -122,9 +123,26 @@ public class TelegramAuthController {
         SecurityContextHolder.setContext(context);
         contextRepository.saveContext(context, request, response);
 
+        writeTgUidCookie(response, id, request.isSecure());
+
         log.info("Telegram Mini App login: tgId={} role={} user='{}'", id, role, user.getUsername());
         return role == DashboardRole.ADMIN
                 ? "redirect:/dashboard/overview"
                 : "redirect:/dashboard/me";
+    }
+
+    // Клиентский identity-guard читает это значение JS-ом и сравнивает
+    // с Telegram.WebApp.initDataUnsafe.user.id. Mismatch → принудительный
+    // re-login через POST /dashboard/login/telegram. Закрывает дыру
+    // переиспользования WebView в Telegram attachment menu, когда
+    // JSESSIONID старого юзера прилетает в сессию нового.
+    private static void writeTgUidCookie(HttpServletResponse response, long tgUserId, boolean secure) {
+        Cookie cookie = new Cookie("tg_uid", Long.toString(tgUserId));
+        cookie.setPath("/dashboard");
+        cookie.setHttpOnly(false);
+        cookie.setSecure(secure);
+        cookie.setMaxAge(-1);
+        cookie.setAttribute("SameSite", "Lax");
+        response.addCookie(cookie);
     }
 }

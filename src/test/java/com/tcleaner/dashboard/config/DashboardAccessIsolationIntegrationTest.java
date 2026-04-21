@@ -28,6 +28,7 @@ import java.time.Instant;
 
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrlPattern;
@@ -236,5 +237,36 @@ class DashboardAccessIsolationIntegrationTest {
                 .andExpect(status().isOk());
         mockMvc.perform(get("/dashboard/me").with(user(ADMIN)))
                 .andExpect(status().isOk());
+    }
+
+    // ─── Cache-Control: HTML дашборда не должен кэшироваться ────────────────
+    // Корневой фикс бага переиспользования WebView в Telegram attachment menu —
+    // no-store форсит сервер-рендер и не даёт браузеру отдать старый HTML
+    // после смены identity.
+
+    @Test
+    @DisplayName("HTML дашборда отдаётся с Cache-Control: no-store (предотвращает кэш чужого identity)")
+    void htmlPagesAreNoStore() throws Exception {
+        for (String url : new String[]{
+                "/dashboard/me",
+                "/dashboard/overview",
+                "/dashboard/users",
+                "/dashboard/chats",
+                "/dashboard/events"}) {
+            var principal = url.equals("/dashboard/me") ? USER_42 : ADMIN;
+            mockMvc.perform(get(url).with(user(principal)))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string("Cache-Control",
+                            org.hamcrest.Matchers.containsString("no-store")));
+        }
+    }
+
+    @Test
+    @DisplayName("login-страница тоже no-store (mini-app entry не должен кэшироваться)")
+    void loginPageIsNoStore() throws Exception {
+        mockMvc.perform(get("/dashboard/login"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control",
+                        org.hamcrest.Matchers.containsString("no-store")));
     }
 }
