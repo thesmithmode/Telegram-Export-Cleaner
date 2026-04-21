@@ -352,6 +352,13 @@ class ExportWorker:
                                 chat_username,
                                 ex=86400 * 30,
                             )
+                        chat_type = chat_info.get("type")
+                        if chat_type:
+                            pipe.set(
+                                f"canonical:{canonical_id}:type",
+                                chat_type,
+                                ex=86400 * 30,
+                            )
                         await pipe.execute()
                     except Exception as canonical_err:
                         logger.warning(

@@ -28,6 +28,7 @@ public record CacheMetricsDto(
             long chatId,
             Integer topicId,
             String title,
+            String username,
             String chatType,
             long msgCount,
             long sizeBytes,

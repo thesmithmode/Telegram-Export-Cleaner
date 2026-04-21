@@ -45,7 +45,7 @@ class CacheMetricsControllerTest {
         when(cacheMetricsService.get()).thenReturn(new CacheMetricsDto(
                 true, 1_000_000L, 10_000_000L, 10.0, 3L, 250L, 1700000000L,
                 List.of(new CacheMetricsDto.ChatCacheEntry(
-                        -1001L, null, "Test Chat", "supergroup",
+                        -1001L, null, "Test Chat", "testchat", "supergroup",
                         100L, 500_000L, 50.0, 1700000000.0)),
                 List.of(new CacheMetricsDto.HeatmapBucket("hot", 2L, 700_000L),
                         new CacheMetricsDto.HeatmapBucket("warm", 1L, 300_000L),
@@ -60,6 +60,7 @@ class CacheMetricsControllerTest {
                 .andExpect(jsonPath("$.pct").value(10.0))
                 .andExpect(jsonPath("$.totalChats").value(3))
                 .andExpect(jsonPath("$.topChats[0].title").value("Test Chat"))
+                .andExpect(jsonPath("$.topChats[0].username").value("testchat"))
                 .andExpect(jsonPath("$.topChats[0].chatType").value("supergroup"))
                 .andExpect(jsonPath("$.heatmap[0].bucket").value("hot"))
                 .andExpect(jsonPath("$.chatTypeSegmentation.supergroup.chatCount").value(1));

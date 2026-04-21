@@ -1,5 +1,6 @@
 package com.tcleaner.dashboard.service.stats;
 
+import com.tcleaner.dashboard.domain.ExportStatus;
 import com.tcleaner.dashboard.dto.ChatStatsRow;
 import com.tcleaner.dashboard.dto.EventRowDto;
 import com.tcleaner.dashboard.dto.OverviewDto;
@@ -232,8 +233,13 @@ public class StatsQueryService {
             args.add(chatRefId);
         }
         if (status != null && !status.isBlank()) {
-            sql.append("AND e.status = ? ");
-            args.add(status);
+            try {
+                ExportStatus normalized = ExportStatus.valueOf(status.trim().toUpperCase(java.util.Locale.ROOT));
+                sql.append("AND e.status = ? ");
+                args.add(normalized.name());
+            } catch (IllegalArgumentException ex) {
+                return java.util.List.of();
+            }
         }
         sql.append("ORDER BY e.started_at DESC LIMIT ?");
         args.add(Math.max(1, Math.min(limit, 500)));

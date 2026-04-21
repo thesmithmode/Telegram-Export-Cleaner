@@ -111,17 +111,19 @@
             genEl.textContent = ageSec < 90 ? ageSec + "s назад" : Math.floor(ageSec / 60) + "мин назад";
         }
 
+        const used = Number(data.usedBytes) || 0;
         const heatmap = (data.heatmap || []).reduce((acc, h) => {
             acc[h.bucket] = h.sizeBytes;
             return acc;
         }, {});
+        const pctOf = (b) => used > 0 ? (b / used * 100) : 0;
         renderBarChart("chart-cache-heatmap", [
-            { label: "Hot (<7д)", value: heatmap.hot || 0 },
-            { label: "Warm (7-30д)", value: heatmap.warm || 0 },
-            { label: "Cold (>30д)", value: heatmap.cold || 0 },
+            { label: "Hot (<7д)", value: pctOf(heatmap.hot || 0) },
+            { label: "Warm (7-30д)", value: pctOf(heatmap.warm || 0) },
+            { label: "Cold (>30д)", value: pctOf(heatmap.cold || 0) },
         ], {
             labelFn: r => r.label, valueFn: r => r.value,
-            label: "bytes", color: "#b7791f", tickFn: v => formatBytes(v),
+            label: "% кэша", color: "#b7791f", tickFn: v => v.toFixed(1) + "%",
         });
 
         const segEntries = Object.entries(data.chatTypeSegmentation || {})
@@ -142,9 +144,11 @@
             while (tbody.firstChild) { tbody.removeChild(tbody.firstChild); }
             (data.topChats || []).forEach((c, i) => {
                 const tr = document.createElement("tr");
-                const titleText = c.title
-                    ? (c.topicId ? c.title + " (топик " + c.topicId + ")" : c.title)
-                    : String(c.chatId);
+                const titleText = c.username
+                    ? "@" + c.username
+                    : (c.title
+                        ? (c.topicId ? c.title + " (топик " + c.topicId + ")" : c.title)
+                        : String(c.chatId));
                 const lastAccess = c.lastAccessed
                     ? new Date(c.lastAccessed * 1000).toISOString().slice(0, 16).replace("T", " ")
                     : "—";

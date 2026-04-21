@@ -142,6 +142,58 @@ class CacheMetricsServiceTest {
     }
 
     @Test
+    @DisplayName("Redis canonical:{id} → username в DTO, canonical:{id}:type перекрывает DB")
+    void redisCanonicalMappingsEnrichUsernameAndType() {
+        String json = """
+                {
+                  "used_bytes": 100, "limit_bytes": 1000, "pct": 10.0,
+                  "total_chats": 1, "total_messages": 5, "generated_at": 0,
+                  "top_chats": [
+                    {"chat_id": -1001, "topic_id": 0, "msg_count": 5,
+                     "size_bytes": 100, "last_accessed": 0, "pct": 100.0}
+                  ],
+                  "heatmap": {}
+                }
+                """;
+        when(ops.get(CacheMetricsService.SNAPSHOT_KEY)).thenReturn(json);
+        when(ops.get("canonical:-1001")).thenReturn("groupa");
+        when(ops.get("canonical:-1001:type")).thenReturn("channel");
+        when(chatRepo.findByCanonicalChatIdAndTopicId(eq("-1001"), any()))
+                .thenReturn(Optional.of(Chat.builder()
+                        .chatTitle("Group A").chatType("supergroup").build()));
+
+        CacheMetricsDto dto = service.get();
+
+        assertThat(dto.topChats().get(0).username()).isEqualTo("groupa");
+        assertThat(dto.topChats().get(0).title()).isEqualTo("Group A");
+        assertThat(dto.topChats().get(0).chatType()).isEqualTo("channel");
+        assertThat(dto.chatTypeSegmentation()).containsKey("channel");
+    }
+
+    @Test
+    @DisplayName("canonical:{id} содержит numeric-id → username=null (не путать с id)")
+    void redisCanonicalNumericIsNotUsername() {
+        String json = """
+                {
+                  "used_bytes": 100, "limit_bytes": 1000, "pct": 10.0,
+                  "total_chats": 1, "total_messages": 5, "generated_at": 0,
+                  "top_chats": [
+                    {"chat_id": -1001, "topic_id": 0, "msg_count": 5,
+                     "size_bytes": 100, "last_accessed": 0, "pct": 100.0}
+                  ],
+                  "heatmap": {}
+                }
+                """;
+        when(ops.get(CacheMetricsService.SNAPSHOT_KEY)).thenReturn(json);
+        when(ops.get("canonical:-1001")).thenReturn("-1001");
+        when(chatRepo.findByCanonicalChatIdAndTopicId(any(), any()))
+                .thenReturn(Optional.empty());
+
+        CacheMetricsDto dto = service.get();
+        assertThat(dto.topChats().get(0).username()).isNull();
+    }
+
+    @Test
     @DisplayName("topic_id=0 → API отдаёт null (нет топика)")
     void zeroTopicBecomesNull() {
         String json = """

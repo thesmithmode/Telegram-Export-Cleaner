@@ -2,6 +2,7 @@ package com.tcleaner.dashboard.service.cache;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tcleaner.dashboard.domain.Chat;
 import com.tcleaner.dashboard.dto.CacheMetricsDto;
 import com.tcleaner.dashboard.repository.ChatRepository;
 import org.slf4j.Logger;
@@ -71,6 +72,7 @@ public class CacheMetricsService {
                         rc.chat_id,
                         rc.topic_id == 0 ? null : rc.topic_id,
                         meta.title(),
+                        meta.username(),
                         meta.chatType(),
                         rc.msg_count,
                         rc.size_bytes,
@@ -110,13 +112,32 @@ public class CacheMetricsService {
 
     private ChatMeta resolveChatMeta(long chatId, Integer topicId) {
         Integer tid = (topicId == null || topicId == 0) ? null : topicId;
-        return chatRepository
+        Chat dbChat = chatRepository
                 .findByCanonicalChatIdAndTopicId(String.valueOf(chatId), tid)
-                .map(c -> new ChatMeta(c.getChatTitle(), c.getChatType()))
-                .orElse(new ChatMeta(null, null));
+                .orElse(null);
+        String dbTitle = dbChat != null ? dbChat.getChatTitle() : null;
+        String dbType = dbChat != null ? dbChat.getChatType() : null;
+
+        // canonical:<id> может хранить numeric-id (fallback input→canonical) — отсекаем.
+        String username = readRedisKey("canonical:" + chatId);
+        if (username != null && (username.startsWith("-") || username.chars().allMatch(Character::isDigit))) {
+            username = null;
+        }
+        String redisType = readRedisKey("canonical:" + chatId + ":type");
+        String finalType = (redisType != null && !redisType.isBlank()) ? redisType : dbType;
+        return new ChatMeta(dbTitle, finalType, username);
     }
 
-    private record ChatMeta(String title, String chatType) {}
+    private String readRedisKey(String key) {
+        try {
+            String v = redis.opsForValue().get(key);
+            return (v != null && !v.isBlank()) ? v : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private record ChatMeta(String title, String chatType, String username) {}
 
     // ── wire-level records (snake_case, matches Python payload) ──────────────
 

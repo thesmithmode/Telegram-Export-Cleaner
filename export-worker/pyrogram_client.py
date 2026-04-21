@@ -626,11 +626,13 @@ class TelegramClient:
 
     @staticmethod
     def _build_chat_info(chat) -> dict:
+        raw_type = str(getattr(chat, "type", "") or "")
+        normalized_type = raw_type.split(".")[-1].lower().strip() if raw_type else ""
         return {
             "id": chat.id,
             "title": getattr(chat, "title", "") or "",
             "username": getattr(chat, "username", "") or "",
-            "type": str(chat.type),
+            "type": normalized_type,
             "is_bot": getattr(chat, "is_bot", False),
             "is_self": getattr(chat, "is_self", False),
             "is_contact": getattr(chat, "is_contact", False),

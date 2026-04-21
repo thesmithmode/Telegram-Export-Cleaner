@@ -18,6 +18,8 @@ import com.tcleaner.dashboard.service.stats.StatsPeriod.Granularity;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.cache.CacheManager;
@@ -283,6 +285,27 @@ class StatsQueryServiceTest {
         assertThat(pts).hasSize(2);
         assertThat(pts).extracting(TimeSeriesPointDto::value)
                 .containsExactly(100L, 200L);
+    }
+
+    // ─── recentEvents ──────────────────────────────────────────────────────────
+
+    @ParameterizedTest(name = "status=\"{0}\" → expectedSize={1}")
+    @CsvSource({
+            "completed, 3",
+            "cOmPlEtEd, 3",
+            "COMPLETED, 3",
+            "failed,    1",
+            "garbage,   0",
+    })
+    @DisplayName("recentEvents: case-insensitive status фильтр + invalid → пустой список")
+    void recentEventsStatusFilteringVariants(String status, int expectedSize) {
+        List<com.tcleaner.dashboard.dto.EventRowDto> rows = svc.recentEvents(null, null, status, 10);
+
+        assertThat(rows).hasSize(expectedSize);
+        if (expectedSize > 0) {
+            assertThat(rows).extracting(com.tcleaner.dashboard.dto.EventRowDto::status)
+                    .containsOnly(status.toUpperCase(java.util.Locale.ROOT));
+        }
     }
 
     // ─── userDetail ───────────────────────────────────────────────────────────

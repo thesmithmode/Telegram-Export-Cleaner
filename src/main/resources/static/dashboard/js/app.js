@@ -340,5 +340,10 @@
         renderTimeseries, renderBarChart, onReady,
     };
 
+    // bfcache restore → форсируем свежий запрос с актуальной JSESSIONID.
+    window.addEventListener("pageshow", (e) => {
+        if (e.persisted) { window.location.reload(); }
+    });
+
     onReady(initPeriodFilter);
 })();

@@ -1,4 +1,9 @@
 (function () {
+    // bfcache restore → свежий initData-flow вместо снапшота прошлой сессии.
+    window.addEventListener('pageshow', function (e) {
+        if (e.persisted) { window.location.reload(); }
+    });
+
     const tg = window.Telegram && window.Telegram.WebApp;
     if (!tg || !tg.initData) {
         showFallback();

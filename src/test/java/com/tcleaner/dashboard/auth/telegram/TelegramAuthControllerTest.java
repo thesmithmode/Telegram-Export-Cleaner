@@ -1,6 +1,7 @@
 package com.tcleaner.dashboard.auth.telegram;
 
 import com.tcleaner.core.TelegramExporter;
+import com.tcleaner.dashboard.auth.DashboardUserDetails;
 import com.tcleaner.dashboard.domain.BotUser;
 import com.tcleaner.dashboard.repository.BotUserRepository;
 import com.tcleaner.dashboard.repository.DashboardUserRepository;
@@ -167,5 +168,61 @@ class TelegramAuthControllerTest {
                 .hasValueSatisfying(u -> assertThat(u.getUsername()).isEqualTo("newname"));
         assertThat(dashboardUsers.findAllByRole(
                 com.tcleaner.dashboard.domain.DashboardRole.ADMIN)).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("смена user.id инвалидирует старую сессию и создаёт новую с новым principal")
+    void sessionSwitchesWhenUserIdChanges() throws Exception {
+        // Первый логин: user.id=111 (BotUser)
+        botUsers.save(BotUser.builder().botUserId(111L).username("johnny")
+                .displayName("John").firstSeen(Instant.ofEpochSecond(500_000L))
+                .lastSeen(Instant.ofEpochSecond(500_000L))
+                .totalExports(0).totalMessages(0L).totalBytes(0L).build());
+
+        String initData1 = buildInitData(111L, "John", "johnny", 1_000_000L);
+        var mvcResult1 = mvc.perform(post("/dashboard/login/telegram")
+                        .param("initData", initData1))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/dashboard/me"))
+                .andReturn();
+
+        var session1 = mvcResult1.getRequest().getSession(false);
+        assertThat(session1).isNotNull();
+
+        // Проверяем что в первой сессии principal.botUserId = 111
+        Object ctx1 = session1.getAttribute(
+                "SPRING_SECURITY_CONTEXT");
+        assertThat(ctx1).isInstanceOf(org.springframework.security.core.context.SecurityContext.class);
+        org.springframework.security.core.context.SecurityContext sc1 =
+                (org.springframework.security.core.context.SecurityContext) ctx1;
+        assertThat(sc1.getAuthentication().getPrincipal())
+                .isInstanceOf(DashboardUserDetails.class);
+        DashboardUserDetails principal1 =
+                (DashboardUserDetails) sc1.getAuthentication().getPrincipal();
+        assertThat(principal1.getBotUserId()).isEqualTo(111L);
+
+        // Второй логин: user.id=222 (новый, разный botUserId), используем сессию из первого логина
+        String initData2 = buildInitData(222L, "Stranger", null, 1_000_050L);
+        var mvcResult2 = mvc.perform(post("/dashboard/login/telegram")
+                        .session((org.springframework.mock.web.MockHttpSession) session1)
+                        .param("initData", initData2))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/dashboard/me"))
+                .andReturn();
+
+        var session2 = mvcResult2.getRequest().getSession(false);
+        assertThat(session2).isNotNull();
+
+        // Проверяем что во второй сессии principal.botUserId = 222
+        Object ctx2 = session2.getAttribute(
+                "SPRING_SECURITY_CONTEXT");
+        assertThat(ctx2).isInstanceOf(org.springframework.security.core.context.SecurityContext.class);
+        org.springframework.security.core.context.SecurityContext sc2 =
+                (org.springframework.security.core.context.SecurityContext) ctx2;
+        assertThat(sc2.getAuthentication().getPrincipal())
+                .isInstanceOf(DashboardUserDetails.class);
+        DashboardUserDetails principal2 =
+                (DashboardUserDetails) sc2.getAuthentication().getPrincipal();
+        assertThat(principal2.getBotUserId()).isEqualTo(222L);
     }
 }

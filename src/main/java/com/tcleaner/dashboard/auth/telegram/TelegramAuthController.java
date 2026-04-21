@@ -100,6 +100,17 @@ public class TelegramAuthController {
 
         HttpSession oldSession = request.getSession(false);
         if (oldSession != null) {
+            Object oldCtx = oldSession.getAttribute(
+                    HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY);
+            if (oldCtx instanceof SecurityContext sc
+                    && sc.getAuthentication() != null
+                    && sc.getAuthentication().getPrincipal() instanceof DashboardUserDetails prev) {
+                Long prevBotUserId = prev.getBotUserId();
+                if (prevBotUserId != null && !prevBotUserId.equals(id)) {
+                    log.warn("Mini-App: смена principal в сессии prevBotUserId={} → newTgId={} (cross-user session reuse)",
+                            prevBotUserId, id);
+                }
+            }
             oldSession.invalidate();
         }
         request.getSession(true);
