@@ -3,6 +3,7 @@ package com.tcleaner.dashboard.auth.telegram;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.HexFormat;
@@ -29,8 +30,9 @@ public class TelegramMiniAppAuthVerifier {
         if (data.hash() == null || data.hash().isBlank()) {
             throw new TelegramAuthenticationException("Отсутствует hash");
         }
-        String expected = computeHash(data.toDataCheckString());
-        if (!constantTimeEquals(expected, data.hash())) {
+        byte[] expected = computeHash(data.toDataCheckString());
+        byte[] provided = decodeHexOrNull(data.hash());
+        if (provided == null || !MessageDigest.isEqual(expected, provided)) {
             throw new TelegramAuthenticationException("Невалидный hash — данные подделаны");
         }
         long now = clock.instant().getEpochSecond();
@@ -40,25 +42,21 @@ public class TelegramMiniAppAuthVerifier {
         }
     }
 
-    private String computeHash(String dataCheckString) {
+    private byte[] computeHash(String dataCheckString) {
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
             mac.init(new SecretKeySpec(secretKey, "HmacSHA256"));
-            byte[] raw = mac.doFinal(dataCheckString.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(raw);
+            return mac.doFinal(dataCheckString.getBytes(StandardCharsets.UTF_8));
         } catch (Exception e) {
             throw new IllegalStateException("HmacSHA256 unavailable", e);
         }
     }
 
-    private static boolean constantTimeEquals(String a, String b) {
-        if (a.length() != b.length()) {
-            return false;
+    private static byte[] decodeHexOrNull(String hex) {
+        try {
+            return HexFormat.of().parseHex(hex);
+        } catch (IllegalArgumentException e) {
+            return null;
         }
-        int diff = 0;
-        for (int i = 0; i < a.length(); i++) {
-            diff |= a.charAt(i) ^ b.charAt(i);
-        }
-        return diff == 0;
     }
 }

@@ -181,15 +181,15 @@ class QueueConsumer:
         if self.redis_client:
             try:
                 await self.redis_client.sadd("staging:jobs", task_id)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"_track_staging_job failed ({task_id}): {e}")
 
     async def _untrack_staging_job(self, task_id: str) -> None:
         if self.redis_client:
             try:
                 await self.redis_client.srem("staging:jobs", task_id)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"_untrack_staging_job failed ({task_id}): {e}")
 
     async def _store_staging_payload(
         self, task_id: str, job_json: str, staging_queue: str
@@ -201,8 +201,8 @@ class QueueConsumer:
             await self.redis_client.setex(
                 f"staging:meta:{task_id}", JOB_MARKER_TTL, meta
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"_store_staging_payload failed ({task_id}): {e}")
 
     async def _remove_from_staging(self, task_id: str) -> None:
         if not self.redis_client:
@@ -247,81 +247,71 @@ class QueueConsumer:
             logger.error(f"Failed to mark job as processing: {e}")
             return False
 
-    async def mark_job_completed(self, task_id: str) -> bool:
+    async def _finalize_job(self, task_id: str, terminal_key: str, terminal_value: str) -> bool:
+        """Общий terminal-transition для mark_job_completed/failed.
+
+        Атомарный guard: SET terminal_key NX — только один воркер из конкурентных retry
+        пройдёт дальше. Затем MULTI/EXEC делает cleanup: delete processing, srem
+        staging:jobs, опционально lrem(queue, payload), delete staging:meta. SET NX
+        одновременно и претендует на финализацию, и предотвращает повтор —
+        EXISTS+pipeline был TOCTOU, два retry могли оба пройти check.
+        Возвращает False при уже-финализированном job или ошибке Redis.
+        """
         if not self.redis_client:
             return False
-
         try:
-            processing_key = f"job:processing:{task_id}"
-            completed_key = f"job:completed:{task_id}"
+            claimed = await self.redis_client.set(
+                terminal_key, terminal_value, nx=True, ex=JOB_MARKER_TTL,
+            )
+            if not claimed:
+                logger.debug(f"_finalize_job: {task_id} уже финализирован, пропускаем")
+                return False
 
-            # Resolve staging metadata before pipeline (needs a GET)
             raw = await self.redis_client.get(f"staging:meta:{task_id}")
 
-            # Batch the 4 write operations into one pipeline (4 RTT → 1 RTT)
-            # transaction=True (MULTI/EXEC) — явно указано, чтобы не зависеть от
-            # дефолта redis-py: частичный fail в середине оставил бы job
-            # в несогласованном состоянии (delete processing выполнено, но staging
-            # ещё числит job → recover_staging_jobs перезапустит уже завершённую).
+            # transaction=True — частичный fail оставил бы job в несогласованном
+            # состоянии (processing удалён, staging ещё числит → перезапуск завершённой).
             pipe = self.redis_client.pipeline(transaction=True)
-            pipe.delete(processing_key)
-            pipe.setex(completed_key, JOB_MARKER_TTL, str(datetime.now().isoformat()))
+            pipe.delete(f"job:processing:{task_id}")
             pipe.srem("staging:jobs", task_id)
             if raw:
                 try:
                     meta = json.loads(raw)
                     pipe.lrem(meta["queue"], 1, meta["payload"])
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        f"_finalize_job: malformed staging:meta:{task_id}, lrem пропущен: {e}"
+                    )
             pipe.delete(f"staging:meta:{task_id}")
             await pipe.execute()
-
-            logger.debug(f"Marked job completed: {task_id}")
             return True
-
         except Exception as e:
-            logger.error(f"Failed to mark job completed: {e}")
+            logger.error(f"_finalize_job failed for {task_id}: {e}")
             return False
+
+    async def mark_job_completed(self, task_id: str) -> bool:
+        ok = await self._finalize_job(
+            task_id,
+            terminal_key=f"job:completed:{task_id}",
+            terminal_value=str(datetime.now().isoformat()),
+        )
+        if ok:
+            logger.debug(f"Marked job completed: {task_id}")
+        return ok
 
     async def mark_job_failed(self, task_id: str, error: str) -> bool:
-        if not self.redis_client:
-            return False
-
-        try:
-            processing_key = f"job:processing:{task_id}"
-            failed_key = f"job:failed:{task_id}"
-
-            raw = await self.redis_client.get(f"staging:meta:{task_id}")
-
-            pipe = self.redis_client.pipeline(transaction=True)
-            pipe.delete(processing_key)
-            pipe.setex(
-                failed_key,
-                JOB_MARKER_TTL,
-                json.dumps({
-                    "error": error,
-                    "timestamp": datetime.now().isoformat()
-                })
-            )
-            pipe.srem("staging:jobs", task_id)
-            if raw:
-                try:
-                    meta = json.loads(raw)
-                    pipe.lrem(meta["queue"], 1, meta["payload"])
-                except Exception:
-                    pass
-            pipe.delete(f"staging:meta:{task_id}")
-            await pipe.execute()
-
+        ok = await self._finalize_job(
+            task_id,
+            terminal_key=f"job:failed:{task_id}",
+            terminal_value=json.dumps({
+                "error": error,
+                "timestamp": datetime.now().isoformat(),
+            }),
+        )
+        if ok:
             logger.debug(f"Marked job failed: {task_id}")
-
             await self._publish_failed_event(task_id, error)
-
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to mark job failed: {e}")
-            return False
+        return ok
 
     async def _publish_failed_event(self, task_id: str, error: str) -> None:
         """XADD export.failed в stats:events. Ошибки здесь не должны ронять основной flow."""
@@ -364,16 +354,16 @@ class QueueConsumer:
                     try:
                         job_data = json.loads(item)
                         jobs.append(ExportRequest(**job_data))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Skipping malformed express item: {e}")
             if main_limit > 0:
                 main_items = await self.redis_client.lrange(self.queue_name, 0, main_limit - 1)
                 for item in main_items:
                     try:
                         job_data = json.loads(item)
                         jobs.append(ExportRequest(**job_data))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Skipping malformed main item: {e}")
 
             return {"jobs": jobs, "total_count": total_count}
 

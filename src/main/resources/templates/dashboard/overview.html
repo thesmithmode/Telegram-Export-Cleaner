@@ -56,6 +56,62 @@
     <div th:replace="~{dashboard/fragments/chart-block :: chart(
             id='chart-top-chats', title=#{overview.chart.topChats}, height=260)}"></div>
 
+    <!-- Кэш сервера (только на ADMIN-странице, URL-guard в security config) -->
+    <section class="cache-panel" id="cache-panel" aria-labelledby="cache-panel-heading">
+        <h2 id="cache-panel-heading">Кэш сервера</h2>
+        <div class="cache-panel__status" data-cache-status hidden>
+            <em data-cache-status-msg>Снапшот ещё не опубликован worker'ом.</em>
+        </div>
+        <div class="cache-panel__kpis">
+            <div class="kpi" id="kpi-cache-usage">
+                <div class="kpi__label">Использовано</div>
+                <div class="kpi__value" data-cache-kpi="usage">—</div>
+                <div class="kpi__meta" data-cache-kpi-meta="usage"></div>
+                <div class="progress" role="progressbar"
+                     aria-label="Заполненность кэша"
+                     aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"
+                     data-cache-progress>
+                    <div class="progress__bar" data-cache-bar></div>
+                </div>
+            </div>
+            <div class="kpi info" id="kpi-cache-chats">
+                <div class="kpi__label">Чатов в кэше</div>
+                <div class="kpi__value" data-cache-kpi="chats">—</div>
+            </div>
+            <div class="kpi info" id="kpi-cache-messages">
+                <div class="kpi__label">Сообщений всего</div>
+                <div class="kpi__value" data-cache-kpi="messages">—</div>
+            </div>
+            <div class="kpi warn" id="kpi-cache-generated">
+                <div class="kpi__label">Обновлено</div>
+                <div class="kpi__value" data-cache-kpi="generated">—</div>
+            </div>
+        </div>
+        <div class="cache-panel__charts">
+            <div th:replace="~{dashboard/fragments/chart-block :: chart(
+                    id='chart-cache-heatmap', title='LRU-температура (hot/warm/cold)', height=220)}"></div>
+            <div th:replace="~{dashboard/fragments/chart-block :: chart(
+                    id='chart-cache-types', title='Сегментация по типу чата', height=220)}"></div>
+        </div>
+        <div class="cache-panel__table">
+            <h3>Топ чатов по размеру</h3>
+            <table class="table" id="table-cache-top" data-cache-top>
+                <thead>
+                    <tr>
+                        <th scope="col">#</th>
+                        <th scope="col">Чат</th>
+                        <th scope="col">Тип</th>
+                        <th scope="col">Сообщений</th>
+                        <th scope="col">Размер</th>
+                        <th scope="col">% кэша</th>
+                        <th scope="col">Last access</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </section>
+
     <script th:src="@{/dashboard/js/pages/overview.js}" defer></script>
 </div>
 

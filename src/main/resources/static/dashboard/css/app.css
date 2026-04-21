@@ -563,3 +563,21 @@ code, kbd {
     .period-filter { gap: var(--tec-space-1); }
     .period-filter__btn { padding: 6px 10px; font-size: var(--tec-fs-sm); }
 }
+
+/* ─── Cache admin panel (ADMIN overview only) ────────────────────── */
+.cache-panel { margin-top: var(--tec-space-4); display: flex; flex-direction: column; gap: var(--tec-space-3); }
+.cache-panel h2 { font-size: var(--tec-fs-lg); margin: 0; }
+.cache-panel__status { padding: 10px 14px; border: 1px dashed var(--tec-border); border-radius: var(--tec-radius); background: var(--tec-surface); }
+.cache-panel__kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--tec-space-2); }
+.cache-panel__charts { display: grid; grid-template-columns: 1fr 1fr; gap: var(--tec-space-2); }
+@media (max-width: 768px) { .cache-panel__charts { grid-template-columns: 1fr; } }
+.cache-panel__table { overflow-x: auto; border: 1px solid var(--tec-border); border-radius: var(--tec-radius); background: var(--tec-surface); }
+.cache-panel__table h3 { margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--tec-border); font-size: var(--tec-fs-body); }
+.cache-panel__table table { width: 100%; border-collapse: collapse; }
+.cache-panel__table th, .cache-panel__table td { padding: 8px 12px; border-bottom: 1px solid var(--tec-border); text-align: left; font-size: var(--tec-fs-sm); }
+.cache-panel__table th { background: var(--tec-surface-2, transparent); font-weight: 600; }
+
+.progress { margin-top: 8px; height: 6px; border-radius: 4px; background: var(--tec-border); overflow: hidden; }
+.progress__bar { height: 100%; width: 0; background: var(--tec-chip-success-fg, #2b8a3e); transition: width 0.3s ease; }
+.progress__bar[data-level="warn"] { background: var(--tec-chip-warn-fg, #b7791f); }
+.progress__bar[data-level="danger"] { background: var(--tec-chip-danger-fg, #d64545); }

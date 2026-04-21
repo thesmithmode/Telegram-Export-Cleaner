@@ -74,13 +74,10 @@ jobs:
             tests/test_queue_consumer.py \
             tests/test_pyrogram_client.py \
             tests/test_java_client.py \
-            -v --cov=. --cov-report=xml
-
-      - name: Upload coverage reports
-        uses: codecov/codecov-action@v4
-        with:
-          files: ./export-worker/coverage.xml
-          fail_ci_if_error: false
+            tests/test_coverage_gaps.py \
+            tests/test_coverage_gaps2.py \
+            tests/test_coverage_gaps3.py \
+            -v --cov=. --cov-report=term-missing --cov-fail-under=90
 
   # ─── Python Integration Tests (с Redis и mock Java) ──────────────────────────
   python-integration-tests:

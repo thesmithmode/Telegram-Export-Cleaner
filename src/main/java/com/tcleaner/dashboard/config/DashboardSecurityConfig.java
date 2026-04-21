@@ -49,7 +49,8 @@ public class DashboardSecurityConfig {
                     "/dashboard/api/stats/users",
                     "/dashboard/api/stats/chats",
                     "/dashboard/api/stats/timeseries",
-                    "/dashboard/api/stats/status-breakdown").hasRole("ADMIN")
+                    "/dashboard/api/stats/status-breakdown",
+                    "/dashboard/api/admin/**").hasRole("ADMIN")
                 // USER может видеть свои данные; IDOR-контроль — в BotUserAccessPolicy, не здесь
                 .requestMatchers(
                     "/dashboard/api/stats/overview",

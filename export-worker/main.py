@@ -25,6 +25,7 @@ from queue_consumer import QueueConsumer, create_queue_consumer
 from java_client import JavaBotClient, ProgressTracker, create_java_client
 from message_cache import MessageCache
 from models import ExportRequest, ExportedMessage, SendResponsePayload
+from cache_stats import build_snapshot, publish_snapshot
 
 # Setup logging
 logging.basicConfig(
@@ -46,6 +47,7 @@ class ExportWorker:
         self.running = False
         self.jobs_processed = 0
         self.jobs_failed = 0
+        self._cache_stats_task: Optional[asyncio.Task] = None
 
     async def _flush_batch_and_check_cancel(
         self,
@@ -87,6 +89,21 @@ class ExportWorker:
         except Exception:
             return False
 
+    async def _bail_if_cancelled_after_counting(self, job: ExportRequest) -> bool:
+        """Cancel-check между tracker.counting() и get_messages_count.
+
+        Count-запрос к Telegram может занять до 20 секунд (FloodWait) — за это окно
+        пользователь успевает нажать "Отменить". Проверяем до входа в медленный
+        API-вызов. Возвращает True если отменено (caller должен вернуть None).
+        """
+        if not await self.is_cancelled(job.task_id):
+            return False
+        logger.info(
+            f"🛑 Export {job.task_id} отменён (после counting, перед get_messages_count)"
+        )
+        await self.clear_active_export(job.user_id)
+        return True
+
     # TTL = 2×порог: один пропущенный heartbeat не ломает observability.
     _HEARTBEAT_TTL_SECONDS: int = 120
 
@@ -123,22 +140,22 @@ class ExportWorker:
         if self.control_redis:
             try:
                 await self.control_redis.delete(f"active_export:{user_id}")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"clear_active_export failed (user={user_id}): {e}")
 
     async def set_active_processing_job(self, task_id: str) -> None:
         if self.control_redis:
             try:
                 await self.control_redis.set("active_processing_job", task_id, ex=3600)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"set_active_processing_job failed (task={task_id}): {e}")
 
     async def clear_active_processing_job(self) -> None:
         if self.control_redis:
             try:
                 await self.control_redis.delete("active_processing_job")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"clear_active_processing_job failed: {e}")
 
     def _create_tracker(self, job: ExportRequest,
                         topic_name: Optional[str] = None) -> Optional[ProgressTracker]:
@@ -246,8 +263,8 @@ class ExportWorker:
                     await self.control_redis.set(
                         f"active_export:{job.user_id}", job.task_id, ex=3600
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"active_export refresh failed (user={job.user_id}): {e}")
 
             # Проверяем отмену сразу при старте — задача могла быть отменена пока ждала в очереди
             if await self.is_cancelled(job.task_id):
@@ -611,6 +628,10 @@ class ExportWorker:
         # Получаем total для прогресса (запрашиваем у Telegram для всего диапазона)
         from_dt = datetime.fromisoformat(from_date_str + "T00:00:00+00:00")
         to_dt = datetime.fromisoformat(to_date_str + "T23:59:59+00:00")
+        if tracker:
+            await tracker.counting()
+        if await self._bail_if_cancelled_after_counting(job):
+            return None
         total = await self.telegram_client.get_messages_count(
             job.chat_id, from_dt, to_dt, topic_id=job.topic_id
         )
@@ -716,6 +737,10 @@ class ExportWorker:
             await tracker.start()
 
         # Получаем total для прогресс-репортинга
+        if tracker:
+            await tracker.counting()
+        if await self._bail_if_cancelled_after_counting(job):
+            return None
         total = await self.telegram_client.get_messages_count(job.chat_id, topic_id=job.topic_id)
         if job.limit and job.limit > 0 and (total is None or job.limit < total):
             total = job.limit
@@ -891,18 +916,26 @@ class ExportWorker:
             except ValueError:
                 pass
 
-        # Получаем total ДО start(), чтобы передать в start(total=total).
-        # Это позволяет сразу показать progress bar с реальным total вместо
-        # двух API calls (start→spinner, set_total→0% bar).
+        # Сначала start() без total, затем counting() → получение total → set_total().
+        # Раньше total брали ДО start() ради одного API call, но это создавало
+        # длинное окно тишины: worker уходил в count-запрос (возможный FloodWait 20с)
+        # не отправив пользователю ни одного сообщения.
+        tracker = self._create_tracker(job, topic_name)
+        if tracker:
+            await tracker.start()
+            await tracker.counting()
+
+        if await self._bail_if_cancelled_after_counting(job):
+            return None
+
         total = await self.telegram_client.get_messages_count(
             job.chat_id, from_date, to_date, topic_id=job.topic_id
         )
         if job.limit and job.limit > 0 and (total is None or job.limit < total):
             total = job.limit
 
-        tracker = self._create_tracker(job, topic_name)
         if tracker:
-            await tracker.start(total=total)
+            await tracker.set_total(total)
 
         use_cache = bool(self.message_cache and self.message_cache.enabled)
         batch: list[ExportedMessage] = []
@@ -1022,6 +1055,9 @@ class ExportWorker:
         self.running = True
         logger.info("🔄 Worker ready, waiting for jobs...")
 
+        if self.message_cache and self.message_cache.enabled and self.control_redis:
+            self._cache_stats_task = asyncio.create_task(self._cache_stats_loop())
+
         try:
             while self.running:
                 try:
@@ -1050,10 +1086,35 @@ class ExportWorker:
         finally:
             await self.cleanup()
 
+    async def _cache_stats_loop(self) -> None:
+        """Периодическая публикация снапшота кэша для админ-дашборда."""
+        interval = max(10, int(settings.CACHE_STATS_INTERVAL_SECONDS))
+        top_n = max(1, int(settings.CACHE_STATS_TOP_N))
+        while self.running:
+            try:
+                snap = await build_snapshot(self.message_cache, top_n=top_n)
+                await publish_snapshot(self.control_redis, snap)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.debug("cache_stats_loop iteration failed: %s", e)
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                raise
+
     async def cleanup(self):
         logger.info("🛑 Shutting down worker...")
 
         self.running = False
+
+        if self._cache_stats_task:
+            self._cache_stats_task.cancel()
+            try:
+                await self._cache_stats_task
+            except asyncio.CancelledError:
+                pass
+            self._cache_stats_task = None
 
         if self.telegram_client:
             await self.telegram_client.disconnect()
@@ -1077,24 +1138,20 @@ class ExportWorker:
         logger.info(f"Received signal {signum}")
         self.running = False
 
-async def main():
+async def main():  # pragma: no cover
     worker = ExportWorker()
 
-    # Setup asyncio-compatible signal handlers
-    try:
-        loop = asyncio.get_running_loop()
+    # Graceful shutdown на SIGTERM/SIGINT (Docker stop, Ctrl+C).
+    # Прод — Linux-контейнер, поэтому NotImplementedError-ветка для Windows
+    # не нужна: add_signal_handler работает на всех поддерживаемых платформах.
+    loop = asyncio.get_running_loop()
 
-        def _on_signal():
-            logger.info("Shutdown signal received")
-            worker.running = False
+    def _on_signal():
+        logger.info("Shutdown signal received")
+        worker.running = False
 
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, _on_signal)
-    except NotImplementedError:
-        # Windows doesn't support add_signal_handler
-        # Fall back to synchronous handler
-        signal.signal(signal.SIGTERM, worker.handle_signal)
-        signal.signal(signal.SIGINT, worker.handle_signal)
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, _on_signal)
 
     try:
         await worker.run()
@@ -1106,5 +1163,5 @@ async def main():
         logger.error(f"Fatal error: {e}", exc_info=True)
         sys.exit(1)
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     asyncio.run(main())

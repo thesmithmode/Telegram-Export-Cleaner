@@ -388,11 +388,14 @@ class JavaBotClient:
         message_count,
         total=None,
         started=False,
+        counting=False,
         progress_message_id=None,
         eta_text: Optional[str] = None,
         topic_name: Optional[str] = None,
     ):
-        if total is not None:
+        if counting:
+            text = "🔢 Определяю количество сообщений..."
+        elif total is not None:
             # total может быть 0 (Telegram ещё не посчитал) — показываем 0% вместо спиннера.
             # "N из M" вместо "N/M" чтобы Telegram не превращал в ссылку на телефон.
             pct = min(message_count * 100 // total, 100) if total > 0 else 0
@@ -479,9 +482,20 @@ class ProgressTracker:
         )
 
     async def set_total(self, total):
-        # total=0 означает что Telegram не смог подсчитать — трактуем как неизвестный total.
-        # Иначе прогресс-бар навсегда застрянет на "0 из 0" пока воркер качает сообщения.
+        # total=0/None — Telegram не смог подсчитать. Чтобы не зависнуть на
+        # "🔢 Определяю количество сообщений..." на всё время экспорта, переключаем
+        # на started-сообщение ("⏳ Экспорт начался...") — пользователь видит, что
+        # воркер не застрял, а дальше track() будет слать "📊 Экспортировано N...".
         if not total:
+            if self._message_id:
+                await self._client.send_progress_update(
+                    self._user_chat_id,
+                    self._task_id,
+                    message_count=self._baseline_count,
+                    started=True,
+                    progress_message_id=self._message_id,
+                    topic_name=self._topic_name,
+                )
             return
         self._total = total
         if self._message_id:
@@ -560,6 +574,21 @@ class ProgressTracker:
         )
         if mid:
             self._message_id = mid
+
+    async def counting(self) -> None:
+        # Показываем пользователю что worker запрашивает total у Telegram.
+        # Без этого метода видно "Экспорт начался" и длинная тишина пока
+        # messages.GetHistory (count-only) ждёт FloodWait до 20с.
+        if not self._message_id:
+            return
+        await self._client.send_progress_update(
+            self._user_chat_id,
+            self._task_id,
+            message_count=0,
+            counting=True,
+            progress_message_id=self._message_id,
+            topic_name=self._topic_name,
+        )
 
     async def on_floodwait(self, wait_seconds: int) -> None:
         if not self._message_id:

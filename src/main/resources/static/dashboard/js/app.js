@@ -318,7 +318,7 @@
                 labels,
                 datasets: [{
                     data: labels.map(k => breakdown[k]),
-                    backgroundColor: labels.map(k => STATUS_COLORS[k] || "#888"),
+                    backgroundColor: labels.map(k => STATUS_COLORS[String(k).toLowerCase()] || "#888"),
                 }],
             },
             options: { responsive: true, maintainAspectRatio: false },

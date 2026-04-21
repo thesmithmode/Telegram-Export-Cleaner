@@ -60,6 +60,7 @@ JSESSIONID, form-login); `/stats/users` — ADMIN-only.
 | GET | `/dashboard/api/stats/timeseries` | auth (USER→свой) | для Chart.js |
 | GET | `/dashboard/api/stats/status-breakdown` | auth | `{COMPLETED: n, FAILED: n, …}` |
 | GET | `/dashboard/api/stats/events` | auth (USER→свой) | raw-лог последних N экспортов |
+| GET | `/dashboard/api/admin/cache-metrics` | **ADMIN only** | заполненность SQLite-кэша worker'а: totals, top-50 чатов, heatmap LRU, сегментация по chat_type |
 
 **Query-параметры (общие):** `period=day|week|month|year|all|custom`, `from=YYYY-MM-DD`,
 `to=YYYY-MM-DD`, `userId=<botUserId>`.

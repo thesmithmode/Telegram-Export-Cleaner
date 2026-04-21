@@ -19,6 +19,7 @@ import java.io.StringWriter;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.*;
 
 class ApiKeyFilterTest {
@@ -111,14 +112,13 @@ class ApiKeyFilterTest {
     }
 
     @Test
-    void testNoKeyConfiguredAllowsAll() throws ServletException, IOException {
-        filter = new ApiKeyFilter("");
-        when(request.getRequestURI()).thenReturn("/api/convert");
-
-        filter.doFilterInternal(request, response, filterChain);
-
-        verify(filterChain).doFilter(request, response);
-        verify(response, never()).setStatus(anyInt());
+    void testEmptyKeyFailsFast() {
+        // SECURITY: fail-open при пустом ключе → бан. Конструктор должен бросить.
+        assertThatThrownBy(() -> new ApiKeyFilter(""))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("JAVA_API_KEY");
+        assertThatThrownBy(() -> new ApiKeyFilter(null))
+                .isInstanceOf(IllegalStateException.class);
     }
 
     // ================================================================

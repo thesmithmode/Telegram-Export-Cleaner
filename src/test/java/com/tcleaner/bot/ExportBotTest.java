@@ -224,11 +224,12 @@ class ExportBotTest {
     class CommandsAndSessions {
 
         @Test
-        @DisplayName("/start отправляет HELP_TEXT с кнопкой Dashboard")
-        void testStartSendsDashboardButton() {
+        @DisplayName("/start отправляет HELP_TEXT без inline-кнопки (Dashboard в chat menu)")
+        void testStartSendsHelpText() {
             bot.consume(createTextMessageUpdate(123L, "/start"));
 
-            verify(messengerMock).sendWithKeyboard(eq(123L), contains("Этот бот экспортирует"), any(InlineKeyboardMarkup.class));
+            verify(messengerMock).send(eq(123L), contains("Этот бот экспортирует"));
+            verify(messengerMock, never()).sendWithKeyboard(eq(123L), contains("Этот бот экспортирует"), any(InlineKeyboardMarkup.class));
         }
 
         @Test

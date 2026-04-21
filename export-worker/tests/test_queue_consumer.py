@@ -171,12 +171,14 @@ class TestQueueConsumerJobManagement:
 
             with patch('queue_consumer.redis.from_url', new_callable=AsyncMock) as mock_redis:
                 mock_client = AsyncMock()
+                # Atomic claim: SET NX вернул True → мы выиграли финализацию
+                mock_client.set = AsyncMock(return_value=True)
                 # No staging meta → lrem path skipped
                 mock_client.get = AsyncMock(return_value=None)
 
                 # Pipeline mock: sync pipeline(), sync queueing, async execute()
                 mock_pipe = MagicMock()
-                mock_pipe.execute = AsyncMock(return_value=[1, 1, 1, 1])
+                mock_pipe.execute = AsyncMock(return_value=[1, 1, 1])
                 mock_client.pipeline = MagicMock(return_value=mock_pipe)
 
                 mock_redis.return_value = mock_client
@@ -187,15 +189,17 @@ class TestQueueConsumerJobManagement:
                 result = await consumer.mark_job_completed("test_123")
 
                 assert result is True
-                # Regression: pipeline must be created with explicit transaction=True
+                # Regression S2: pipeline с transaction=True — иначе partial-fail
+                # оставит job в несогласованном состоянии.
                 mock_client.pipeline.assert_called_once_with(transaction=True)
+                # Атомарный SET NX на completed_key сделан ДО pipeline
+                mock_client.set.assert_awaited_once()
+                set_call = mock_client.set.call_args
+                assert set_call.args[0] == "job:completed:test_123"
+                assert set_call.kwargs.get("nx") is True
+                assert set_call.kwargs.get("ex") is not None
                 # delete queued for processing key
                 mock_pipe.delete.assert_any_call("job:processing:test_123")
-                # setex queued for completed key
-                assert any(
-                    call.args[0] == "job:completed:test_123"
-                    for call in mock_pipe.setex.call_args_list
-                )
                 # Pipeline actually executed (otherwise nothing happens on Redis)
                 mock_pipe.execute.assert_awaited_once()
 
@@ -209,10 +213,11 @@ class TestQueueConsumerJobManagement:
 
             with patch('queue_consumer.redis.from_url', new_callable=AsyncMock) as mock_redis:
                 mock_client = AsyncMock()
+                mock_client.set = AsyncMock(return_value=True)
                 mock_client.get = AsyncMock(return_value=None)
 
                 mock_pipe = MagicMock()
-                mock_pipe.execute = AsyncMock(return_value=[1, 1, 1, 1])
+                mock_pipe.execute = AsyncMock(return_value=[1, 1, 1])
                 mock_client.pipeline = MagicMock(return_value=mock_pipe)
 
                 mock_redis.return_value = mock_client
@@ -225,12 +230,12 @@ class TestQueueConsumerJobManagement:
                 assert result is True
                 mock_client.pipeline.assert_called_once_with(transaction=True)
                 mock_pipe.delete.assert_any_call("job:processing:test_123")
-                # Verify error is stored as JSON via pipeline setex
-                assert any(
-                    call.args[0] == "job:failed:test_123"
-                    for call in mock_pipe.setex.call_args_list
-                )
-                json_value = json.loads(mock_pipe.setex.call_args_list[0].args[2])
+                # Ошибка записана в terminal_key через атомарный SET NX
+                mock_client.set.assert_awaited_once()
+                set_call = mock_client.set.call_args
+                assert set_call.args[0] == "job:failed:test_123"
+                assert set_call.kwargs.get("nx") is True
+                json_value = json.loads(set_call.args[1])
                 assert json_value['error'] == "Network timeout"
                 assert 'timestamp' in json_value
                 mock_pipe.execute.assert_awaited_once()
@@ -643,6 +648,7 @@ class TestStagingDurability:
             "queue": "telegram_export_processing"
         })
         mock_client = AsyncMock()
+        mock_client.set = AsyncMock(return_value=True)
         mock_client.get = AsyncMock(return_value=staging_meta)
 
         # Pipeline mock: sync queueing, async execute
@@ -682,6 +688,7 @@ class TestStagingDurability:
             "queue": "telegram_export_processing"
         })
         mock_client = AsyncMock()
+        mock_client.set = AsyncMock(return_value=True)
         mock_client.get = AsyncMock(return_value=staging_meta)
 
         mock_pipe = MagicMock()
@@ -705,6 +712,7 @@ class TestStagingDurability:
             "queue": "telegram_export_processing"
         })
         mock_client = AsyncMock()
+        mock_client.set = AsyncMock(return_value=True)
         mock_client.get = AsyncMock(return_value=staging_meta)
 
         mock_pipe = MagicMock()

@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     CACHE_DB_PATH: str = "/data/cache/messages.db"
     CACHE_MAX_DISK_GB: float = 25.0               # ~400 full chats of 250k msgs
     CACHE_MAX_MESSAGES_PER_CHAT: int = 100_000
+    CACHE_STATS_INTERVAL_SECONDS: int = 60         # admin dashboard snapshot period
+    CACHE_STATS_TOP_N: int = 50                    # chats per snapshot
 
     # Logging
     LOG_LEVEL: str = "INFO"

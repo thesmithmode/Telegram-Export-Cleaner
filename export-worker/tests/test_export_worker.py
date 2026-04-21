@@ -624,12 +624,16 @@ class TestExportWorkerProgressReporting:
 
         await worker.process_job(job)
 
-        # Check started notification
+        # Check started notification: start() без total, затем counting(), затем set_total()
         calls = worker.java_client.send_progress_update.call_args_list
-        assert len(calls) >= 1
+        assert len(calls) >= 3
         first_call = calls[0]
         assert first_call.kwargs["started"] is True
-        assert first_call.kwargs["total"] == 5000
+        assert first_call.kwargs.get("total") is None
+        second_call = calls[1]
+        assert second_call.kwargs.get("counting") is True
+        third_call = calls[2]
+        assert third_call.kwargs["total"] == 5000
 
     @pytest.mark.asyncio
     async def test_fetch_all_sends_5pct_milestones(self, worker):
@@ -654,9 +658,9 @@ class TestExportWorkerProgressReporting:
 
         await worker.process_job(job)
 
-        # started (0) + 19 milestones (5, 10..95) + 1 finalize (100)
+        # started + counting + set_total + 19 milestones (5%..95%) + finalize
         progress_calls = worker.java_client.send_progress_update.call_args_list
-        assert len(progress_calls) == 21  # 1 started + 19 milestones + 1 finalize
+        assert len(progress_calls) == 23  # 1 start + 1 counting + 1 set_total + 19 milestones + 1 finalize
 
     @pytest.mark.asyncio
     async def test_process_job_exception_notifies_user(self, worker):
@@ -1223,8 +1227,11 @@ class TestExportWorkerTopicSupport:
         worker.message_cache.mark_date_range_checked = AsyncMock()
         worker.message_cache.count_messages = AsyncMock(return_value=0)
         worker.message_cache.count_messages_by_date = AsyncMock(return_value=0)
-        worker.message_cache.iter_messages = AsyncMock(return_value=[])
-        worker.message_cache.iter_messages_by_date = AsyncMock(return_value=[])
+        async def _empty_async_iter(*a, **kw):
+            if False:
+                yield
+        worker.message_cache.iter_messages = _empty_async_iter
+        worker.message_cache.iter_messages_by_date = _empty_async_iter
 
         job = ExportRequest(
             task_id="test_topic_cache",

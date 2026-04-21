@@ -938,6 +938,28 @@ class TestProgressTracker:
         assert second_call.kwargs["total"] == 42
         assert second_call.kwargs["progress_message_id"] == 777
 
+    async def test_set_total_none_fallback_to_started_message(self):
+        # REGRESSION: при total=None (Telegram не смог посчитать) раньше был silent
+        # return → пользователь застревал на "🔢 Определяю количество сообщений..."
+        # до конца экспорта. Теперь редактируем на started=True.
+        mock_java_client = AsyncMock()
+        mock_java_client.send_progress_update = AsyncMock(side_effect=[777, 777])
+
+        tracker = ProgressTracker(
+            client=mock_java_client,
+            user_chat_id=123,
+            task_id="task_1",
+        )
+
+        await tracker.start()
+        await tracker.set_total(None)
+
+        assert mock_java_client.send_progress_update.call_count == 2
+        second_call = mock_java_client.send_progress_update.call_args_list[1]
+        assert second_call.kwargs["started"] is True
+        assert second_call.kwargs.get("total") is None
+        assert second_call.kwargs["progress_message_id"] == 777
+
     async def test_send_progress_update_includes_topic_name(self):
         client, p = _make_client()
         try:
@@ -1011,6 +1033,40 @@ class TestProgressTracker:
 
         for call in mock_java_client.send_progress_update.call_args_list:
             assert call.kwargs.get("topic_name") is None
+
+    async def test_counting_noop_before_start(self):
+        # Без message_id (start не вызывался) — counting() не должен слать API call.
+        mock_java_client = AsyncMock()
+        mock_java_client.send_progress_update = AsyncMock()
+        tracker = ProgressTracker(mock_java_client, 123, "task_1")
+        await tracker.counting()
+        mock_java_client.send_progress_update.assert_not_called()
+
+    async def test_counting_edits_existing_message(self):
+        mock_java_client = AsyncMock()
+        mock_java_client.send_progress_update = AsyncMock(side_effect=[777, None])
+        tracker = ProgressTracker(mock_java_client, 123, "task_1", topic_name="T")
+        await tracker.start()
+        await tracker.counting()
+
+        second = mock_java_client.send_progress_update.call_args_list[1]
+        assert second.kwargs["counting"] is True
+        assert second.kwargs["progress_message_id"] == 777
+        assert second.kwargs["topic_name"] == "T"
+        assert second.kwargs["message_count"] == 0
+
+    async def test_send_progress_update_counting_flag_text(self):
+        client, p = _make_client()
+        try:
+            client._http_client.post = AsyncMock(return_value=MagicMock(status_code=200))
+            await client.send_progress_update(
+                user_chat_id=123, task_id="task_1",
+                message_count=0, counting=True, progress_message_id=777,
+            )
+            text = client._http_client.post.call_args[1]["data"]["text"]
+            assert "Определяю количество сообщений" in text
+        finally:
+            p.stop()
 
     async def test_create_progress_tracker_with_topic_name(self):
         client, p = _make_client()

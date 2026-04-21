@@ -1,6 +1,7 @@
 package com.tcleaner.dashboard.web;
 
 import com.tcleaner.dashboard.auth.DashboardUserDetails;
+import com.tcleaner.dashboard.dto.CacheMetricsDto;
 import com.tcleaner.dashboard.dto.ChatStatsRow;
 import com.tcleaner.dashboard.dto.EventRowDto;
 import com.tcleaner.dashboard.dto.MeDto;
@@ -9,6 +10,7 @@ import com.tcleaner.dashboard.dto.TimeSeriesPointDto;
 import com.tcleaner.dashboard.dto.UserDetailDto;
 import com.tcleaner.dashboard.dto.UserStatsRow;
 import com.tcleaner.dashboard.security.BotUserAccessPolicy;
+import com.tcleaner.dashboard.service.cache.CacheMetricsService;
 import com.tcleaner.dashboard.service.stats.PeriodResolver;
 import com.tcleaner.dashboard.service.stats.StatsPeriod;
 import com.tcleaner.dashboard.service.stats.StatsQueryService;
@@ -38,13 +40,23 @@ public class DashboardApiController {
     private final StatsQueryService statsQueryService;
     private final PeriodResolver periodResolver;
     private final BotUserAccessPolicy accessPolicy;
+    private final CacheMetricsService cacheMetricsService;
 
     public DashboardApiController(StatsQueryService statsQueryService,
                                   PeriodResolver periodResolver,
-                                  BotUserAccessPolicy accessPolicy) {
+                                  BotUserAccessPolicy accessPolicy,
+                                  CacheMetricsService cacheMetricsService) {
         this.statsQueryService = statsQueryService;
         this.periodResolver = periodResolver;
         this.accessPolicy = accessPolicy;
+        this.cacheMetricsService = cacheMetricsService;
+    }
+
+    // ─── /dashboard/api/admin/cache-metrics (ADMIN-only, URL-guard в security) ─
+
+    @GetMapping("/admin/cache-metrics")
+    public CacheMetricsDto cacheMetrics() {
+        return cacheMetricsService.get();
     }
 
     // ─── /dashboard/api/me ───────────────────────────────────────────────────

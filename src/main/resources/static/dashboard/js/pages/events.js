@@ -19,7 +19,7 @@
 
     function chip(status) {
         const cls = STATUS_CLASS[status] || "";
-        return `<span class="status-chip ${cls}">${status}</span>`;
+        return `<span class="status-chip ${cls}">${escapeHtml(String(status ?? ""))}</span>`;
     }
 
     function row(e) {

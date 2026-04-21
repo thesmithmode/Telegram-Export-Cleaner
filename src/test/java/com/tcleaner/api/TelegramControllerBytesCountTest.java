@@ -32,7 +32,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * StreamingResponseBody выполняется асинхронно — используем asyncDispatch.
  */
 @SpringBootTest
-@AutoConfigureMockMvc
+@AutoConfigureMockMvc(addFilters = false)
 @DisplayName("TelegramController — bytes counting & stats publish")
 class TelegramControllerBytesCountTest {
 

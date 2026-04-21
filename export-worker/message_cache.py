@@ -203,8 +203,8 @@ class MessageCache:
             # без ranges/meta (это ломало бы 3-path кэш при следующем запросе).
             try:
                 await self._db.rollback()
-            except Exception:
-                pass
+            except Exception as rb_exc:
+                logger.warning(f"rollback failed during store_messages: {rb_exc}")
             raise
 
         logger.debug(
@@ -329,7 +329,7 @@ class MessageCache:
 
         chat_id_int = int(chat_id)
         ts_from = int(self._date_str_to_timestamp(from_date))
-        ts_to   = int(self._date_str_to_timestamp(to_date)) + 86400
+        ts_to   = int(self._date_str_to_timestamp(to_date)) + 86400 - 1
         await self._touch(chat_id_int, topic_id)
 
         async with self._db.execute(
@@ -364,7 +364,7 @@ class MessageCache:
         if not self.enabled or self._db is None:
             return 0
         ts_from = int(self._date_str_to_timestamp(from_date))
-        ts_to   = int(self._date_str_to_timestamp(to_date)) + 86400
+        ts_to   = int(self._date_str_to_timestamp(to_date)) + 86400 - 1
         async with self._db.execute(
             "SELECT COUNT(*) FROM messages"
             " WHERE chat_id=? AND topic_id=? AND msg_ts BETWEEN ? AND ?",
@@ -564,8 +564,8 @@ class MessageCache:
         except Exception:
             try:
                 await self._db.rollback()
-            except Exception:
-                pass
+            except Exception as rb_exc:
+                logger.warning(f"rollback failed during evict: {rb_exc}")
             raise
 
         return evicted

@@ -16,10 +16,7 @@ from config import settings
 from json_converter import MessageConverter
 from models import ExportedMessage
 
-try:
-    import redis.asyncio as redis
-except ImportError:
-    redis = None  # type: ignore
+import redis.asyncio as redis
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +130,7 @@ class TelegramClient:
             )
 
         self.is_connected = False
-        self.redis_client: Optional[redis.Redis] = None  # type: ignore
+        self.redis_client: Optional[redis.Redis] = None
         logger.info(f"Pyrogram client initialized (session: {settings.SESSION_NAME})")
 
     async def connect(self) -> bool:
@@ -754,6 +751,18 @@ class TelegramClient:
             chat = await self.client.get_chat(chat_id)
             return (True, self._build_chat_info(chat), None)
 
+        except ChatAdminRequired:
+            logger.error(f"❌ Admin rights required for chat {chat_id}")
+            return (False, None, "ADMIN_REQUIRED")
+
+        except PeerFlood as e:
+            logger.error(f"❌ Account flood-restricted, cannot access chat {chat_id}: {e}")
+            return (False, None, "FLOOD_RESTRICTED")
+
+        except ChannelPrivate:
+            logger.error(f"❌ Channel {chat_id} is private")
+            return (False, None, "CHANNEL_PRIVATE")
+
         except (BadRequest, PeerIdInvalid) as e:
             error_str = str(e)
             logger.warning(
@@ -783,21 +792,9 @@ class TelegramClient:
             logger.error(f"ValueError accessing chat {chat_id}: {error_str}")
             return (False, None, "UNKNOWN")
 
-        except ChannelPrivate:
-            logger.error(f"❌ Channel {chat_id} is private")
-            return (False, None, "CHANNEL_PRIVATE")
-
-        except ChatAdminRequired:
-            logger.error(f"❌ Admin rights required for chat {chat_id}")
-            return (False, None, "ADMIN_REQUIRED")
-
         except (Unauthorized, UserDeactivated, AuthKeyUnregistered, SessionExpired) as e:
             logger.error(f"❌ Session/auth error for chat {chat_id}: {type(e).__name__}: {e}")
             return (False, None, "SESSION_INVALID")
-
-        except PeerFlood as e:
-            logger.error(f"❌ Account flood-restricted, cannot access chat {chat_id}: {e}")
-            return (False, None, "FLOOD_RESTRICTED")
 
         except Exception as e:
             logger.error(

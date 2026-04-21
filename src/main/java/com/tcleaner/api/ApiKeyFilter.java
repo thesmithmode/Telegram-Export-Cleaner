@@ -13,20 +13,21 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 
 @Component
 public class ApiKeyFilter extends OncePerRequestFilter {
 
     private static final Logger log = LoggerFactory.getLogger(ApiKeyFilter.class);
 
-    private final String expectedKey;
+    private final byte[] expectedKeyHash;
 
     public ApiKeyFilter(@Value("${api.key:}") String expectedKey) {
-        this.expectedKey = expectedKey;
         if (expectedKey == null || expectedKey.isEmpty()) {
-            log.warn("API KEY НЕ УСТАНОВЛЕН! Все запросы к /api/** проходят без аутентификации. "
-                    + "Установите JAVA_API_KEY в production.");
+            throw new IllegalStateException(
+                    "JAVA_API_KEY не установлен. Запуск без аутентификации /api/** запрещён.");
         }
+        this.expectedKeyHash = sha256(expectedKey);
     }
 
     @Override
@@ -35,21 +36,14 @@ public class ApiKeyFilter extends OncePerRequestFilter {
 
         String path = request.getRequestURI();
 
-        // Проверяем ключ только для API endpoints, кроме /api/health
         if (path.startsWith("/api/") && !path.equals("/api/health")) {
-            // Если ключ настроен в application.properties, проверяем его.
-            // Если не настроен — пропускаем (режим без аутентификации).
-            if (expectedKey != null && !expectedKey.isEmpty()) {
-                String providedKey = request.getHeader("X-API-Key");
-                if (!isKeyValid(providedKey)) {
-                    // Никогда не логируем сам ключ — это полезная нагрузка для атакующего
-                    // и попадает в log aggregation / SIEM. Логируем только факт попытки.
-                    log.warn("Попытка доступа к API с неверным ключом: path={}, header_present={}",
-                            path, providedKey != null);
-                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                    response.getWriter().write("Invalid API Key");
-                    return;
-                }
+            String providedKey = request.getHeader("X-API-Key");
+            if (!isKeyValid(providedKey)) {
+                log.warn("Попытка доступа к API с неверным ключом: path={}, header_present={}",
+                        path, providedKey != null);
+                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                response.getWriter().write("Invalid API Key");
+                return;
             }
         }
 
@@ -60,8 +54,17 @@ public class ApiKeyFilter extends OncePerRequestFilter {
         if (providedKey == null) {
             return false;
         }
-        byte[] expected = expectedKey.getBytes(StandardCharsets.UTF_8);
-        byte[] provided = providedKey.getBytes(StandardCharsets.UTF_8);
-        return MessageDigest.isEqual(expected, provided);
+        // Сравниваем SHA-256-хэши фиксированной длины — MessageDigest.isEqual короткозамыкается
+        // на разной длине входа, выдавая timing-оракул на длину настоящего ключа.
+        return MessageDigest.isEqual(expectedKeyHash, sha256(providedKey));
+    }
+
+    private static byte[] sha256(String value) {
+        try {
+            return MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 недоступен в JRE", e);
+        }
     }
 }

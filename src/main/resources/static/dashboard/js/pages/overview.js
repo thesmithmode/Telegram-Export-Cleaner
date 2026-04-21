@@ -72,5 +72,110 @@
         }
     }
 
-    onReady(load);
+    function renderCachePanel(data) {
+        const statusEl = document.querySelector("[data-cache-status]");
+        const msgEl = document.querySelector("[data-cache-status-msg]");
+        if (!data || !data.available) {
+            if (statusEl) statusEl.hidden = false;
+            if (msgEl && data?.message) msgEl.textContent = data.message;
+            return;
+        }
+        if (statusEl) statusEl.hidden = true;
+
+        const pctRaw = Number(data.pct) || 0;
+        const pct = Math.max(0, Math.min(100, pctRaw));
+
+        const setElementText = (selector, text) => {
+            const el = document.querySelector(selector);
+            if (el) el.textContent = text;
+        };
+
+        setElementText("[data-cache-kpi='usage']", pct.toFixed(1) + "%");
+        setElementText("[data-cache-kpi-meta='usage']",
+            formatBytes(data.usedBytes) + " / " + formatBytes(data.limitBytes));
+        setElementText("[data-cache-kpi='chats']", formatNumber(data.totalChats));
+        setElementText("[data-cache-kpi='messages']", formatNumber(data.totalMessages));
+
+        const bar = document.querySelector("[data-cache-bar]");
+        if (bar) {
+            bar.style.width = pct.toFixed(1) + "%";
+            bar.dataset.level = pct >= 90 ? "danger" : pct >= 70 ? "warn" : "ok";
+        }
+
+        const progress = document.querySelector("[data-cache-progress]");
+        if (progress) progress.setAttribute("aria-valuenow", String(Math.round(pct)));
+
+        const genEl = document.querySelector("[data-cache-kpi='generated']");
+        if (genEl && data.generatedAt) {
+            const ageSec = Math.max(0, Math.floor(Date.now() / 1000 - data.generatedAt));
+            genEl.textContent = ageSec < 90 ? ageSec + "s назад" : Math.floor(ageSec / 60) + "мин назад";
+        }
+
+        const heatmap = (data.heatmap || []).reduce((acc, h) => {
+            acc[h.bucket] = h.sizeBytes;
+            return acc;
+        }, {});
+        renderBarChart("chart-cache-heatmap", [
+            { label: "Hot (<7д)", value: heatmap.hot || 0 },
+            { label: "Warm (7-30д)", value: heatmap.warm || 0 },
+            { label: "Cold (>30д)", value: heatmap.cold || 0 },
+        ], {
+            labelFn: r => r.label, valueFn: r => r.value,
+            label: "bytes", color: "#b7791f", tickFn: v => formatBytes(v),
+        });
+
+        const segEntries = Object.entries(data.chatTypeSegmentation || {})
+            .map(([type, seg]) => ({
+                type,
+                sizeBytes: Number(seg && seg.sizeBytes) || 0,
+                chatCount: Number(seg && seg.chatCount) || 0,
+            }))
+            .sort((a, b) => b.sizeBytes - a.sizeBytes);
+        renderBarChart("chart-cache-types", segEntries, {
+            labelFn: r => r.type + " (" + r.chatCount + ")",
+            valueFn: r => r.sizeBytes,
+            label: "bytes", color: "#2b8a3e", tickFn: v => formatBytes(v),
+        });
+
+        const tbody = document.querySelector("#table-cache-top tbody");
+        if (tbody) {
+            while (tbody.firstChild) { tbody.removeChild(tbody.firstChild); }
+            (data.topChats || []).forEach((c, i) => {
+                const tr = document.createElement("tr");
+                const titleText = c.title
+                    ? (c.topicId ? c.title + " (топик " + c.topicId + ")" : c.title)
+                    : String(c.chatId);
+                const lastAccess = c.lastAccessed
+                    ? new Date(c.lastAccessed * 1000).toISOString().slice(0, 16).replace("T", " ")
+                    : "—";
+                const cells = [
+                    String(i + 1),
+                    titleText,
+                    c.chatType || "—",
+                    formatNumber(c.msgCount),
+                    formatBytes(c.sizeBytes),
+                    (Number(c.pct) || 0).toFixed(1) + "%",
+                    lastAccess,
+                ];
+                cells.forEach(v => {
+                    const td = document.createElement("td");
+                    td.textContent = v;
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            });
+        }
+    }
+
+    async function loadCachePanel() {
+        try {
+            const data = await fetchJson("/dashboard/api/admin/cache-metrics");
+            renderCachePanel(data);
+        } catch (e) {
+            console.error("cache-metrics load failed:", e);
+            renderCachePanel({ available: false, message: "Ошибка загрузки: " + (e.message || e) });
+        }
+    }
+
+    onReady(() => { load(); loadCachePanel(); });
 })();
