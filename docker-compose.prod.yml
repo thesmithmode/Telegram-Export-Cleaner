@@ -104,6 +104,8 @@ services:
       - REDIS_QUEUE_NAME=telegram_export
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_BOT_USERNAME=${TELEGRAM_BOT_USERNAME}
+      # Внутренний API ключ — ApiKeyFilter fail-fast без него.
+      - JAVA_API_KEY=${JAVA_API_KEY}
       # Dashboard SQLite
       - DASHBOARD_DB_PATH=${DASHBOARD_DB_PATH:-/data/stats/dashboard.db}
       # Dashboard auth (Telegram Login Widget)
@@ -153,6 +155,7 @@ services:
       - TELEGRAM_SESSION_STRING=${TELEGRAM_SESSION_STRING}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - JAVA_API_BASE_URL=http://java-bot:8080
+      - JAVA_API_KEY=${JAVA_API_KEY}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_DB=0

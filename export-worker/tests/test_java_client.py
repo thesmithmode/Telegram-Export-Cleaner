@@ -17,6 +17,7 @@ def _patch_settings(**overrides):
     mock.TELEGRAM_BOT_TOKEN = overrides.get("TELEGRAM_BOT_TOKEN", "test_bot_token")
     mock.RETRY_BASE_DELAY = overrides.get("RETRY_BASE_DELAY", 0.0)
     mock.RETRY_MAX_DELAY = overrides.get("RETRY_MAX_DELAY", 60.0)
+    mock.JAVA_API_KEY = overrides.get("JAVA_API_KEY", "")
     return patcher, mock
 
 def _make_client(**overrides):

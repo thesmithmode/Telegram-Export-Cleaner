@@ -193,6 +193,7 @@ jobs:
             TRAEFIK_DATA_PATH=${{ secrets.TRAEFIK_DATA_PATH }}
             HOST_DATA_PATH=${{ secrets.HOST_DATA_PATH }}
             TELEGRAM_BOT_USERNAME=${{ secrets.TELEGRAM_BOT_USERNAME }}
+            JAVA_API_KEY=${{ secrets.JAVA_API_KEY }}
             ENVEOF
 
             echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin

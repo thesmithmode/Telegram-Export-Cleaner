@@ -33,7 +33,12 @@ class JavaBotClient:
             write=300.0,
             connect=30.0
         )
-        self._http_client = httpx.AsyncClient(timeout=custom_timeout)
+        # X-API-Key проставляется на все запросы через default headers —
+        # java-bot ApiKeyFilter блокирует /api/** без него (кроме /api/health).
+        default_headers = {}
+        if settings.JAVA_API_KEY:
+            default_headers["X-API-Key"] = settings.JAVA_API_KEY
+        self._http_client = httpx.AsyncClient(timeout=custom_timeout, headers=default_headers)
         logger.info(f"Java API Client initialized (O(1) Memory, Timeout: {self.timeout}s)")
 
     async def send_response(self, payload: SendResponsePayload) -> bool:

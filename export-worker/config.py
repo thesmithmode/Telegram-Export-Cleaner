@@ -20,6 +20,8 @@ class Settings(BaseSettings):
 
     # Java Bot API
     JAVA_API_BASE_URL: str = "http://java-bot:8080"
+    # Внутренний API ключ (X-API-Key header). Должен совпадать с api.key у java-bot.
+    JAVA_API_KEY: str = ""
 
     # Telegram API (MTProto - for Pyrogram export)
     TELEGRAM_API_ID: int = 0
