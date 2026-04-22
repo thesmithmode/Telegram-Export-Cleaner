@@ -256,8 +256,10 @@ class ExportBotTest {
         void testStartSendsHelpText() {
             bot.consume(createTextMessageUpdate(123L, "/start"));
 
-            verify(messengerMock).send(eq(123L), contains("Этот бот экспортирует"));
-            verify(messengerMock, never()).sendWithKeyboard(eq(123L), contains("Этот бот экспортирует"), any(InlineKeyboardMarkup.class));
+            verify(messengerMock).sendWithKeyboard(
+                    eq(123L),
+                    contains("Этот бот экспортирует"),
+                    any(InlineKeyboardMarkup.class));
         }
 
         @Test
@@ -336,7 +338,7 @@ class ExportBotTest {
 
             verify(messengerMock).sendWithKeyboard(
                     eq(123L),
-                    contains("Please select your language"),
+                    contains("Please choose your language"),
                     any(InlineKeyboardMarkup.class));
             verify(messengerMock, never()).send(eq(123L), contains("Этот бот экспортирует"));
         }
@@ -351,7 +353,7 @@ class ExportBotTest {
 
             verify(userUpserterMock).setLanguage(eq(123L), eq("fa"));
             verify(messengerMock).editMessage(
-                    eq(123L), anyInt(), anyString(), isNull());
+                    eq(123L), anyInt(), anyString(), any(InlineKeyboardMarkup.class));
         }
 
         @Test
@@ -380,7 +382,7 @@ class ExportBotTest {
 
             verify(messengerMock).editMessage(
                     eq(123L), anyInt(),
-                    contains("Please select your language"),
+                    contains("Please choose your language"),
                     any(InlineKeyboardMarkup.class));
         }
 
@@ -391,7 +393,10 @@ class ExportBotTest {
 
             bot.consume(createTextMessageUpdate(123L, "/start"));
 
-            verify(messengerMock).send(eq(123L), contains("This bot exports"));
+            verify(messengerMock).sendWithKeyboard(
+                    eq(123L),
+                    contains("This bot exports"),
+                    any(InlineKeyboardMarkup.class));
         }
     }
 

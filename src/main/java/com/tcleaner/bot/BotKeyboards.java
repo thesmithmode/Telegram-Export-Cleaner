@@ -58,6 +58,13 @@ public class BotKeyboards {
                 .build();
     }
 
+    public InlineKeyboardMarkup mainMenuKeyboard(BotLanguage lang) {
+        return InlineKeyboardMarkup.builder()
+                .keyboardRow(new InlineKeyboardRow(
+                        button(lang, "bot.settings.title", ExportBot.CB_SETTINGS_OPEN)))
+                .build();
+    }
+
     /** Клавиатура выбора языка — 2 кнопки в ряд. Callback {@code lang:<code>}. */
     public InlineKeyboardMarkup languageChoiceKeyboard() {
         InlineKeyboardMarkup.InlineKeyboardMarkupBuilder markup = InlineKeyboardMarkup.builder();

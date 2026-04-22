@@ -53,6 +53,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     static final String CB_CANCEL_EXPORT = "cancel_export";
     static final String CB_LANG_PREFIX = "lang:";
     static final String CB_SETTINGS_LANGUAGE = "settings:language";
+    static final String CB_SETTINGS_OPEN = "settings:open";
 
     private final String botToken;
     private final ExportJobProducer jobProducer;
@@ -182,7 +183,9 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
                     keyboards.languageChoiceKeyboard());
             return;
         }
-        messenger.send(chatId, i18n.msg(stored, "bot.start.help"));
+        messenger.sendWithKeyboard(chatId,
+                i18n.msg(stored, "bot.start.help"),
+                keyboards.mainMenuKeyboard(stored));
     }
 
     private void handleCancel(long chatId, long userId) {
@@ -267,6 +270,13 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
                     keyboards.languageChoiceKeyboard());
             return;
         }
+        if (CB_SETTINGS_OPEN.equals(data)) {
+            BotLanguage lang = resolveLanguage(userId);
+            messenger.editMessage(chatId, messageId,
+                    i18n.msg(lang, "bot.settings.title"),
+                    keyboards.settingsKeyboard(lang));
+            return;
+        }
 
         BotLanguage lang = resolveLanguage(userId);
         UserSession session = getSession(userId);
@@ -303,7 +313,9 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
             }
             case CB_BACK_TO_MAIN -> {
                 session.reset();
-                messenger.editMessage(chatId, messageId, i18n.msg(lang, "bot.start.help"), null);
+                messenger.editMessage(chatId, messageId,
+                        i18n.msg(lang, "bot.start.help"),
+                        keyboards.mainMenuKeyboard(lang));
             }
             case CB_BACK_TO_DATE_CHOICE -> {
                 session.setFromDate(null);
@@ -345,7 +357,9 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
             return;
         }
         log.info("Пользователь {} выбрал язык: {}", userId, picked.getCode());
-        messenger.editMessage(chatId, messageId, i18n.msg(picked, "bot.start.help"), null);
+        messenger.editMessage(chatId, messageId,
+                i18n.msg(picked, "bot.start.help"),
+                keyboards.mainMenuKeyboard(picked));
     }
 
     private void handleFromDateInput(long chatId, long userId, String text) {
