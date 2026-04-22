@@ -129,6 +129,7 @@ CREATE UNIQUE INDEX idx_dashboard_users_telegram_id
 -- =============================================================================
 
 --changeset app:003-cleanup-orphaned-dashboard-users splitStatements:true endDelimiter:;
+--validCheckSum 9:cce5698e3138e2d4ba8c68c44e470fda
 
 DELETE FROM dashboard_users WHERE telegram_id IS NULL;
 
