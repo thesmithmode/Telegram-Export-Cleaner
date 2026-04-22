@@ -32,14 +32,6 @@
     </nav>
 
     <div class="dashboard-header__user" sec:authorize="isAuthenticated()">
-        <label class="dashboard-header__lang" th:attr="aria-label=#{settings.language}">
-            <select id="lang-switch" class="dashboard-header__lang-select">
-                <option th:each="l : ${T(com.tcleaner.core.BotLanguage).allActive()}"
-                        th:value="${l.code}"
-                        th:text="${l.displayName}"
-                        th:selected="${l.locale.toLanguageTag() == #locale.toLanguageTag()}"></option>
-            </select>
-        </label>
         <span class="dashboard-header__username" sec:authentication="name">user</span>
         <form th:action="@{/dashboard/logout}" method="post" class="dashboard-header__logout">
             <input type="hidden" th:name="${_csrf?.parameterName}" th:value="${_csrf?.token}">

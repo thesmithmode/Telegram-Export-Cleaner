@@ -13,6 +13,12 @@
 
     const METRICS = ["exports", "messages", "bytes"];
 
+    // Локализованные empty-строки приходят из me.html data-атрибутов
+    // (ключи me.chats.empty / me.events.empty; fallback — английский).
+    const meRoot = document.querySelector(".user-detail");
+    const EMPTY_CHATS = (meRoot && meRoot.dataset.emptyChats) || "No chats yet.";
+    const EMPTY_EVENTS = (meRoot && meRoot.dataset.emptyEvents) || "No events yet.";
+
     function clear(el) { while (el.firstChild) { el.removeChild(el.firstChild); } }
 
     function tr(cells) {
@@ -37,7 +43,7 @@
     function fillChatsTable(tbody, rows) {
         clear(tbody);
         if (!rows || !rows.length) {
-            tbody.appendChild(emptyRow(4, "No chats yet."));
+            tbody.appendChild(emptyRow(4, EMPTY_CHATS));
             return;
         }
         for (const r of rows) {
@@ -53,7 +59,7 @@
     function fillEventsTable(tbody, rows) {
         clear(tbody);
         if (!rows || !rows.length) {
-            tbody.appendChild(emptyRow(4, "No events yet."));
+            tbody.appendChild(emptyRow(4, EMPTY_EVENTS));
             return;
         }
         for (const r of rows) {

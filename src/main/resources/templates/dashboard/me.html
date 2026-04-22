@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="en" xmlns:th="http://www.thymeleaf.org"
-      th:replace="~{dashboard/layout :: layout(title='My Dashboard', content=~{::me-content})}">
+      th:replace="~{dashboard/layout :: layout(title=#{me.title}, content=~{::me-content})}">
 <body>
 
 <!--
@@ -9,32 +9,36 @@
   пустые DTO, а верх страницы покажет empty-state баннер.
 -->
 <div th:fragment="me-content" class="user-detail"
-     th:attr="data-has-bot-user-id=${hasBotUserId}">
-    <h1>My Dashboard</h1>
+     th:attr="data-has-bot-user-id=${hasBotUserId},
+              data-empty-chats=#{me.chats.empty},
+              data-empty-events=#{me.events.empty}">
+    <h1 th:text="#{me.heading}">My Dashboard</h1>
 
     <div th:if="${!hasBotUserId}" class="empty-state" role="status">
-        No exports yet. Run <code>/export</code> in the bot to get started.
+        <span th:text="#{me.empty_state.prefix}">No exports yet. Run</span>
+        <code>/export</code>
+        <span th:text="#{me.empty_state.suffix}">in the bot to get started.</span>
     </div>
 
     <div th:replace="~{dashboard/fragments/period-filter :: period-filter}"></div>
 
     <div class="kpi-grid">
         <div class="kpi" id="kpi-exports">
-            <div class="kpi__label">Exports</div>
+            <div class="kpi__label" th:text="#{overview.kpi.exports}">Exports</div>
             <div class="kpi__delta" data-kpi-delta="exports"></div>
             <div class="kpi__value" data-kpi="totalExports">—</div>
             <svg class="kpi__spark" data-kpi-spark="exports" viewBox="0 0 60 22" preserveAspectRatio="none"></svg>
             <div class="kpi__meta" data-kpi-meta="exports"></div>
         </div>
         <div class="kpi info" id="kpi-messages">
-            <div class="kpi__label">Messages</div>
+            <div class="kpi__label" th:text="#{overview.kpi.messages}">Messages</div>
             <div class="kpi__delta" data-kpi-delta="messages"></div>
             <div class="kpi__value" data-kpi="totalMessages">—</div>
             <svg class="kpi__spark" data-kpi-spark="messages" viewBox="0 0 60 22" preserveAspectRatio="none"></svg>
             <div class="kpi__meta" data-kpi-meta="messages"></div>
         </div>
         <div class="kpi warn" id="kpi-bytes">
-            <div class="kpi__label">Bytes</div>
+            <div class="kpi__label" th:text="#{overview.kpi.bytes}">Bytes</div>
             <div class="kpi__delta" data-kpi-delta="bytes"></div>
             <div class="kpi__value" data-kpi="totalBytes">—</div>
             <svg class="kpi__spark" data-kpi-spark="bytes" viewBox="0 0 60 22" preserveAspectRatio="none"></svg>
@@ -43,24 +47,24 @@
     </div>
 
     <div th:replace="~{dashboard/fragments/chart-block :: chart(
-            id='chart-timeseries', title='Exports over time', height=260)}"></div>
+            id='chart-timeseries', title=#{overview.chart.timeseries}, height=260)}"></div>
 
     <div th:replace="~{dashboard/fragments/chart-block :: chart(
-            id='chart-status', title='Status breakdown', height=260)}"></div>
+            id='chart-status', title=#{overview.chart.status}, height=260)}"></div>
 
     <section class="table-block">
         <div class="section-header">
-            <h2>My Chats</h2>
+            <h2 th:text="#{me.chats.heading}">My Chats</h2>
             <span class="count-badge" data-count-target="my-chats"></span>
         </div>
         <div class="table-wrap">
             <table class="data-table">
                 <thead>
                 <tr>
-                    <th data-sort-key="chat" data-sort-type="string">Chat</th>
-                    <th data-sort-key="exportCount" data-sort-type="number">Exports</th>
-                    <th data-sort-key="totalMessages" data-sort-type="number">Messages</th>
-                    <th data-sort-key="totalBytes" data-sort-type="number">Bytes</th>
+                    <th data-sort-key="chat" data-sort-type="string" th:text="#{chats.col.chat}">Chat</th>
+                    <th data-sort-key="exportCount" data-sort-type="number" th:text="#{chats.col.exports}">Exports</th>
+                    <th data-sort-key="totalMessages" data-sort-type="number" th:text="#{chats.col.messages}">Messages</th>
+                    <th data-sort-key="totalBytes" data-sort-type="number" th:text="#{chats.col.bytes}">Bytes</th>
                 </tr>
                 </thead>
                 <tbody id="my-chats-body">
@@ -72,17 +76,17 @@
 
     <section class="table-block">
         <div class="section-header">
-            <h2>My Recent Events</h2>
+            <h2 th:text="#{me.events.heading}">My Recent Events</h2>
             <span class="count-badge" data-count-target="my-events"></span>
         </div>
         <div class="table-wrap">
             <table class="data-table">
                 <thead>
                 <tr>
-                    <th data-sort-key="startedAt" data-sort-type="date">Started</th>
-                    <th data-sort-key="chat" data-sort-type="string">Chat</th>
-                    <th data-sort-key="status" data-sort-type="string">Status</th>
-                    <th data-sort-key="messagesCount" data-sort-type="number">Messages</th>
+                    <th data-sort-key="startedAt" data-sort-type="date" th:text="#{events.col.started}">Started</th>
+                    <th data-sort-key="chat" data-sort-type="string" th:text="#{events.col.chat}">Chat</th>
+                    <th data-sort-key="status" data-sort-type="string" th:text="#{events.col.status}">Status</th>
+                    <th data-sort-key="messagesCount" data-sort-type="number" th:text="#{events.col.messages}">Messages</th>
                 </tr>
                 </thead>
                 <tbody id="my-events-body">

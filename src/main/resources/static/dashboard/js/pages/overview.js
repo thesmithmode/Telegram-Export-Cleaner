@@ -119,9 +119,9 @@
         }, {});
         const pctOf = (b) => used > 0 ? (b / used * 100) : 0;
         renderBarChart("chart-cache-heatmap", [
-            { label: "Hot (<7д)", value: pctOf(heatmap.hot || 0) },
-            { label: "Warm (7-30д)", value: pctOf(heatmap.warm || 0) },
-            { label: "Cold (>30д)", value: pctOf(heatmap.cold || 0) },
+            { label: "Hot <7д", value: pctOf(heatmap.hot || 0) },
+            { label: "Warm 7–30д", value: pctOf(heatmap.warm || 0) },
+            { label: "Cold >30д", value: pctOf(heatmap.cold || 0) },
         ], {
             labelFn: r => r.label, valueFn: r => r.value,
             label: "% кэша", color: "#b7791f", tickFn: v => v.toFixed(1) + "%",
@@ -135,7 +135,7 @@
             }))
             .sort((a, b) => b.sizeBytes - a.sizeBytes);
         renderBarChart("chart-cache-types", segEntries, {
-            labelFn: r => r.type + " (" + r.chatCount + ")",
+            labelFn: r => r.type + " · " + r.chatCount,
             valueFn: r => r.sizeBytes,
             label: "bytes", color: "#2b8a3e", tickFn: v => formatBytes(v),
         });
