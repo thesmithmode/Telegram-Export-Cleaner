@@ -84,6 +84,44 @@ class BotUserLocaleResolverTest {
     }
 
     @Test
+    @DisplayName("USER без language, Accept-Language с регионом (ru-RU) → нормализуется к BotLanguage (ru)")
+    void acceptLanguageWithRegionNormalizedToBotLanguage() {
+        DashboardUserDetails user = DashboardTestUsers.user("alice", 42L);
+        authenticate(user);
+        when(upserter.getLanguage(42L)).thenReturn(Optional.empty());
+
+        Locale resolved = resolver.resolveLocale(request(Locale.forLanguageTag("ru-RU")));
+
+        // Dropdown в header.html сравнивает toLanguageTag() — должны совпадать bare-теги,
+        // иначе ни один <option selected> не подсвечивается и юзер видит первый (RU) по умолчанию.
+        assertThat(resolved.toLanguageTag()).isEqualTo("ru");
+    }
+
+    @Test
+    @DisplayName("Accept-Language de-DE → Locale BotLanguage.DE (\"de\"), не \"de-DE\"")
+    void acceptLanguageGermanRegionNormalized() {
+        DashboardUserDetails user = DashboardTestUsers.user("alice", 42L);
+        authenticate(user);
+        when(upserter.getLanguage(42L)).thenReturn(Optional.empty());
+
+        Locale resolved = resolver.resolveLocale(request(Locale.forLanguageTag("de-DE")));
+
+        assertThat(resolved.toLanguageTag()).isEqualTo("de");
+    }
+
+    @Test
+    @DisplayName("Accept-Language без match в BotLanguage (xx-YY) → defaultLocale")
+    void acceptLanguageUnknownFallsToDefault() {
+        DashboardUserDetails user = DashboardTestUsers.user("alice", 42L);
+        authenticate(user);
+        when(upserter.getLanguage(42L)).thenReturn(Optional.empty());
+
+        Locale resolved = resolver.resolveLocale(request(Locale.forLanguageTag("xx-YY")));
+
+        assertThat(resolved).isEqualTo(DEFAULT);
+    }
+
+    @Test
     @DisplayName("USER без language → fallback на Accept-Language из запроса")
     void userWithoutStoredLanguageFallsBackToHeader() {
         DashboardUserDetails user = DashboardTestUsers.user("alice", 42L);

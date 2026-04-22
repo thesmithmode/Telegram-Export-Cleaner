@@ -26,7 +26,6 @@ public class BotUserAccessPolicy {
         if (role == DashboardRole.ADMIN) {
             return requestedUserId != null ? requestedUserId : 0L;
         }
-        // USER: может видеть только себя
         if (ownBotUserId == null) {
             throw new AccessDeniedException("Аккаунт USER не привязан к Telegram-пользователю");
         }

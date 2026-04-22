@@ -29,6 +29,8 @@ public class CacheConfig {
     public static final String LIVE       = "stats-live";
     public static final String HISTORICAL = "stats-historical";
     public static final String PROFILE    = "stats-profile";
+    /** Rate-limit для feedback-формы: 1 сообщение / 60s на botUserId. */
+    public static final String FEEDBACK_RATE_LIMIT = "feedback-rate-limit";
 
     @Bean
     public CacheManager cacheManager() {
@@ -50,6 +52,15 @@ public class CacheConfig {
                 Caffeine.newBuilder()
                         .expireAfterWrite(600, TimeUnit.SECONDS)
                         .maximumSize(200)
+                        .build());
+
+        // Rate-limit присутствия: ключ = botUserId, значение — dummy. TTL=60s
+        // автоматически сбрасывает окно; maximumSize защищает от memory pressure
+        // при возможной массовой атаке.
+        manager.registerCustomCache(FEEDBACK_RATE_LIMIT,
+                Caffeine.newBuilder()
+                        .expireAfterWrite(60, TimeUnit.SECONDS)
+                        .maximumSize(10_000)
                         .build());
 
         return manager;

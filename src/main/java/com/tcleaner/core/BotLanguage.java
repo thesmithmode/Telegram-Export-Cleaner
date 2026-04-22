@@ -46,6 +46,16 @@ public enum BotLanguage {
         return code;
     }
 
+    /**
+     * Код для Telegram Bot API (поле {@code language_code} в {@code setMyCommands}).
+     * Telegram требует ISO 639-1 (2 буквы) — регионального суффикса быть не должно,
+     * поэтому для {@code pt-BR} возвращаем {@code "pt"}.
+     */
+    public String getTelegramApiCode() {
+        int dash = code.indexOf('-');
+        return dash < 0 ? code : code.substring(0, dash);
+    }
+
     public String getDisplayName() {
         return displayName;
     }

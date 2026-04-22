@@ -27,3 +27,7 @@ body { direction: rtl; text-align: right; }
     text-align: left;
     direction: ltr;
 }
+
+/* About page — TON-адрес всегда LTR (ASCII), кнопка в конце в RTL-порядке */
+.donate-row__address { direction: ltr; text-align: left; }
+.feedback-form__meta { flex-direction: row-reverse; }

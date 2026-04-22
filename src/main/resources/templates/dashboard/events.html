@@ -31,12 +31,12 @@
         <table class="data-table" id="events-table">
             <thead>
             <tr>
-                <th th:text="#{events.col.user}">Пользователь</th>
-                <th th:text="#{events.col.chat}">Чат</th>
-                <th th:text="#{events.col.status}">Статус</th>
-                <th th:text="#{events.col.messages}">Сообщений</th>
-                <th th:text="#{events.col.bytes}">Объём</th>
-                <th th:text="#{events.col.started}">Начало</th>
+                <th data-sort-key="user" data-sort-type="string" th:text="#{events.col.user}">Пользователь</th>
+                <th data-sort-key="chat" data-sort-type="string" th:text="#{events.col.chat}">Чат</th>
+                <th data-sort-key="status" data-sort-type="string" th:text="#{events.col.status}">Статус</th>
+                <th data-sort-key="messagesCount" data-sort-type="number" th:text="#{events.col.messages}">Сообщений</th>
+                <th data-sort-key="bytesCount" data-sort-type="number" th:text="#{events.col.bytes}">Объём</th>
+                <th data-sort-key="startedAt" data-sort-type="date" th:text="#{events.col.started}">Начало</th>
             </tr>
             </thead>
             <tbody id="events-tbody">

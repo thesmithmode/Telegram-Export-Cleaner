@@ -104,7 +104,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         List<BotCommand> defaultCommands = buildCommands(BotLanguage.EN);
         messenger.setMyCommands(defaultCommands, null);
         for (BotLanguage lang : BotLanguage.allActive()) {
-            messenger.setMyCommands(buildCommands(lang), lang.getCode());
+            messenger.setMyCommands(buildCommands(lang), lang.getTelegramApiCode());
         }
         messenger.setChatMenuButton(miniAppUrl, "Dashboard");
     }

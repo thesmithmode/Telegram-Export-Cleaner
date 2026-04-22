@@ -96,6 +96,15 @@ class ExportBotTest {
         verify(messengerMock, atLeast(11)).setMyCommands(any(), any());
     }
 
+    @Test
+    @DisplayName("setMyCommands для PT_BR использует 2-буквенный ISO 639-1 (\"pt\"), а не \"pt-BR\"")
+    void testPtBrUsesTwoLetterLanguageCodeForTelegramApi() {
+        bot.registerBotCommands();
+        // Telegram Bot API requires ISO 639-1 (2 chars). "pt-BR" бы отклонился.
+        verify(messengerMock).setMyCommands(any(), eq("pt"));
+        verify(messengerMock, never()).setMyCommands(any(), eq("pt-BR"));
+    }
+
     @Nested
     @DisplayName("Ввод идентификатора чата")
     class ChatIdentifierInput {

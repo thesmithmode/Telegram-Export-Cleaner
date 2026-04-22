@@ -6,7 +6,7 @@
     "use strict";
 
     const { fetchJson, formatNumber, formatBytes, readPeriodFromUrl, escapeHtml,
-            renderBarChart, setCountBadge, onReady } = window.Dashboard || {};
+            renderBarChart, setCountBadge, initSortableTable, onReady } = window.Dashboard || {};
     if (!fetchJson) { return; }
 
     function row(c) {
@@ -21,6 +21,17 @@
         </tr>`;
     }
 
+    function render(tbody, rows) {
+        tbody.innerHTML = rows.length
+            ? rows.map(row).join("")
+            : `<tr><td colspan="4" style="text-align:center;color:var(--muted)">Нет данных</td></tr>`;
+    }
+
+    function sortValue(c, key) {
+        if (key === "chat") { return c.chatTitle || String(c.canonicalChatId || ""); }
+        return c[key];
+    }
+
     async function load() {
         const period = readPeriodFromUrl();
         const params = { period: period.period, from: period.from, to: period.to, limit: 100 };
@@ -32,10 +43,17 @@
                 valueFn: c => c.totalBytes,
                 label: "bytes", color: "#1e50c8", tickFn: v => formatBytes(v),
             });
-            tbody.innerHTML = chats.length
-                ? chats.map(row).join("")
-                : `<tr><td colspan="4" style="text-align:center;color:var(--muted)">Нет данных</td></tr>`;
-            setCountBadge("chats", chats.length);
+            if (tbody) {
+                render(tbody, chats);
+                setCountBadge("chats", chats.length);
+                if (initSortableTable) {
+                    initSortableTable(document.getElementById("chats-table"), {
+                        rows: chats,
+                        rerender: (sorted) => render(tbody, sorted),
+                        getValue: sortValue,
+                    });
+                }
+            }
         } catch (e) {
             if (tbody) {
                 tbody.innerHTML =

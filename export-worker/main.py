@@ -28,7 +28,6 @@ from message_cache import MessageCache
 from models import ExportRequest, ExportedMessage, SendResponsePayload
 from cache_stats import build_snapshot, publish_snapshot
 
-# Setup logging
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -379,6 +378,15 @@ class ExportWorker:
                 return None
             fallback_result = await self._fetch_all_messages(job, topic_name)
             if fallback_result is None:
+                # _fetch_all_messages возвращает None при отмене (после counting /
+                # mid-stream). Отмена уже зачистила active_export, но финализацию
+                # очереди/staging делаем здесь — иначе `job:processing`, `staging:*`
+                # и payload в staging-list остаются висеть до JOB_MARKER_TTL,
+                # и recover_staging_jobs на рестарте вернёт отменённый job в очередь.
+                if await self.is_cancelled(job.task_id):
+                    logger.info(f"🛑 Job {job.task_id} отменена внутри fallback fetch")
+                await self.queue_consumer.mark_job_completed(job.task_id)
+                await self._cleanup_job(job)
                 return None
             msg_count, messages_for_send = fallback_result
             if self.message_cache and self.message_cache.enabled:
@@ -493,24 +501,20 @@ class ExportWorker:
         try:
             logger.info("🚀 Initializing Export Worker...")
 
-            # 1. Connect to Redis queue
             logger.info("1️⃣  Connecting to Redis queue...")
             self.queue_consumer = await create_queue_consumer()
 
-            # 1.5. Recover jobs from previous crash (durability)
             recovered = await self.queue_consumer.recover_staging_jobs()
             if recovered:
                 logger.info(f"  Recovered {recovered} orphaned jobs — they will be reprocessed")
 
-            # 2. Connect to Telegram API
             logger.info("2️⃣  Connecting to Telegram API...")
             self.telegram_client = await create_telegram_client()
 
-            # 3. Connect to Java Bot API
             logger.info("3️⃣  Connecting to Java Bot API...")
             self.java_client = await create_java_client()
 
-            # 4. Initialize Redis connections (два отдельных клиента — разные decode_responses)
+            # два отдельных клиента — разные decode_responses
             _redis_kwargs = dict(
                 host=settings.REDIS_HOST,
                 port=settings.REDIS_PORT,
@@ -525,10 +529,8 @@ class ExportWorker:
                 **_redis_kwargs,
             )
 
-            # Передаём Redis-клиент в Telegram-клиент для canonical-маппинга
             self.telegram_client.redis_client = self.control_redis
 
-            # 5. Initialize message cache (SQLite on disk)
             logger.info("4️⃣  Initializing message cache (SQLite)...")
             self.message_cache = MessageCache(
                 db_path=settings.CACHE_DB_PATH,

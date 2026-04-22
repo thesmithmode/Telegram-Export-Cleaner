@@ -42,6 +42,27 @@
         return res.json();
     }
 
+    /**
+     * POST /dashboard/api/... JSON-body + CSRF. 401/403 → редирект на login.
+     * Возвращает Response — вызывающий сам решает как интерпретировать статус
+     * (204, 429, 503 — все валидные исходы feedback-формы).
+     */
+    async function fetchPost(path, body) {
+        const headers = { "Content-Type": "application/json", "Accept": "application/json" };
+        if (csrfToken && csrfHeader) headers[csrfHeader] = csrfToken;
+        const res = await fetch(path, {
+            method: "POST",
+            credentials: "same-origin",
+            headers,
+            body: body === undefined ? undefined : JSON.stringify(body),
+        });
+        if (res.status === 401 || res.status === 403) {
+            window.location.href = "/dashboard/login";
+            throw new Error("Unauthorized");
+        }
+        return res;
+    }
+
     function formatNumber(n) {
         if (n === null || n === undefined) return "—";
         return Number(n).toLocaleString("ru-RU");
@@ -331,13 +352,109 @@
         renderSparkline(svg, points.map(p => Number(p.value) || 0));
     }
 
+    /**
+     * Client-side сортировка таблицы по клику на <th data-sort-key="...">.
+     * Тройной цикл: default → desc → asc → default.
+     *
+     * opts:
+     *   rows      — массив DTO (исходный порядок сохраняется).
+     *   rerender  — fn(sortedRows) перерендер tbody.
+     *   getValue  — fn(row, key) → значение для сортировки (string|number|null).
+     *               По умолчанию row[key].
+     */
+    function initSortableTable(tableEl, opts) {
+        if (!tableEl || !opts || !Array.isArray(opts.rows) || typeof opts.rerender !== "function") { return; }
+        if (!tableEl.tHead) { return; }
+        // Клонируем <th> чтобы сбросить listeners от предыдущей инициализации
+        // (например в /dashboard/events при смене фильтра статуса load() вызывается повторно).
+        Array.from(tableEl.tHead.querySelectorAll("th[data-sort-key]")).forEach(th => {
+            th.parentNode.replaceChild(th.cloneNode(true), th);
+        });
+        const headers = tableEl.tHead.querySelectorAll("th[data-sort-key]");
+        if (!headers.length) { return; }
+
+        const original = opts.rows.slice();
+        const getValue = typeof opts.getValue === "function"
+            ? opts.getValue
+            : (row, key) => (row == null ? null : row[key]);
+        const state = { key: null, dir: null };
+
+        function compare(a, b, key, type) {
+            const va = getValue(a, key);
+            const vb = getValue(b, key);
+            const aNull = va === null || va === undefined || va === "";
+            const bNull = vb === null || vb === undefined || vb === "";
+            if (aNull && bNull) { return 0; }
+            if (aNull) { return 1; }
+            if (bNull) { return -1; }
+            if (type === "number") {
+                const na = Number(va);
+                const nb = Number(vb);
+                if (Number.isNaN(na) && Number.isNaN(nb)) { return 0; }
+                if (Number.isNaN(na)) { return 1; }
+                if (Number.isNaN(nb)) { return -1; }
+                return na - nb;
+            }
+            if (type === "date") {
+                return String(va).localeCompare(String(vb));
+            }
+            return String(va).localeCompare(String(vb), "ru");
+        }
+
+        function applyIndicators() {
+            headers.forEach(th => {
+                const key = th.dataset.sortKey;
+                th.classList.remove("is-sort-asc", "is-sort-desc");
+                if (state.key === key && state.dir) {
+                    th.classList.add(state.dir === "asc" ? "is-sort-asc" : "is-sort-desc");
+                    th.setAttribute("aria-sort", state.dir === "asc" ? "ascending" : "descending");
+                } else {
+                    th.setAttribute("aria-sort", "none");
+                }
+            });
+        }
+
+        function render() {
+            if (!state.key || !state.dir) {
+                opts.rerender(original.slice());
+                return;
+            }
+            const type = (Array.from(headers).find(th => th.dataset.sortKey === state.key) || {})
+                .dataset?.sortType || "string";
+            const sorted = original.slice().sort((a, b) => {
+                const c = compare(a, b, state.key, type);
+                return state.dir === "asc" ? c : -c;
+            });
+            opts.rerender(sorted);
+        }
+
+        applyIndicators();
+        headers.forEach(th => {
+            th.addEventListener("click", () => {
+                const key = th.dataset.sortKey;
+                if (state.key !== key) {
+                    state.key = key;
+                    state.dir = "desc";
+                } else if (state.dir === "desc") {
+                    state.dir = "asc";
+                } else {
+                    state.key = null;
+                    state.dir = null;
+                }
+                applyIndicators();
+                render();
+            });
+        });
+    }
+
     window.Dashboard = {
-        fetchJson, formatNumber, formatBytes, formatDate,
+        fetchJson, fetchPost, formatNumber, formatBytes, formatDate,
         readPeriodFromUrl, escapeHtml,
         makeCanvas, setKpi, setKpiDelta, setKpiMeta,
         renderSparkline, renderStatsBar, setCountBadge,
         renderStatusDoughnut, renderKpiSparkline,
         renderTimeseries, renderBarChart, onReady,
+        initSortableTable,
     };
 
     // bfcache restore → форсируем свежий запрос с актуальной JSESSIONID.

@@ -19,11 +19,11 @@
         <table class="data-table" id="users-table">
             <thead>
             <tr>
-                <th th:text="#{users.col.user}">Пользователь</th>
-                <th th:text="#{users.col.exports}">Экспортов</th>
-                <th th:text="#{users.col.messages}">Сообщений</th>
-                <th th:text="#{users.col.bytes}">Объём</th>
-                <th th:text="#{users.col.lastSeen}">Последний визит</th>
+                <th data-sort-key="user" data-sort-type="string" th:text="#{users.col.user}">Пользователь</th>
+                <th data-sort-key="totalExports" data-sort-type="number" th:text="#{users.col.exports}">Экспортов</th>
+                <th data-sort-key="totalMessages" data-sort-type="number" th:text="#{users.col.messages}">Сообщений</th>
+                <th data-sort-key="totalBytes" data-sort-type="number" th:text="#{users.col.bytes}">Объём</th>
+                <th data-sort-key="lastSeen" data-sort-type="date" th:text="#{users.col.lastSeen}">Последний визит</th>
             </tr>
             </thead>
             <tbody id="users-tbody">

@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org"
+      xmlns:sec="http://www.thymeleaf.org/extras/spring-security"
+      th:replace="~{dashboard/layout :: layout(title=#{about.title}, content=~{::about-content})}">
+<body>
+
+<div th:fragment="about-content" class="about-page"
+     th:attr="data-donate-ton=${donateTon}">
+    <h1 th:text="#{about.heading}">About</h1>
+
+    <section class="card" sec:authorize="hasRole('USER')">
+        <h2 th:text="#{about.feedback.heading}">Feedback</h2>
+        <p class="muted" th:text="#{about.feedback.description}">
+            Write to the author. Your message will be delivered via the bot.
+        </p>
+        <form id="feedback-form" class="feedback-form" autocomplete="off" novalidate>
+            <label for="feedback-message" class="sr-only"
+                   th:text="#{about.feedback.placeholder}">Your message</label>
+            <textarea id="feedback-message" name="message" rows="6" maxlength="2000"
+                      required
+                      th:placeholder="#{about.feedback.placeholder}"></textarea>
+            <div class="feedback-form__meta">
+                <span id="feedback-counter" class="muted">0 / 2000</span>
+                <button type="submit" id="feedback-submit"
+                        th:text="#{about.feedback.submit}">Send</button>
+            </div>
+            <div id="feedback-status" class="feedback-status" role="status" aria-live="polite"
+                 th:attr="data-sent=#{about.feedback.sent},
+                          data-rate-limit=#{about.feedback.rate_limit},
+                          data-invalid=#{about.feedback.invalid},
+                          data-error=#{about.feedback.error}"></div>
+        </form>
+    </section>
+
+    <section class="card" th:if="${donateTon != null and !donateTon.isEmpty()}">
+        <h2 th:text="#{about.support.heading}">Support</h2>
+        <p class="muted" th:text="#{about.support.ton_note}">
+            Wallet in the TON network.
+        </p>
+        <div class="donate-row">
+            <input id="donate-ton" class="donate-row__address" type="text" readonly
+                   th:value="${donateTon}">
+            <button type="button" id="donate-copy"
+                    th:attr="aria-label=#{about.support.copy},
+                             data-copy=#{about.support.copy},
+                             data-copied=#{about.support.copied}"
+                    th:text="#{about.support.copy}">Copy</button>
+        </div>
+    </section>
+
+    <script th:src="@{/dashboard/js/pages/about.js}" defer></script>
+</div>
+
+</body>
+</html>

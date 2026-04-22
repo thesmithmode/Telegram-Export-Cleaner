@@ -40,8 +40,6 @@ public class StatsQueryService {
         return botUserId != null && botUserId > 0;
     }
 
-    // ─── Overview ────────────────────────────────────────────────────────────
-
     @Cacheable(value = LIVE, key = "#period.toString() + '_' + #botUserId")
     public OverviewDto overview(StatsPeriod period, Long botUserId) {
         long[] totals = periodTotals(period, botUserId);
@@ -109,8 +107,6 @@ public class StatsQueryService {
         return ((double) (current - previous) / previous) * 100.0;
     }
 
-    // ─── Users ───────────────────────────────────────────────────────────────
-
     @Cacheable(value = HISTORICAL, key = "#limit + '_' + #botUserId")
     public List<UserStatsRow> topUsers(int limit, Long botUserId) {
         String base = "SELECT bot_user_id, username, display_name, total_exports, "
@@ -130,8 +126,6 @@ public class StatsQueryService {
                 rs.getLong("total_messages"), rs.getLong("total_bytes"),
                 rs.getString("last_seen"));
     }
-
-    // ─── Chats ───────────────────────────────────────────────────────────────
 
     @Cacheable(value = HISTORICAL, key = "#period.toString() + '_' + #botUserId + '_' + #limit")
     public List<ChatStatsRow> topChats(StatsPeriod period, Long botUserId, int limit) {
@@ -156,8 +150,6 @@ public class StatsQueryService {
                 args);
     }
 
-    // ─── Status breakdown ────────────────────────────────────────────────────
-
     @Cacheable(value = HISTORICAL, key = "#period.toString() + '_' + #botUserId")
     public Map<String, Long> statusBreakdown(StatsPeriod period, Long botUserId) {
         String from = period.from().toString();
@@ -178,8 +170,6 @@ public class StatsQueryService {
         }
         return result;
     }
-
-    // ─── Time series ─────────────────────────────────────────────────────────
 
     @Cacheable(value = HISTORICAL, key = "#period.toString() + '_' + #metric + '_' + #botUserId")
     public List<TimeSeriesPointDto> timeSeries(StatsPeriod period, String metric, Long botUserId) {
@@ -204,8 +194,6 @@ public class StatsQueryService {
                 (rs, n) -> new TimeSeriesPointDto(rs.getString("period"), rs.getLong("value")),
                 args);
     }
-
-    // ─── Recent events (raw table) ───────────────────────────────────────────
 
     /**
      * Последние N событий с опциональными фильтрами. Чувствительно к RBAC —
@@ -260,8 +248,6 @@ public class StatsQueryService {
     private static Long nullableLong(Object o) {
         return o == null ? null : ((Number) o).longValue();
     }
-
-    // ─── User detail ─────────────────────────────────────────────────────────
 
     @Cacheable(value = PROFILE, key = "#botUserId")
     public UserDetailDto userDetail(long botUserId) {

@@ -21,10 +21,10 @@
         <table class="data-table" id="chats-table">
             <thead>
             <tr>
-                <th th:text="#{chats.col.chat}">Чат</th>
-                <th th:text="#{chats.col.exports}">Экспортов</th>
-                <th th:text="#{chats.col.messages}">Сообщений</th>
-                <th th:text="#{chats.col.bytes}">Объём</th>
+                <th data-sort-key="chat" data-sort-type="string" th:text="#{chats.col.chat}">Чат</th>
+                <th data-sort-key="exportCount" data-sort-type="number" th:text="#{chats.col.exports}">Экспортов</th>
+                <th data-sort-key="totalMessages" data-sort-type="number" th:text="#{chats.col.messages}">Сообщений</th>
+                <th data-sort-key="totalBytes" data-sort-type="number" th:text="#{chats.col.bytes}">Объём</th>
             </tr>
             </thead>
             <tbody id="chats-tbody">

@@ -67,6 +67,8 @@ services:
       # Dashboard auth (Telegram Login Widget)
       - DASHBOARD_ADMIN_TG_ID=${DASHBOARD_ADMIN_TG_ID}
       - DASHBOARD_ENABLE_BOOTSTRAP=${DASHBOARD_ENABLE_BOOTSTRAP:-false}
+      # TON-адрес для секции "Поддержать" на /dashboard/about. Пусто → секция скрыта.
+      - DONATE_TON=${DONATE_TON:-}
     volumes:
       - java_import:/data/import
       - java_export:/data/export

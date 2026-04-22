@@ -21,10 +21,10 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
             .securityMatcher("/api/**")
-            .csrf(csrf -> csrf.disable()) // Stateless API
+            .csrf(csrf -> csrf.disable())
             .headers(headers -> headers
-                .frameOptions(frame -> frame.deny()) // Clickjacking protection
-                .contentSecurityPolicy(csp -> csp.policyDirectives("default-src 'none'")) // CSP
+                .frameOptions(frame -> frame.deny())
+                .contentSecurityPolicy(csp -> csp.policyDirectives("default-src 'none'"))
             )
             .sessionManagement(session -> session
                 .sessionCreationPolicy(SessionCreationPolicy.STATELESS))

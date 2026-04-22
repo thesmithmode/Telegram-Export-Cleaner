@@ -1328,3 +1328,51 @@ class TestCreateJavaClient:
             client = await create_java_client()
             assert isinstance(client, JavaBotClient)
             await client.aclose()
+
+
+class TestRunCacheAwareExportFallbackCancel:
+    """bug_010: при cancel внутри fallback fetch (_fetch_all_messages → None)
+    нужно вызывать mark_job_completed + _cleanup_job — иначе staging-payload
+    висит до JOB_MARKER_TTL и recover_staging_jobs на рестарте вернёт
+    отменённый job в очередь.
+    """
+
+    def _make_worker(self):
+        w = ExportWorker()
+        w.control_redis = AsyncMock()
+        w.control_redis.get = AsyncMock(return_value=None)
+        w.message_cache = MagicMock()
+        w.message_cache.enabled = False
+        w.queue_consumer = MagicMock()
+        w.queue_consumer.mark_job_completed = AsyncMock()
+        w._cleanup_job = AsyncMock()
+        w._fetch_all_messages = AsyncMock(return_value=None)
+        return w
+
+    @pytest.mark.asyncio
+    async def test_fallback_none_with_cancel_finalizes_job(self):
+        w = self._make_worker()
+        # Cancel поднимается внутри _fetch_all_messages (после counting / mid-stream).
+        # Первая is_cancelled перед fallback → False, вторая (после _fetch=None) → True.
+        w.is_cancelled = AsyncMock(side_effect=[False, True])
+        job = make_job(task_id="cancel_fallback_task")
+
+        result = await w._run_cache_aware_export(job, topic_name=None)
+
+        assert result is None
+        w._fetch_all_messages.assert_awaited_once()
+        w.queue_consumer.mark_job_completed.assert_awaited_once_with("cancel_fallback_task")
+        w._cleanup_job.assert_awaited_once_with(job)
+
+    @pytest.mark.asyncio
+    async def test_fallback_none_without_cancel_also_finalizes(self):
+        """Даже если is_cancelled вернул False (rare race), всё равно не оставляем мусор."""
+        w = self._make_worker()
+        w.is_cancelled = AsyncMock(return_value=False)
+        job = make_job(task_id="no_cancel_fallback")
+
+        result = await w._run_cache_aware_export(job, topic_name=None)
+
+        assert result is None
+        w.queue_consumer.mark_job_completed.assert_awaited_once_with("no_cancel_fallback")
+        w._cleanup_job.assert_awaited_once_with(job)

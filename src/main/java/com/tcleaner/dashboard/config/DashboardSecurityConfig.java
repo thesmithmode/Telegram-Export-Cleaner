@@ -70,6 +70,9 @@ public class DashboardSecurityConfig {
                 .requestMatchers(
                     "/dashboard/me", "/dashboard/me/**",
                     "/dashboard/api/me", "/dashboard/api/me/**").authenticated()
+                // "О проекте" + feedback endpoint — любому аутентифицированному.
+                // POST-логика сама блокирует ADMIN/unbound.
+                .requestMatchers("/dashboard/about").authenticated()
                 .anyRequest().authenticated()
             )
             .exceptionHandling(ex -> ex

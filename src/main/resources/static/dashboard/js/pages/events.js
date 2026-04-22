@@ -6,7 +6,8 @@
 (function () {
     "use strict";
 
-    const { fetchJson, formatNumber, formatBytes, formatDate, escapeHtml, setCountBadge, onReady } = window.Dashboard || {};
+    const { fetchJson, formatNumber, formatBytes, formatDate, escapeHtml,
+            setCountBadge, initSortableTable, onReady } = window.Dashboard || {};
     if (!fetchJson) { return; }
 
     const STATUS_CLASS = {
@@ -39,6 +40,18 @@
         </tr>`;
     }
 
+    function render(tbody, rows) {
+        tbody.innerHTML = rows.length
+            ? rows.map(row).join("")
+            : `<tr><td colspan="6" style="text-align:center;color:var(--muted)">Нет данных</td></tr>`;
+    }
+
+    function sortValue(e, key) {
+        if (key === "user") { return e.username || String(e.botUserId || ""); }
+        if (key === "chat") { return e.chatTitle || String(e.canonicalChatId || ""); }
+        return e[key];
+    }
+
     async function load(status) {
         const tbody = document.getElementById("events-tbody");
         if (!tbody) { return; }
@@ -46,10 +59,15 @@
         if (status) { params.status = status; }
         try {
             const events = await fetchJson("/dashboard/api/stats/recent", params);
-            tbody.innerHTML = events.length
-                ? events.map(row).join("")
-                : `<tr><td colspan="6" style="text-align:center;color:var(--muted)">Нет данных</td></tr>`;
+            render(tbody, events);
             setCountBadge("events", events.length);
+            if (initSortableTable) {
+                initSortableTable(document.getElementById("events-table"), {
+                    rows: events,
+                    rerender: (sorted) => render(tbody, sorted),
+                    getValue: sortValue,
+                });
+            }
         } catch (e) {
             tbody.innerHTML =
                 `<tr><td colspan="6" style="color:var(--danger)">Ошибка: ${e.message}</td></tr>`;

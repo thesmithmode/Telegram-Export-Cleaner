@@ -8,7 +8,7 @@
     const { fetchJson, formatNumber, formatBytes, readPeriodFromUrl,
             setKpi, setKpiDelta, setKpiMeta, setCountBadge,
             renderKpiSparkline, renderStatsBar, renderStatusDoughnut,
-            renderTimeseries, onReady } = window.Dashboard || {};
+            renderTimeseries, initSortableTable, onReady } = window.Dashboard || {};
     if (!fetchJson) { return; }
 
     const METRICS = ["exports", "messages", "bytes"];
@@ -34,9 +34,7 @@
         return row;
     }
 
-    function renderChatsTable(rows) {
-        const tbody = document.getElementById("my-chats-body");
-        if (!tbody) { return; }
+    function fillChatsTable(tbody, rows) {
         clear(tbody);
         if (!rows || !rows.length) {
             tbody.appendChild(emptyRow(4, "No chats yet."));
@@ -50,12 +48,9 @@
                 formatBytes(r.totalBytes || 0),
             ]));
         }
-        setCountBadge("my-chats", rows.length);
     }
 
-    function renderEventsTable(rows) {
-        const tbody = document.getElementById("my-events-body");
-        if (!tbody) { return; }
+    function fillEventsTable(tbody, rows) {
         clear(tbody);
         if (!rows || !rows.length) {
             tbody.appendChild(emptyRow(4, "No events yet."));
@@ -69,7 +64,52 @@
                 formatNumber(r.messagesCount || 0),
             ]));
         }
-        setCountBadge("my-events", rows.length);
+    }
+
+    function chatsSortValue(c, key) {
+        if (key === "chat") { return c.chatTitle || String(c.canonicalChatId || ""); }
+        return c[key];
+    }
+
+    function eventsSortValue(e, key) {
+        if (key === "chat") { return e.chatTitle || String(e.canonicalChatId || ""); }
+        return e[key];
+    }
+
+    function renderChatsTable(rows) {
+        const tbody = document.getElementById("my-chats-body");
+        if (!tbody) { return; }
+        const list = rows || [];
+        fillChatsTable(tbody, list);
+        setCountBadge("my-chats", list.length);
+        if (initSortableTable) {
+            const table = tbody.closest("table");
+            if (table) {
+                initSortableTable(table, {
+                    rows: list,
+                    rerender: (sorted) => fillChatsTable(tbody, sorted),
+                    getValue: chatsSortValue,
+                });
+            }
+        }
+    }
+
+    function renderEventsTable(rows) {
+        const tbody = document.getElementById("my-events-body");
+        if (!tbody) { return; }
+        const list = rows || [];
+        fillEventsTable(tbody, list);
+        setCountBadge("my-events", list.length);
+        if (initSortableTable) {
+            const table = tbody.closest("table");
+            if (table) {
+                initSortableTable(table, {
+                    rows: list,
+                    rerender: (sorted) => fillEventsTable(tbody, sorted),
+                    getValue: eventsSortValue,
+                });
+            }
+        }
     }
 
     async function load() {

@@ -9,7 +9,7 @@
     const { fetchJson, formatNumber, formatBytes, readPeriodFromUrl,
             setKpi, setKpiDelta, setKpiMeta, setCountBadge,
             renderKpiSparkline, renderStatsBar, renderStatusDoughnut,
-            renderTimeseries, renderBarChart, onReady } = window.Dashboard || {};
+            renderTimeseries, renderBarChart, initSortableTable, onReady } = window.Dashboard || {};
     if (!fetchJson) { return; }
 
     const METRICS = ["exports", "messages", "bytes"];
@@ -61,10 +61,11 @@
             });
             setCountBadge("top-users", (overview.topUsers || []).length);
 
+            const totalBytes = Number(overview.totalBytes) || 0;
             renderBarChart("chart-top-chats", overview.topChats || [], {
                 labelFn: r => r.chatTitle || r.canonicalChatId,
-                valueFn: r => r.totalBytes,
-                label: "bytes", color: "#1e50c8", tickFn: v => formatBytes(v),
+                valueFn: r => totalBytes > 0 ? (Number(r.totalBytes) || 0) / totalBytes * 100 : 0,
+                label: "% от общего", color: "#1e50c8", tickFn: v => v.toFixed(1) + "%",
             });
             setCountBadge("top-chats", (overview.topChats || []).length);
         } catch (e) {
@@ -141,42 +142,60 @@
 
         const tbody = document.querySelector("#table-cache-top tbody");
         if (tbody) {
-            while (tbody.firstChild) { tbody.removeChild(tbody.firstChild); }
-            (data.topChats || []).forEach((c, i) => {
-                const tr = document.createElement("tr");
-                const titleText = c.username
-                    ? "@" + c.username
-                    : (c.title
-                        ? (c.topicId ? c.title + " (топик " + c.topicId + ")" : c.title)
-                        : String(c.chatId));
-                // МСК-время для админ-панели. Intl сам учитывает DST и переходы часовых
-                // поясов — без хардкода смещения. Локаль sv-SE даёт ISO-подобный
-                // формат "YYYY-MM-DD HH:MM" без переводов.
-                const lastAccess = c.lastAccessed
-                    ? new Intl.DateTimeFormat("sv-SE", {
-                          timeZone: "Europe/Moscow",
-                          year: "numeric", month: "2-digit", day: "2-digit",
-                          hour: "2-digit", minute: "2-digit",
-                          hour12: false,
-                      }).format(new Date(c.lastAccessed * 1000)).replace(",", "")
-                    : "—";
-                const cells = [
-                    String(i + 1),
-                    titleText,
-                    c.chatType || "—",
-                    formatNumber(c.msgCount),
-                    formatBytes(c.sizeBytes),
-                    (Number(c.pct) || 0).toFixed(1) + "%",
-                    lastAccess,
-                ];
-                cells.forEach(v => {
-                    const td = document.createElement("td");
-                    td.textContent = v;
-                    tr.appendChild(td);
+            const topChats = data.topChats || [];
+            fillCacheTopTable(tbody, topChats);
+            if (initSortableTable) {
+                initSortableTable(document.getElementById("table-cache-top"), {
+                    rows: topChats,
+                    rerender: (sorted) => fillCacheTopTable(tbody, sorted),
+                    getValue: cacheTopSortValue,
                 });
-                tbody.appendChild(tr);
-            });
+            }
         }
+    }
+
+    function cacheTopTitle(c) {
+        if (c.username) { return "@" + c.username; }
+        if (c.title) { return c.topicId ? c.title + " (топик " + c.topicId + ")" : c.title; }
+        return String(c.chatId);
+    }
+
+    function cacheTopSortValue(c, key) {
+        if (key === "chat") { return cacheTopTitle(c); }
+        return c[key];
+    }
+
+    function fillCacheTopTable(tbody, rows) {
+        while (tbody.firstChild) { tbody.removeChild(tbody.firstChild); }
+        rows.forEach((c, i) => {
+            const tr = document.createElement("tr");
+            // МСК-время для админ-панели. Intl сам учитывает DST и переходы часовых
+            // поясов — без хардкода смещения. Локаль sv-SE даёт ISO-подобный
+            // формат "YYYY-MM-DD HH:MM" без переводов.
+            const lastAccess = c.lastAccessed
+                ? new Intl.DateTimeFormat("sv-SE", {
+                      timeZone: "Europe/Moscow",
+                      year: "numeric", month: "2-digit", day: "2-digit",
+                      hour: "2-digit", minute: "2-digit",
+                      hour12: false,
+                  }).format(new Date(c.lastAccessed * 1000)).replace(",", "")
+                : "—";
+            const cells = [
+                String(i + 1),
+                cacheTopTitle(c),
+                c.chatType || "—",
+                formatNumber(c.msgCount),
+                formatBytes(c.sizeBytes),
+                (Number(c.pct) || 0).toFixed(1) + "%",
+                lastAccess,
+            ];
+            cells.forEach(v => {
+                const td = document.createElement("td");
+                td.textContent = v;
+                tr.appendChild(td);
+            });
+            tbody.appendChild(tr);
+        });
     }
 
     async function loadCachePanel() {

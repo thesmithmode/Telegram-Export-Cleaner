@@ -57,10 +57,10 @@
             <table class="data-table">
                 <thead>
                 <tr>
-                    <th>Chat</th>
-                    <th>Exports</th>
-                    <th>Messages</th>
-                    <th>Bytes</th>
+                    <th data-sort-key="chat" data-sort-type="string">Chat</th>
+                    <th data-sort-key="exportCount" data-sort-type="number">Exports</th>
+                    <th data-sort-key="totalMessages" data-sort-type="number">Messages</th>
+                    <th data-sort-key="totalBytes" data-sort-type="number">Bytes</th>
                 </tr>
                 </thead>
                 <tbody id="my-chats-body">
@@ -79,10 +79,10 @@
             <table class="data-table">
                 <thead>
                 <tr>
-                    <th>Started</th>
-                    <th>Chat</th>
-                    <th>Status</th>
-                    <th>Messages</th>
+                    <th data-sort-key="startedAt" data-sort-type="date">Started</th>
+                    <th data-sort-key="chat" data-sort-type="string">Chat</th>
+                    <th data-sort-key="status" data-sort-type="string">Status</th>
+                    <th data-sort-key="messagesCount" data-sort-type="number">Messages</th>
                 </tr>
                 </thead>
                 <tbody id="my-events-body">

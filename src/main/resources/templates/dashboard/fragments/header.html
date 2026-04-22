@@ -14,8 +14,10 @@
     </div>
 
     <nav class="dashboard-nav" sec:authorize="isAuthenticated()">
-        <!-- USER видит только одну ссылку на свой кабинет -->
+        <!-- USER видит только свой кабинет и вкладку "О проекте" (feedback + donate) -->
         <a sec:authorize="hasRole('USER')" th:href="@{/dashboard/me}">My Dashboard</a>
+        <a sec:authorize="hasRole('USER')" th:href="@{/dashboard/about}"
+           th:text="#{nav.about}">About</a>
 
         <!-- Admin-табы скрыты от USER под sec:authorize — defence-in-depth
              вдобавок к URL-guard в DashboardSecurityConfig. -->
@@ -30,8 +32,7 @@
     </nav>
 
     <div class="dashboard-header__user" sec:authorize="isAuthenticated()">
-        <label class="dashboard-header__lang" th:attr="aria-label=#{settings.language}"
-               sec:authorize="hasRole('USER')">
+        <label class="dashboard-header__lang" th:attr="aria-label=#{settings.language}">
             <select id="lang-switch" class="dashboard-header__lang-select">
                 <option th:each="l : ${T(com.tcleaner.core.BotLanguage).allActive()}"
                         th:value="${l.code}"

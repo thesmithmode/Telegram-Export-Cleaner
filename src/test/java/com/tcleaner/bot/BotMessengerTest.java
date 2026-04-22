@@ -270,6 +270,51 @@ class BotMessengerTest {
     }
 
     @Nested
+    @DisplayName("trySend()")
+    class TrySendTests {
+
+        @Test
+        @DisplayName("успешная отправка → true")
+        void shouldReturnTrueOnSuccess() throws TelegramApiException {
+            setupMessenger();
+            when(mockTelegramClient.execute(any(SendMessage.class)))
+                    .thenReturn(mock(Message.class));
+
+            boolean ok = botMessenger.trySend(12345L, "hi");
+
+            assertTrue(ok);
+            verify(mockTelegramClient).execute(any(SendMessage.class));
+        }
+
+        @Test
+        @DisplayName("TelegramApiException → false, не бросает")
+        void shouldReturnFalseOnException() throws TelegramApiException {
+            setupMessenger();
+            when(mockTelegramClient.execute(any(SendMessage.class)))
+                    .thenThrow(new TelegramApiException("network down"));
+
+            boolean ok = botMessenger.trySend(12345L, "hi");
+
+            org.junit.jupiter.api.Assertions.assertFalse(ok);
+        }
+
+        @Test
+        @DisplayName("chatId и text передаются корректно")
+        void shouldUseCorrectChatIdAndText() throws TelegramApiException {
+            setupMessenger();
+            when(mockTelegramClient.execute(any(SendMessage.class)))
+                    .thenReturn(mock(Message.class));
+
+            botMessenger.trySend(99L, "payload");
+
+            ArgumentCaptor<SendMessage> captor = ArgumentCaptor.forClass(SendMessage.class);
+            verify(mockTelegramClient).execute(captor.capture());
+            assertEquals("99", captor.getValue().getChatId());
+            assertEquals("payload", captor.getValue().getText());
+        }
+    }
+
+    @Nested
     @DisplayName("sendRemoveReplyKeyboard()")
     class SendRemoveReplyKeyboardTests {
 

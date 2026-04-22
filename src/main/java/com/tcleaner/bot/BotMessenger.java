@@ -49,6 +49,22 @@ public class BotMessenger {
         }
     }
 
+    /**
+     * В отличие от {@link #send(long, String)} возвращает статус доставки,
+     * чтобы вызывающий мог отдать пользователю 503 / ретрай вместо fire-and-forget.
+     */
+    public boolean trySend(long chatId, String text) {
+        SendMessage message = buildMessage(chatId, text).build();
+        try {
+            telegramClient.execute(message);
+            log.debug("trySend → ok, chat {}: {} символов", chatId, text.length());
+            return true;
+        } catch (TelegramApiException e) {
+            log.error("trySend → fail, chat {}: {}", chatId, e.getMessage());
+            return false;
+        }
+    }
+
     public void sendWithKeyboard(long chatId, String text, InlineKeyboardMarkup keyboard) {
         SendMessage message = buildMessage(chatId, text)
                 .replyMarkup(keyboard)

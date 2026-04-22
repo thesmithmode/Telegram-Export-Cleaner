@@ -52,14 +52,10 @@ public class DashboardApiController {
         this.cacheMetricsService = cacheMetricsService;
     }
 
-    // ─── /dashboard/api/admin/cache-metrics (ADMIN-only, URL-guard в security) ─
-
     @GetMapping("/admin/cache-metrics")
     public CacheMetricsDto cacheMetrics() {
         return cacheMetricsService.get();
     }
-
-    // ─── /dashboard/api/me ───────────────────────────────────────────────────
 
     @GetMapping("/me")
     public MeDto me(@AuthenticationPrincipal DashboardUserDetails principal) {
@@ -68,8 +64,6 @@ public class DashboardApiController {
                 principal.getDashboardRole(),
                 principal.getBotUserId());
     }
-
-    // ─── /dashboard/api/stats/overview ───────────────────────────────────────
 
     @GetMapping("/stats/overview")
     public OverviewDto overview(
@@ -82,14 +76,10 @@ public class DashboardApiController {
         return statsQueryService.overviewWithDelta(s.period(), s.botUserId());
     }
 
-    // ─── /dashboard/api/stats/users (ADMIN only, URL-guard в security config) ─
-
     @GetMapping("/stats/users")
     public List<UserStatsRow> users(@RequestParam(defaultValue = "50") int limit) {
         return statsQueryService.topUsers(clamp(limit, 500), null);
     }
-
-    // ─── /dashboard/api/stats/user/{botUserId} ───────────────────────────────
 
     @GetMapping("/stats/user/{botUserId}")
     public UserDetailDto userDetail(
@@ -103,8 +93,6 @@ public class DashboardApiController {
         return statsQueryService.userDetail(botUserId);
     }
 
-    // ─── /dashboard/api/stats/chats ──────────────────────────────────────────
-
     @GetMapping("/stats/chats")
     public List<ChatStatsRow> chats(
             @AuthenticationPrincipal DashboardUserDetails principal,
@@ -116,8 +104,6 @@ public class DashboardApiController {
         Scope s = scope(principal, period, from, to, userId);
         return statsQueryService.topChats(s.period(), s.botUserId(), clamp(limit, 200));
     }
-
-    // ─── /dashboard/api/stats/timeseries ─────────────────────────────────────
 
     @GetMapping("/stats/timeseries")
     public List<TimeSeriesPointDto> timeSeries(
@@ -133,8 +119,6 @@ public class DashboardApiController {
         return statsQueryService.timeSeries(resolved, metric, s.botUserId());
     }
 
-    // ─── /dashboard/api/stats/status-breakdown ───────────────────────────────
-
     @GetMapping("/stats/status-breakdown")
     public Map<String, Long> statusBreakdown(
             @AuthenticationPrincipal DashboardUserDetails principal,
@@ -146,10 +130,8 @@ public class DashboardApiController {
         return statsQueryService.statusBreakdown(s.period(), s.botUserId());
     }
 
-    // ─── /dashboard/api/stats/recent ─────────────────────────────────────────
-    // Прежний путь /stats/events переименован: EasyPrivacy/uBlock блокирует
+    // /stats/events переименован в /stats/recent: EasyPrivacy/uBlock блокирует
     // паттерн "stats/events" как tracking endpoint — запрос не доходил до сервера.
-
     @GetMapping("/stats/recent")
     public List<EventRowDto> events(
             @AuthenticationPrincipal DashboardUserDetails principal,
@@ -161,12 +143,6 @@ public class DashboardApiController {
         return statsQueryService.recentEvents(effective, chatId, status, clamp(limit, 500));
     }
 
-    // ─── helpers ─────────────────────────────────────────────────────────────
-
-    /**
-     * Разрешает period+from+to в {@link StatsPeriod} и применяет RBAC к userId.
-     * Используется пятью stats-эндпоинтами; выделено для DRY.
-     */
     private Scope scope(DashboardUserDetails principal, String period,
                         LocalDate from, LocalDate to, Long userId) {
         return new Scope(

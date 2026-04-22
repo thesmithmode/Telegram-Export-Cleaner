@@ -39,7 +39,15 @@ public class BotUserLocaleResolver implements LocaleResolver {
             }
         }
         Locale fromHeader = request.getLocale();
-        return fromHeader != null ? fromHeader : defaultLocale;
+        if (fromHeader != null) {
+            Locale normalized = BotLanguage.fromCode(fromHeader.getLanguage())
+                    .map(BotLanguage::getLocale)
+                    .orElse(null);
+            if (normalized != null) {
+                return normalized;
+            }
+        }
+        return defaultLocale;
     }
 
     @Override
