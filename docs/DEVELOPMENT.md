@@ -3,9 +3,15 @@
 ## Технологии
 
 - Java 21, Spring Boot 3.4.4
-- Python 3.11 (Pyrogram worker)
+  - Spring Security (3 filter chains: actuator / dashboard / api)
+  - Spring Actuator (`/actuator/health` публичен, остальное `denyAll`)
+  - Spring Data JPA (Hibernate) + SQLite + Liquibase (миграции)
+  - Bean Validation (jakarta.validation) на `/api/convert`
+  - Thymeleaf (SSR дашборд)
+  - Caffeine (in-memory cache)
+- Python 3.11 (Pyrogram worker, httpx, redis.asyncio)
 - Redis 7
-- Docker Compose
+- Docker Compose v2
 
 ---
 
@@ -33,24 +39,20 @@ curl http://localhost:8080/api/health
 
 ## Проверки и тесты
 
-Java:
+> **Тесты запускаются только в GitHub Actions CI**, не локально.
+> Push в любую ветку → CI прогоняет Java + Python тесты.
+> Локально — только статические проверки.
+
+Быстрые технические проверки локально:
 
 ```bash
-mvn test
+git diff --check                   # whitespace / merge markers
+mvn -q -DskipTests compile         # Java компиляция (без тестов)
+python -m py_compile export-worker/*.py  # Python синтаксис
 ```
 
-Python:
-
-```bash
-cd export-worker
-pytest
-```
-
-Быстрые технические проверки:
-
-```bash
-git diff --check
-```
+Полные тесты (Java JUnit 5 + AssertJ + Embedded Redis, Python pytest + AsyncMock):
+ждать зелёный статус CI на push.
 
 ---
 

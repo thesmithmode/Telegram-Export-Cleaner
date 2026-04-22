@@ -10,6 +10,10 @@ Base URL (локально): `http://localhost:8080`
 
 Конвертирует Telegram JSON export в текстовый файл.
 
+### Аутентификация
+
+Требует заголовок `X-API-Key: <JAVA_API_KEY>`. Без него — `401 Unauthorized`.
+
 ### Формат запроса
 
 `multipart/form-data`
@@ -57,6 +61,7 @@ Base URL (локально): `http://localhost:8080`
 
 ```bash
 curl -X POST http://localhost:8080/api/convert \
+  -H "X-API-Key: $JAVA_API_KEY" \
   -F "file=@result.json" \
   -o output.txt
 ```
@@ -65,6 +70,7 @@ curl -X POST http://localhost:8080/api/convert \
 
 ```bash
 curl -X POST http://localhost:8080/api/convert \
+  -H "X-API-Key: $JAVA_API_KEY" \
   -F "file=@result.json" \
   -F "startDate=2024-01-01" \
   -F "endDate=2024-12-31" \
@@ -77,7 +83,11 @@ curl -X POST http://localhost:8080/api/convert \
 
 ## `GET /api/health`
 
-Проверка доступности Java-сервиса.
+Проверка доступности Java-сервиса. **Публичный endpoint** — `ApiKeyFilter`
+явно пропускает его без `X-API-Key` (нужен для health-probe Docker и
+worker-а при холодном старте). Безопасно открыт, т.к. возвращает только
+`{"status":"UP"}` без чувствительных данных. Доступен только внутри
+Docker-сети (Traefik не публикует `/api/**` наружу).
 
 ### Ответ
 
@@ -91,4 +101,26 @@ curl -X POST http://localhost:8080/api/convert \
 
 ```bash
 curl http://localhost:8080/api/health
+```
+
+---
+
+## Actuator endpoints
+
+Spring Boot Actuator (без аутентификации, детали компонентов скрыты).
+
+| Endpoint | Описание |
+|---|---|
+| `GET /actuator/health` | Общий статус приложения |
+| `GET /actuator/health/liveness` | Liveness probe (Kubernetes/Docker) |
+| `GET /actuator/health/readiness` | Readiness probe (Kubernetes/Docker) |
+
+### Пример
+
+```bash
+curl http://localhost:8080/actuator/health
+# {"status":"UP"}
+
+curl http://localhost:8080/actuator/health/liveness
+# {"status":"UP"}
 ```

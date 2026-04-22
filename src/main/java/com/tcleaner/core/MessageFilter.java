@@ -90,6 +90,10 @@ public class MessageFilter {
         return value != null && !value.isBlank();
     }
 
+    private static boolean containsAny(String haystack, List<String> needles) {
+        return needles.stream().anyMatch(haystack::contains);
+    }
+
     public MessageFilter withStartDate(LocalDate startDate) {
         this.startDate = startDate;
         return this;
@@ -161,21 +165,12 @@ public class MessageFilter {
         }
 
         if (!keywords.isEmpty() || !excludeKeywords.isEmpty()) {
-            String text = MarkdownParser.parseText(message.get("text"));
-            String textLower = text.toLowerCase();
-
-            if (!keywords.isEmpty()) {
-                boolean hasKeyword = keywords.stream().anyMatch(textLower::contains);
-                if (!hasKeyword) {
-                    return false;
-                }
+            String textLower = MarkdownParser.parseText(message.get("text")).toLowerCase();
+            if (!keywords.isEmpty() && !containsAny(textLower, keywords)) {
+                return false;
             }
-
-            if (!excludeKeywords.isEmpty()) {
-                boolean hasExcludeKeyword = excludeKeywords.stream().anyMatch(textLower::contains);
-                if (hasExcludeKeyword) {
-                    return false;
-                }
+            if (!excludeKeywords.isEmpty() && containsAny(textLower, excludeKeywords)) {
+                return false;
             }
         }
 

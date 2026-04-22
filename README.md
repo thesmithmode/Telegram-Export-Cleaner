@@ -14,6 +14,8 @@
 - Отмена в любой момент командой `/cancel` или кнопкой в чате
 - Кэш сообщений на диске — повторный экспорт того же чата быстрее
 - Фильтрация по ключевым словам через REST API
+- UI бота на 10 языках (выбор при `/start`, смена через `/settings`); язык
+  синхронизируется с дашбордом
 
 ---
 
@@ -97,13 +99,14 @@ Java API (POST /api/convert)
 | `TELEGRAM_API_ID` | Из [my.telegram.org/apps](https://my.telegram.org/apps) |
 | `TELEGRAM_API_HASH` | Из [my.telegram.org/apps](https://my.telegram.org/apps) |
 | `TELEGRAM_BOT_TOKEN` | От [@BotFather](https://t.me/BotFather) |
+| `JAVA_API_KEY` | Секрет между java-bot и worker (`openssl rand -hex 32`) |
 
 Рекомендуемые:
 
 | Переменная | Описание |
 |---|---|
 | `TELEGRAM_SESSION_STRING` | Pyrogram session для стабильной авторизации |
-| `CACHE_MAX_DISK_GB` | Лимит SQLite-кэша (по умолчанию 5 GB) |
+| `CACHE_MAX_DISK_GB` | Лимит SQLite-кэша (по умолчанию 25 GB) |
 
 Полный список: [docs/SETUP.md](docs/SETUP.md)
 

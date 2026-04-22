@@ -8,9 +8,11 @@ import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.format.DateTimeParseException;
 import java.util.LinkedHashMap;
@@ -55,6 +57,18 @@ public class DashboardExceptionHandler {
     public ResponseEntity<Map<String, String>> handleIllegalArg(IllegalArgumentException ex) {
         log.warn("Dashboard validation error: {}", ex.getMessage());
         return ResponseEntity.badRequest().body(error(ex.getMessage(), "bad_request"));
+    }
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<Map<String, String>> handleBodyValidation(MethodArgumentNotValidException ex) {
+        log.warn("Dashboard body validation failed: {}", ex.getMessage());
+        return ResponseEntity.badRequest().body(error("Невалидные поля запроса", "validation_failed"));
+    }
+
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<Map<String, String>> handleResponseStatus(ResponseStatusException ex) {
+        log.warn("Dashboard response-status: {} {}", ex.getStatusCode(), ex.getReason());
+        return ResponseEntity.status(ex.getStatusCode()).body(error(ex.getReason(), "error"));
     }
 
     @ExceptionHandler(Exception.class)

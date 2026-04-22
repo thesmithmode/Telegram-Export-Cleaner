@@ -19,6 +19,7 @@ cp .env.example .env
 - `TELEGRAM_API_ID`
 - `TELEGRAM_API_HASH`
 - `TELEGRAM_BOT_TOKEN`
+- `JAVA_API_KEY` — секрет между java-bot и export-worker. Сервер не стартует без него. Сгенерировать: `openssl rand -hex 32`
 
 ### Рекомендуемые поля
 

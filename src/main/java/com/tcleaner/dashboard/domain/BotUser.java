@@ -53,4 +53,11 @@ public class BotUser {
 
     @Column(name = "total_bytes", nullable = false)
     private long totalBytes;
+
+    /**
+     * Предпочитаемый язык UI (ISO 639-1, опционально с региональным суффиксом: "pt-BR").
+     * NULL — язык ещё не выбран. См. {@link com.tcleaner.core.BotLanguage}.
+     */
+    @Column(name = "language", length = 5)
+    private String language;
 }

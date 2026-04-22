@@ -131,3 +131,15 @@ CREATE UNIQUE INDEX idx_dashboard_users_telegram_id
 --changeset app:003-cleanup-orphaned-dashboard-users splitStatements:true endDelimiter:;
 
 DELETE FROM dashboard_users WHERE telegram_id IS NULL;
+
+-- =============================================================================
+-- 004: Предпочитаемый язык UI пользователя (бот + дашборд).
+-- NULL означает "ещё не выбран" — бот при /start покажет клавиатуру выбора
+-- языка, дашборд до выбора резолвит по Accept-Language (см. BotUserLocaleResolver).
+-- Поддерживаемые коды: ru, en, es, pt-BR, de, tr, id, fa, ar, zh
+-- (см. com.tcleaner.core.BotLanguage).
+-- =============================================================================
+
+--changeset app:004-bot-users-language splitStatements:true endDelimiter:;
+
+ALTER TABLE bot_users ADD COLUMN language VARCHAR(5);

@@ -70,11 +70,13 @@ public class ExportJobProducer {
     private static final String JOB_JSON_PREFIX = "job_json:";
     private static final String ACTIVE_PROCESSING_JOB_KEY = "active_processing_job";
     private static final long ACTIVE_EXPORT_TTL_MINUTES = 60;
+    private static final long QUEUE_MSG_TTL_HOURS = 2;
+    private static final int TASK_ID_LENGTH = 16;
     private static final String EXPRESS_QUEUE_SUFFIX = "_express";
 
     private String enqueue(long userId, long userChatId, Object chatId, Integer topicId,
                            String fromDate, String toDate, String keywords, String excludeKeywords) {
-        String taskId = "export_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+        String taskId = "export_" + UUID.randomUUID().toString().replace("-", "").substring(0, TASK_ID_LENGTH);
 
         Map<String, Object> job = new HashMap<>();
         job.put("task_id", taskId);
@@ -99,21 +101,24 @@ public class ExportJobProducer {
             job.put("exclude_keywords", excludeKeywords);
         }
 
-        boolean reservedLocally = false;
+        String json;
         try {
-            String json = objectMapper.writeValueAsString(job);
-            // Атомарно помечаем экспорт активным (SET NX EX).
-            // Если ключ уже существует — другой запрос уже прошёл, бросаем исключение.
-            Boolean reserved = redis.opsForValue().setIfAbsent(
-                    ACTIVE_EXPORT_PREFIX + userId, taskId,
-                    ACTIVE_EXPORT_TTL_MINUTES, TimeUnit.MINUTES
-            );
-            if (!Boolean.TRUE.equals(reserved)) {
-                String existing = redis.opsForValue().get(ACTIVE_EXPORT_PREFIX + userId);
-                throw new IllegalStateException("Экспорт уже активен: " + existing);
-            }
-            reservedLocally = true;
+            json = objectMapper.writeValueAsString(job);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new RuntimeException("Ошибка сериализации задачи", e);
+        }
 
+        // Атомарно помечаем экспорт активным (SET NX EX). Дубликат → IllegalStateException БЕЗ cleanup.
+        Boolean reserved = redis.opsForValue().setIfAbsent(
+                ACTIVE_EXPORT_PREFIX + userId, taskId,
+                ACTIVE_EXPORT_TTL_MINUTES, TimeUnit.MINUTES
+        );
+        if (!Boolean.TRUE.equals(reserved)) {
+            String existing = redis.opsForValue().get(ACTIVE_EXPORT_PREFIX + userId);
+            throw new IllegalStateException("Экспорт уже активен: " + existing);
+        }
+
+        try {
             // Если данные чата уже в кэше — задача идёт в приоритетную очередь
             boolean cached = isLikelyCached(chatId);
             String targetQueue = cached ? queueName + EXPRESS_QUEUE_SUFFIX : queueName;
@@ -126,17 +131,13 @@ public class ExportJobProducer {
             log.info("Задача {} добавлена в очередь {} (chat_id={}, cached={})", taskId, targetQueue, chatId, cached);
             publishExportStarted(taskId, userId, chatId, topicId, fromDate, toDate, keywords, excludeKeywords);
             return taskId;
-        } catch (IllegalStateException e) {
-            throw e;
         } catch (Exception e) {
             log.error("Не удалось добавить задачу в очередь: {}", e.getMessage(), e);
-            if (reservedLocally) {
-                try {
-                    redis.delete(ACTIVE_EXPORT_PREFIX + userId);
-                    log.info("Бронь экспорта для пользователя {} отозвана из-за ошибки", userId);
-                } catch (Exception ex) {
-                    log.error("Критическая ошибка: не удалось отозвать бронь для {}: {}", userId, ex.getMessage());
-                }
+            try {
+                redis.delete(ACTIVE_EXPORT_PREFIX + userId);
+                log.info("Бронь экспорта для пользователя {} отозвана из-за ошибки", userId);
+            } catch (Exception ex) {
+                log.error("Критическая ошибка: не удалось отозвать бронь для {}: {}", userId, ex.getMessage());
             }
             throw new RuntimeException("Ошибка добавления задачи в очередь", e);
         }
@@ -173,7 +174,7 @@ public class ExportJobProducer {
         redis.opsForValue().set(
                 "queue_msg:" + taskId,
                 userChatId + ":" + msgId,
-                2, TimeUnit.HOURS
+                QUEUE_MSG_TTL_HOURS, TimeUnit.HOURS
         );
     }
 

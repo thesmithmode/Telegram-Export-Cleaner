@@ -15,7 +15,13 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-@ControllerAdvice
+/**
+ * Ограничено пакетом {@code com.tcleaner.api} — этот advice предназначен для REST-API
+ * экспортера (фильтры DateTimeParseException, TelegramExporterException и catch-all на 500).
+ * Без scope он ловит {@code ResponseStatusException}/{@code MethodArgumentNotValidException}
+ * из dashboard-контроллеров и превращает их в 500 — ломая контракт (401/400 ожидаемы).
+ */
+@ControllerAdvice(basePackages = "com.tcleaner.api")
 public class ApiExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);

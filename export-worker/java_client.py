@@ -621,6 +621,10 @@ class ProgressTracker:
 
 async def create_java_client() -> JavaBotClient:
     client = JavaBotClient()
-    if not await client.verify_connectivity():
-        raise RuntimeError(f"Cannot reach Java API at {settings.JAVA_API_BASE_URL}")
-    return client
+    try:
+        if not await client.verify_connectivity():
+            raise RuntimeError(f"Cannot reach Java API at {settings.JAVA_API_BASE_URL}")
+        return client
+    except BaseException:
+        await client.aclose()
+        raise

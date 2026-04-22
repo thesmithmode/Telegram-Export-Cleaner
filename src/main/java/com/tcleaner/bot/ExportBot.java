@@ -1,14 +1,15 @@
 package com.tcleaner.bot;
 
+import com.tcleaner.core.BotLanguage;
 import com.tcleaner.dashboard.events.StatsEventPayload;
 import com.tcleaner.dashboard.events.StatsEventType;
 import com.tcleaner.dashboard.events.StatsStreamPublisher;
+import com.tcleaner.dashboard.service.ingestion.BotUserUpserter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.longpolling.interfaces.LongPollingUpdateConsumer;
 import org.telegram.telegrambots.longpolling.starter.SpringLongPollingBot;
@@ -23,14 +24,12 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKe
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardRow;
 
 import jakarta.annotation.PostConstruct;
-import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 @Component
 @ConditionalOnExpression("'${telegram.bot.token:}' != ''")
@@ -38,27 +37,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
 
     private static final Logger log = LoggerFactory.getLogger(ExportBot.class);
 
-    private static final Pattern TME_LINK_PATTERN =
-            Pattern.compile("https?://t\\.me/([a-zA-Z][a-zA-Z0-9_]{3,})(?:/(\\d+))?");
-
-    private static final Pattern USERNAME_PATTERN =
-            Pattern.compile("^@([a-zA-Z][a-zA-Z0-9_]{3,})$");
-
-    private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("dd.MM.yyyy");
-    private static final long SESSION_EVICT_DELAY_MS = 30 * 60 * 1000L;
-    private static final String PROMPT_FROM_DATE = "\n\nВведите начальную дату в формате дд.мм.гггг\nНапример: 01.01.2024";
-    private static final String PROMPT_TO_DATE = "\n\nВведите конечную дату в формате дд.мм.гггг\nНапример: 31.12.2025";
-    private static final String PROMPT_TO_DATE_INLINE = " (дд.мм.гггг):";
-
-    private static final String HELP_TEXT = """
-            Этот бот экспортирует историю Telegram-чата и отправляет очищенный текст.
-
-            Отправьте одно из:
-            • username: @durov
-            • ссылка: https://t.me/durov
-
-            Команды: /cancel (отмена активного экспорта)
-            """;
+    private static final LocalTime END_OF_DAY = LocalTime.of(23, 59, 59);
 
     static final String CB_EXPORT_ALL = "export_all";
     static final String CB_DATE_RANGE = "date_range";
@@ -72,12 +51,17 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     static final String CB_BACK_TO_DATE_CHOICE = "back_date_choice";
     static final String CB_BACK_TO_FROM_DATE = "back_from_date";
     static final String CB_CANCEL_EXPORT = "cancel_export";
+    static final String CB_LANG_PREFIX = "lang:";
+    static final String CB_SETTINGS_LANGUAGE = "settings:language";
 
     private final String botToken;
     private final ExportJobProducer jobProducer;
     private final BotMessenger messenger;
+    private final BotI18n i18n;
+    private final BotKeyboards keyboards;
+    private final BotSessionRegistry sessionRegistry;
+    private final BotUserUpserter userUpserter;
     private final ObjectProvider<StatsStreamPublisher> statsPublisherProvider;
-    private final ConcurrentHashMap<Long, UserSession> sessions = new ConcurrentHashMap<>();
     private final String miniAppUrl;
 
     public ExportBot(
@@ -85,6 +69,10 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
             @Value("${dashboard.mini-app.url}") String miniAppUrl,
             ExportJobProducer jobProducer,
             BotMessenger messenger,
+            BotI18n i18n,
+            BotKeyboards keyboards,
+            BotSessionRegistry sessionRegistry,
+            BotUserUpserter userUpserter,
             ObjectProvider<StatsStreamPublisher> statsPublisherProvider
     ) {
         String normalized = miniAppUrl.toLowerCase();
@@ -100,17 +88,32 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         this.miniAppUrl = miniAppUrl;
         this.jobProducer = jobProducer;
         this.messenger = messenger;
+        this.i18n = i18n;
+        this.keyboards = keyboards;
+        this.sessionRegistry = sessionRegistry;
+        this.userUpserter = userUpserter;
         this.statsPublisherProvider = statsPublisherProvider;
         log.info("Telegram-бот инициализирован");
     }
 
     @PostConstruct
     void registerBotCommands() {
-        messenger.setMyCommands(List.of(
-                new BotCommand("/start", "Запустить бота и показать справку"),
-                new BotCommand("/cancel", "Отменить активный экспорт")
-        ));
+        // Default-scope — используется клиентом, если для его locale нет специального
+        // набора. Далее регистрируем локализованный набор на каждый поддерживаемый язык.
+        List<BotCommand> defaultCommands = buildCommands(BotLanguage.EN);
+        messenger.setMyCommands(defaultCommands, null);
+        for (BotLanguage lang : BotLanguage.allActive()) {
+            messenger.setMyCommands(buildCommands(lang), lang.getCode());
+        }
         messenger.setChatMenuButton(miniAppUrl, "Dashboard");
+    }
+
+    private List<BotCommand> buildCommands(BotLanguage lang) {
+        return List.of(
+                new BotCommand("/start", i18n.msg(lang, "bot.command.start")),
+                new BotCommand("/cancel", i18n.msg(lang, "bot.command.cancel")),
+                new BotCommand("/settings", i18n.msg(lang, "bot.command.settings"))
+        );
     }
 
     @Override
@@ -161,23 +164,44 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     private void handleMessageText(long chatId, long userId, String text) {
         if (text.startsWith("/start")) {
             getSession(userId).reset();
-            messenger.send(chatId, HELP_TEXT);
+            handleStart(chatId, userId);
         } else if (text.startsWith("/cancel")) {
             handleCancel(chatId, userId);
+        } else if (text.startsWith("/settings")) {
+            handleSettings(chatId, userId);
         } else {
             handleTextInput(chatId, userId, text);
         }
     }
 
+    private void handleStart(long chatId, long userId) {
+        BotLanguage stored = resolveStoredLanguage(userId);
+        if (stored == null) {
+            messenger.sendWithKeyboard(chatId,
+                    i18n.msg(BotLanguage.EN, "bot.start.choose_language"),
+                    keyboards.languageChoiceKeyboard());
+            return;
+        }
+        messenger.send(chatId, i18n.msg(stored, "bot.start.help"));
+    }
+
     private void handleCancel(long chatId, long userId) {
+        BotLanguage lang = resolveLanguage(userId);
         String activeTaskId = jobProducer.getActiveExport(userId);
         if (activeTaskId == null) {
-            messenger.send(chatId, "❌ Нет активного экспорта.");
+            messenger.send(chatId, i18n.msg(lang, "bot.cancel.no_active"));
             return;
         }
         jobProducer.cancelExport(userId);
-        messenger.send(chatId, "✅ Экспорт " + activeTaskId + " отменён.");
+        messenger.send(chatId, i18n.msg(lang, "bot.cancel.ok", activeTaskId));
         getSession(userId).reset();
+    }
+
+    private void handleSettings(long chatId, long userId) {
+        BotLanguage lang = resolveLanguage(userId);
+        messenger.sendWithKeyboard(chatId,
+                i18n.msg(lang, "bot.settings.title"),
+                keyboards.settingsKeyboard(lang));
     }
 
     private void handleTextInput(long chatId, long userId, String text) {
@@ -190,24 +214,24 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     }
 
     private void handleChatIdentifier(long chatId, long userId, String input) {
-        if (checkActiveExportAndNotify(chatId, userId)) {
+        BotLanguage lang = resolveLanguage(userId);
+        if (checkActiveExportAndNotify(chatId, userId, lang)) {
             return;
         }
 
         UserSession session = getSession(userId);
-        String[] parsed = parseTmeLink(input);
-        String identifier = parsed[0];
+        String identifier = BotInputParser.extractUsername(input);
         if (identifier == null) {
-            messenger.send(chatId, "❌ Неверный формат. Отправьте ссылку (https://t.me/channel) или @username.");
+            messenger.send(chatId, i18n.msg(lang, "bot.error.invalid_format"));
             return;
         }
 
         session.setChatId(identifier);
-        session.setTopicId(parseTopicId(parsed[1]));
+        session.setTopicId(BotInputParser.extractTopicId(input));
         session.setChatDisplay("@" + identifier);
         session.setState(UserSession.State.AWAITING_DATE_CHOICE);
 
-        sendDateChoiceMenu(chatId, session.getChatDisplay());
+        sendDateChoiceMenu(chatId, lang, session.getChatDisplay());
     }
 
     private void handleCallbackSafe(CallbackQuery callback) {
@@ -231,8 +255,21 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         long chatId = cbMessage.getChatId();
         String data = callback.getData();
         int messageId = cbMessage.getMessageId();
-        UserSession session = getSession(userId);
         messenger.answerCallback(callback.getId());
+
+        if (data.startsWith(CB_LANG_PREFIX)) {
+            handleLanguageCallback(chatId, userId, messageId, data.substring(CB_LANG_PREFIX.length()));
+            return;
+        }
+        if (CB_SETTINGS_LANGUAGE.equals(data)) {
+            messenger.editMessage(chatId, messageId,
+                    i18n.msg(BotLanguage.EN, "bot.start.choose_language"),
+                    keyboards.languageChoiceKeyboard());
+            return;
+        }
+
+        BotLanguage lang = resolveLanguage(userId);
+        UserSession session = getSession(userId);
 
         switch (data) {
             case CB_EXPORT_ALL -> {
@@ -247,16 +284,18 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
             case CB_DATE_RANGE -> {
                 session.setState(UserSession.State.AWAITING_FROM_DATE);
                 messenger.editMessage(chatId, messageId,
-                        "📅 Чат: " + session.getChatDisplay() + PROMPT_FROM_DATE,
-                        buildFromDateKeyboard());
+                        i18n.msg(lang, "bot.prompt.from_range_header", session.getChatDisplay())
+                                + i18n.msg(lang, "bot.prompt.from_date"),
+                        keyboards.fromDateKeyboard(lang));
             }
             case CB_FROM_START -> {
                 session.setFromDate(null);
                 session.setState(UserSession.State.AWAITING_TO_DATE);
                 messenger.editMessage(chatId, messageId,
-                        "📅 Чат: " + session.getChatDisplay()
-                                + "\nОт: начало чата" + PROMPT_TO_DATE,
-                        buildToDateKeyboard());
+                        i18n.msg(lang, "bot.prompt.from_range_header", session.getChatDisplay())
+                                + i18n.msg(lang, "bot.prompt.from_start_line")
+                                + i18n.msg(lang, "bot.prompt.to_date"),
+                        keyboards.toDateKeyboard(lang));
             }
             case CB_TO_TODAY -> {
                 session.setToDate(null);
@@ -264,60 +303,83 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
             }
             case CB_BACK_TO_MAIN -> {
                 session.reset();
-                messenger.editMessage(chatId, messageId, HELP_TEXT, null);
+                messenger.editMessage(chatId, messageId, i18n.msg(lang, "bot.start.help"), null);
             }
             case CB_BACK_TO_DATE_CHOICE -> {
                 session.setFromDate(null);
                 session.setToDate(null);
                 session.setState(UserSession.State.AWAITING_DATE_CHOICE);
                 messenger.editMessage(chatId, messageId,
-                        "📋 Чат: " + session.getChatDisplay() + "\nВыберите диапазон:",
-                        buildDateChoiceKeyboard());
+                        i18n.msg(lang, "bot.prompt.choose_range_short", session.getChatDisplay()),
+                        keyboards.dateChoiceKeyboard(lang));
             }
             case CB_BACK_TO_FROM_DATE -> {
                 session.setToDate(null);
                 session.setState(UserSession.State.AWAITING_FROM_DATE);
                 messenger.editMessage(chatId, messageId,
-                        "📅 Чат: " + session.getChatDisplay() + PROMPT_FROM_DATE,
-                        buildFromDateKeyboard());
+                        i18n.msg(lang, "bot.prompt.from_range_header", session.getChatDisplay())
+                                + i18n.msg(lang, "bot.prompt.from_date"),
+                        keyboards.fromDateKeyboard(lang));
             }
             case CB_CANCEL_EXPORT -> {
                 jobProducer.cancelExport(userId);
-                messenger.editMessage(chatId, messageId, "✅ Экспорт отменён.", null);
+                messenger.editMessage(chatId, messageId,
+                        i18n.msg(lang, "bot.cancel.ok_simple"), null);
                 session.reset();
             }
             default -> log.warn("Неизвестный callback: {}", data);
         }
     }
 
+    private void handleLanguageCallback(long chatId, long userId, int messageId, String code) {
+        BotLanguage picked = BotLanguage.fromCode(code).orElse(null);
+        if (picked == null) {
+            log.warn("Неизвестный код языка в callback от userId={}: {}", userId, code);
+            return;
+        }
+        try {
+            userUpserter.setLanguage(userId, picked.getCode());
+        } catch (RuntimeException ex) {
+            log.error("Не удалось сохранить язык userId={} code={}", userId, picked.getCode(), ex);
+            messenger.send(chatId, i18n.msg(picked, "bot.error.language_save_failed"));
+            return;
+        }
+        log.info("Пользователь {} выбрал язык: {}", userId, picked.getCode());
+        messenger.editMessage(chatId, messageId, i18n.msg(picked, "bot.start.help"), null);
+    }
+
     private void handleFromDateInput(long chatId, long userId, String text) {
-        LocalDate date = parseDate(text);
+        BotLanguage lang = resolveLanguage(userId);
+        LocalDate date = BotInputParser.parseDate(text);
         if (date == null) {
-            messenger.send(chatId, "❌ Неверный формат (дд.мм.гггг)");
+            messenger.send(chatId, i18n.msg(lang, "bot.error.invalid_date_format"));
             return;
         }
         UserSession session = getSession(userId);
         session.setFromDate(date.atStartOfDay().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
         session.setState(UserSession.State.AWAITING_TO_DATE);
         messenger.sendWithKeyboard(chatId,
-                "📅 От: " + date.format(DATE_FORMAT) + "\n\nВведите конечную дату" + PROMPT_TO_DATE_INLINE,
-                buildToDateKeyboard());
+                i18n.msg(lang, "bot.prompt.from_date_set", date.format(BotInputParser.dateFormat()))
+                        + i18n.msg(lang, "bot.prompt.to_date_inline"),
+                keyboards.toDateKeyboard(lang));
     }
 
     private void handleToDateInput(long chatId, long userId, String text) {
-        LocalDate date = parseDate(text);
+        BotLanguage lang = resolveLanguage(userId);
+        LocalDate date = BotInputParser.parseDate(text);
         if (date == null) {
-            messenger.send(chatId, "❌ Неверный формат (дд.мм.гггг)");
+            messenger.send(chatId, i18n.msg(lang, "bot.error.invalid_date_format"));
             return;
         }
-        getSession(userId).setToDate(date.atTime(23, 59, 59).toString());
+        getSession(userId).setToDate(date.atTime(END_OF_DAY).toString());
         startExport(chatId, userId, 0);
     }
 
     private void startExport(long chatId, long userId, int editMessageId) {
+        BotLanguage lang = resolveLanguage(userId);
         UserSession session = getSession(userId);
 
-        if (checkActiveExportAndNotify(chatId, userId)) {
+        if (checkActiveExportAndNotify(chatId, userId, lang)) {
             return;
         }
 
@@ -325,7 +387,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         String targetIdentifier = session.getChatId();
 
         if (targetIdentifier == null) {
-            messenger.send(chatId, "❌ Сессия истекла. Отправьте @username или ссылку на чат заново.");
+            messenger.send(chatId, i18n.msg(lang, "bot.error.session_expired"));
             session.reset();
             return;
         }
@@ -335,34 +397,32 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
                     session.getTopicId(), session.getFromDate(), session.getToDate());
         } catch (IllegalStateException e) {
             log.warn("Попытка дублирующего экспорта от пользователя {}: {}", userId, e.getMessage());
-            messenger.send(chatId,
-                    "⏳ У вас уже есть активный экспорт. Дождитесь его завершения или отправьте /cancel");
+            messenger.send(chatId, i18n.msg(lang, "bot.error.active_export_exists"));
             session.reset();
             return;
         } catch (Exception e) {
             log.error("Ошибка при постановке задачи в очередь: {}", e.getMessage(), e);
-            messenger.send(chatId, "❌ Произошла ошибка при добавлении задачи. Попробуйте позже.");
+            messenger.send(chatId, i18n.msg(lang, "bot.error.queue_fail"));
             session.reset();
             return;
         }
 
         // Захватываем данные сессии ДО reset() — иначе в сообщении будет «Чат: null».
         String chatDisplay = session.getChatDisplay();
-        String dateInfo = buildDateInfoText(session);
+        String dateInfo = buildDateInfoText(lang, session);
 
         boolean fromCache = jobProducer.isLikelyCached(targetIdentifier);
         long pendingInQueue = jobProducer.getQueueLength();
         boolean hasActiveJob = jobProducer.hasActiveProcessingJob();
-        String queueInfo = buildQueueInfoText(fromCache, pendingInQueue, hasActiveJob);
+        String queueInfo = buildQueueInfoText(lang, fromCache, pendingInQueue, hasActiveJob);
 
-        String resultText = String.format(
-                "⏳ Задача принята!\n\nID: %s\nЧат: %s%s%s",
+        String resultText = i18n.msg(lang, "bot.task.accepted",
                 taskId, chatDisplay, dateInfo, queueInfo);
 
         InlineKeyboardMarkup cancelKeyboard = InlineKeyboardMarkup.builder()
                 .keyboardRow(new InlineKeyboardRow(
                         InlineKeyboardButton.builder()
-                                .text("❌ Отменить экспорт")
+                                .text(i18n.msg(lang, "bot.button.cancel_export"))
                                 .callbackData(CB_CANCEL_EXPORT)
                                 .build()))
                 .build();
@@ -384,52 +444,12 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         session.reset();
     }
 
-    
-    private void sendDateChoiceMenu(long chatId, String display) {
+    private void sendDateChoiceMenu(long chatId, BotLanguage lang, String display) {
         messenger.sendWithKeyboard(chatId,
-                "📋 Чат: " + display + "\n\nВыберите диапазон экспорта:",
-                buildDateChoiceKeyboard());
+                i18n.msg(lang, "bot.prompt.choose_range", display),
+                keyboards.dateChoiceKeyboard(lang));
     }
 
-    private InlineKeyboardMarkup buildDateChoiceKeyboard() {
-        return InlineKeyboardMarkup.builder()
-                .keyboardRow(new InlineKeyboardRow(
-                        InlineKeyboardButton.builder()
-                                .text("📦 Весь чат")
-                                .callbackData(CB_EXPORT_ALL)
-                                .build()))
-                .keyboardRow(new InlineKeyboardRow(
-                        InlineKeyboardButton.builder()
-                                .text("⏱ 24 часа")
-                                .callbackData(CB_LAST_24H)
-                                .build(),
-                        InlineKeyboardButton.builder()
-                                .text("🗓 3 дня")
-                                .callbackData(CB_LAST_3D)
-                                .build()))
-                .keyboardRow(new InlineKeyboardRow(
-                        InlineKeyboardButton.builder()
-                                .text("🗓 7 дней")
-                                .callbackData(CB_LAST_7D)
-                                .build(),
-                        InlineKeyboardButton.builder()
-                                .text("🗓 30 дней")
-                                .callbackData(CB_LAST_30D)
-                                .build()))
-                .keyboardRow(new InlineKeyboardRow(
-                        InlineKeyboardButton.builder()
-                                .text("📅 Указать диапазон дат")
-                                .callbackData(CB_DATE_RANGE)
-                                .build()))
-                .keyboardRow(new InlineKeyboardRow(
-                        InlineKeyboardButton.builder()
-                                .text("◀️ Назад")
-                                .callbackData(CB_BACK_TO_MAIN)
-                                .build()))
-                .build();
-    }
-
-    
     private void startQuickRangeExport(long chatId, long userId, int messageId, int days) {
         UserSession session = getSession(userId);
         LocalDate from = LocalDate.now().minusDays(days - 1L);
@@ -438,140 +458,68 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         startExport(chatId, userId, messageId);
     }
 
-    private InlineKeyboardMarkup buildFromDateKeyboard() {
-        return InlineKeyboardMarkup.builder()
-                .keyboardRow(new InlineKeyboardRow(
-                        InlineKeyboardButton.builder()
-                                .text("⏮ С начала чата")
-                                .callbackData(CB_FROM_START)
-                                .build()))
-                .keyboardRow(new InlineKeyboardRow(
-                        InlineKeyboardButton.builder()
-                                .text("◀️ Назад")
-                                .callbackData(CB_BACK_TO_DATE_CHOICE)
-                                .build()))
-                .build();
-    }
-
-    private InlineKeyboardMarkup buildToDateKeyboard() {
-        return InlineKeyboardMarkup.builder()
-                .keyboardRow(new InlineKeyboardRow(
-                        InlineKeyboardButton.builder()
-                                .text("⏭ До сегодня")
-                                .callbackData(CB_TO_TODAY)
-                                .build()))
-                .keyboardRow(new InlineKeyboardRow(
-                        InlineKeyboardButton.builder()
-                                .text("◀️ Назад")
-                                .callbackData(CB_BACK_TO_FROM_DATE)
-                                .build()))
-                .build();
-    }
-
-    
-    private boolean checkActiveExportAndNotify(long chatId, long userId) {
+    private boolean checkActiveExportAndNotify(long chatId, long userId, BotLanguage lang) {
         String activeTaskId = jobProducer.getActiveExport(userId);
         if (activeTaskId != null) {
-            messenger.send(chatId, "⏳ У вас уже есть активный экспорт ("
-                    + activeTaskId + ").\nДождитесь его завершения или отправьте /cancel");
+            messenger.send(chatId, i18n.msg(lang, "bot.error.active_export_exists_id", activeTaskId));
             return true;
         }
         return false;
     }
 
-    
-    @Scheduled(fixedDelay = SESSION_EVICT_DELAY_MS)
-    public void evictStaleSessions() {
-        if (sessions.isEmpty()) return;
-        Instant cutoff = Instant.now().minus(Duration.ofHours(2));
-        int beforeSize = sessions.size();
-        sessions.entrySet().removeIf(entry -> entry.getValue().getLastAccess().isBefore(cutoff));
-        int removed = beforeSize - sessions.size();
-        if (removed > 0) {
-            log.info("Evicted {} stale sessions. Current count: {}", removed, sessions.size());
-        }
-    }
-
     private UserSession getSession(long userId) {
-        UserSession session = sessions.computeIfAbsent(userId, k -> new UserSession());
-        session.touch();
-        return session;
+        return sessionRegistry.get(userId);
     }
 
-    private String buildQueueInfoText(boolean fromCache, long pendingInQueue, boolean hasActiveJob) {
+    /**
+     * Язык, сохранённый в БД. {@code null} — ещё не выбран (показать клавиатуру выбора).
+     */
+    private BotLanguage resolveStoredLanguage(long userId) {
+        return userUpserter.getLanguage(userId)
+                .flatMap(BotLanguage::fromCode)
+                .orElse(null);
+    }
+
+    /**
+     * Язык для рендера UI. Если в БД нет — {@link BotLanguage#EN}: универсальный fallback,
+     * гарантирующий понятный ответ до выбора.
+     */
+    private BotLanguage resolveLanguage(long userId) {
+        BotLanguage stored = resolveStoredLanguage(userId);
+        return stored != null ? stored : BotLanguage.EN;
+    }
+
+    private String buildQueueInfoText(BotLanguage lang, boolean fromCache, long pendingInQueue, boolean hasActiveJob) {
         if (fromCache) {
-            return "\n\n⚡ Данные в кэше — результат будет быстро!";
+            return i18n.msg(lang, "bot.queue.cached");
         }
         // pendingInQueue includes this job; aheadCount excludes it
         long aheadCount = (pendingInQueue - 1) + (hasActiveJob ? 1 : 0);
         long myPosition = pendingInQueue + (hasActiveJob ? 1 : 0);
         if (aheadCount <= 0) {
-            return "\n\n⚙️ Задача поставлена в работу, ожидайте...";
+            return i18n.msg(lang, "bot.queue.starting");
         }
-        return String.format("\n\n📋 Вы в очереди: позиция %d\nВпереди %d задач(и)", myPosition, aheadCount);
+        return i18n.msg(lang, "bot.queue.position", myPosition, aheadCount);
     }
 
-    private String buildDateInfoText(UserSession session) {
+    private String buildDateInfoText(BotLanguage lang, UserSession session) {
         if (session.getFromDate() == null && session.getToDate() == null) {
             return "";
         }
-        StringBuilder sb = new StringBuilder("\n📅 ");
+        StringBuilder sb = new StringBuilder(i18n.msg(lang, "bot.date.prefix")).append(' ');
         if (session.getFromDate() != null) {
-            LocalDate from = LocalDate.parse(session.getFromDate().substring(0, 10));
-            sb.append("От: ").append(from.format(DATE_FORMAT));
+            LocalDate from = LocalDateTime.parse(session.getFromDate()).toLocalDate();
+            sb.append(i18n.msg(lang, "bot.date.from", from.format(BotInputParser.dateFormat())));
         } else {
-            sb.append("От: начало чата");
+            sb.append(i18n.msg(lang, "bot.date.from_chat_start"));
         }
         if (session.getToDate() != null) {
-            LocalDate to = LocalDate.parse(session.getToDate().substring(0, 10));
-            sb.append(" — До: ").append(to.format(DATE_FORMAT));
+            LocalDate to = LocalDateTime.parse(session.getToDate()).toLocalDate();
+            sb.append(i18n.msg(lang, "bot.date.to", to.format(BotInputParser.dateFormat())));
         } else {
-            sb.append(" — До: сегодня");
+            sb.append(i18n.msg(lang, "bot.date.to_today"));
         }
         return sb.toString();
-    }
-
-    static String extractUsername(String input) {
-        return parseTmeLink(input)[0];
-    }
-
-    static Integer extractTopicId(String input) {
-        return parseTopicId(parseTmeLink(input)[1]);
-    }
-
-    private static Integer parseTopicId(String raw) {
-        if (raw == null) {
-            return null;
-        }
-        try {
-            int topicId = Integer.parseInt(raw);
-            return topicId > 0 ? topicId : null;
-        } catch (NumberFormatException e) {
-            return null;
-        }
-    }
-
-    /**
-     * Один проход regex: [username, rawTopicId].
-     */
-    private static String[] parseTmeLink(String input) {
-        Matcher matcher = TME_LINK_PATTERN.matcher(input);
-        if (matcher.find()) {
-            return new String[]{matcher.group(1), matcher.group(2)};
-        }
-        Matcher usernameMatcher = USERNAME_PATTERN.matcher(input);
-        if (usernameMatcher.matches()) {
-            return new String[]{usernameMatcher.group(1), null};
-        }
-        return new String[]{null, null};
-    }
-
-    static LocalDate parseDate(String text) {
-        try {
-            return LocalDate.parse(text.trim(), DATE_FORMAT);
-        } catch (Exception e) {
-            return null;
-        }
     }
 
     private void publishBotUserSeen(User from) {

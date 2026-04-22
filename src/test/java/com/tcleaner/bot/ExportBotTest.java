@@ -1,17 +1,24 @@
 package com.tcleaner.bot;
 
+import com.tcleaner.core.BotLanguage;
 import com.tcleaner.dashboard.events.StatsStreamPublisher;
+import com.tcleaner.dashboard.service.ingestion.BotUserUpserter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.context.support.ReloadableResourceBundleMessageSource;
 import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.User;
 import org.telegram.telegrambots.meta.api.objects.chat.Chat;
 import org.telegram.telegrambots.meta.api.objects.message.Message;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Locale;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -34,12 +41,19 @@ class ExportBotTest {
 
     private ExportJobProducer jobProducerMock;
     private BotMessenger messengerMock;
+    private BotUserUpserter userUpserterMock;
+    private BotI18n i18n;
     private ExportBot bot;
 
     @BeforeEach
     void setUp() {
         jobProducerMock = mock(ExportJobProducer.class);
         messengerMock = mock(BotMessenger.class);
+        userUpserterMock = mock(BotUserUpserter.class);
+
+        // По умолчанию — юзер уже выбрал русский (существующая проверка текстов в assertions
+        // построена под русский; тесты, специфичные для выбора языка, явно перекрывают).
+        when(userUpserterMock.getLanguage(anyLong())).thenReturn(Optional.of("ru"));
 
         when(jobProducerMock.getActiveExport(anyLong())).thenReturn(null);
         when(jobProducerMock.enqueue(anyLong(), anyLong(), any(String.class), isNull(), isNull()))
@@ -55,17 +69,31 @@ class ExportBotTest {
         when(jobProducerMock.hasActiveProcessingJob()).thenReturn(false);
         when(messengerMock.sendWithKeyboardGetId(anyLong(), anyString(), any())).thenReturn(42);
 
+        i18n = new BotI18n(newTestMessageSource());
+
         @SuppressWarnings("unchecked")
         ObjectProvider<StatsStreamPublisher> noPublisher = mock(ObjectProvider.class);
         when(noPublisher.getIfAvailable()).thenReturn(null);
-        bot = new ExportBot("token", "https://test.example.com/dashboard/mini-app", jobProducerMock, messengerMock, noPublisher);
+        bot = new ExportBot("token", "https://test.example.com/dashboard/mini-app",
+                jobProducerMock, messengerMock, i18n, new BotKeyboards(i18n),
+                new BotSessionRegistry(), userUpserterMock, noPublisher);
+    }
+
+    private static ReloadableResourceBundleMessageSource newTestMessageSource() {
+        ReloadableResourceBundleMessageSource src = new ReloadableResourceBundleMessageSource();
+        src.setBasename("classpath:bot_messages");
+        src.setDefaultEncoding(StandardCharsets.UTF_8.name());
+        src.setFallbackToSystemLocale(false);
+        src.setDefaultLocale(Locale.ENGLISH);
+        return src;
     }
 
     @Test
-    @DisplayName("При старте регистрируются slash-команды Telegram")
+    @DisplayName("При старте регистрируются slash-команды для default + всех локалей")
     void testRegistersSlashCommandsOnStartup() {
         bot.registerBotCommands();
-        verify(messengerMock).setMyCommands(any());
+        // 1 default + 10 per-locale
+        verify(messengerMock, atLeast(11)).setMyCommands(any(), any());
     }
 
     @Nested
@@ -224,7 +252,7 @@ class ExportBotTest {
     class CommandsAndSessions {
 
         @Test
-        @DisplayName("/start отправляет HELP_TEXT без inline-кнопки (Dashboard в chat menu)")
+        @DisplayName("/start у юзера с выбранным ru отправляет русский HELP")
         void testStartSendsHelpText() {
             bot.consume(createTextMessageUpdate(123L, "/start"));
 
@@ -296,72 +324,144 @@ class ExportBotTest {
     }
 
     @Nested
+    @DisplayName("Выбор языка (/start, /settings, lang:*)")
+    class LanguageSelection {
+
+        @Test
+        @DisplayName("/start без выбранного языка → клавиатура выбора, не HELP")
+        void startWithoutLanguageShowsChooser() {
+            when(userUpserterMock.getLanguage(anyLong())).thenReturn(Optional.empty());
+
+            bot.consume(createTextMessageUpdate(123L, "/start"));
+
+            verify(messengerMock).sendWithKeyboard(
+                    eq(123L),
+                    contains("Please select your language"),
+                    any(InlineKeyboardMarkup.class));
+            verify(messengerMock, never()).send(eq(123L), contains("Этот бот экспортирует"));
+        }
+
+        @Test
+        @DisplayName("callback lang:fa сохраняет fa и показывает фарси HELP")
+        void callbackPersistsLanguageAndShowsHelp() {
+            when(userUpserterMock.getLanguage(anyLong())).thenReturn(Optional.empty());
+            bot.consume(createTextMessageUpdate(123L, "/start"));
+
+            bot.consume(createCallbackUpdate(123L, ExportBot.CB_LANG_PREFIX + "fa"));
+
+            verify(userUpserterMock).setLanguage(eq(123L), eq("fa"));
+            verify(messengerMock).editMessage(
+                    eq(123L), anyInt(), anyString(), isNull());
+        }
+
+        @Test
+        @DisplayName("callback lang:<невалидный> игнорируется, язык не сохраняется")
+        void invalidLanguageCodeIgnored() {
+            bot.consume(createCallbackUpdate(123L, ExportBot.CB_LANG_PREFIX + "xx"));
+
+            verify(userUpserterMock, never()).setLanguage(anyLong(), anyString());
+        }
+
+        @Test
+        @DisplayName("/settings отправляет меню настроек с кнопкой смены языка")
+        void settingsShowsMenu() {
+            bot.consume(createTextMessageUpdate(123L, "/settings"));
+
+            verify(messengerMock).sendWithKeyboard(
+                    eq(123L),
+                    contains("Настройки"),
+                    any(InlineKeyboardMarkup.class));
+        }
+
+        @Test
+        @DisplayName("callback settings:language → клавиатура выбора языка (editMessage)")
+        void settingsLanguageCallbackShowsChooser() {
+            bot.consume(createCallbackUpdate(123L, ExportBot.CB_SETTINGS_LANGUAGE));
+
+            verify(messengerMock).editMessage(
+                    eq(123L), anyInt(),
+                    contains("Please select your language"),
+                    any(InlineKeyboardMarkup.class));
+        }
+
+        @Test
+        @DisplayName("/start у юзера с en отправляет английский HELP")
+        void startWithEnSendsEnglishHelp() {
+            when(userUpserterMock.getLanguage(anyLong())).thenReturn(Optional.of("en"));
+
+            bot.consume(createTextMessageUpdate(123L, "/start"));
+
+            verify(messengerMock).send(eq(123L), contains("This bot exports"));
+        }
+    }
+
+    @Nested
     @DisplayName("Парсинг topic ID из ссылок")
     class TopicIdParsing {
 
         @Test
         @DisplayName("t.me/channel/12345 — extractUsername возвращает channel")
         void testTmeLinkWithTopicUsername() {
-            assertThat(ExportBot.extractUsername("https://t.me/public_channel/12345"))
+            assertThat(BotInputParser.extractUsername("https://t.me/public_channel/12345"))
                     .isEqualTo("public_channel");
         }
 
         @Test
         @DisplayName("t.me/channel/12345 — extractTopicId возвращает 12345")
         void testTmeLinkWithTopicId() {
-            assertThat(ExportBot.extractTopicId("https://t.me/public_channel/12345"))
+            assertThat(BotInputParser.extractTopicId("https://t.me/public_channel/12345"))
                     .isEqualTo(12345);
         }
 
         @Test
         @DisplayName("t.me/channel (без топика) — extractTopicId возвращает null")
         void testTmeLinkWithoutTopicId() {
-            assertThat(ExportBot.extractTopicId("https://t.me/public_channel"))
+            assertThat(BotInputParser.extractTopicId("https://t.me/public_channel"))
                     .isNull();
         }
 
         @Test
         @DisplayName("@username — extractTopicId возвращает null")
         void testAtUsernameTopicIdNull() {
-            assertThat(ExportBot.extractTopicId("@test_chat")).isNull();
+            assertThat(BotInputParser.extractTopicId("@test_chat")).isNull();
         }
 
         @Test
         @DisplayName("t.me/channel/0 — невалидный topic_id, extractTopicId возвращает null")
         void testZeroTopicId() {
-            assertThat(ExportBot.extractTopicId("https://t.me/public_channel/0"))
+            assertThat(BotInputParser.extractTopicId("https://t.me/public_channel/0"))
                     .isNull();
         }
 
         @Test
         @DisplayName("t.me/channel/abc — нечисловой topic, extractUsername извлекает channel, topicId null")
         void testNonNumericTopicIgnored() {
-            assertThat(ExportBot.extractUsername("https://t.me/public_channel/abc"))
+            assertThat(BotInputParser.extractUsername("https://t.me/public_channel/abc"))
                     .isEqualTo("public_channel");
-            assertThat(ExportBot.extractTopicId("https://t.me/public_channel/abc"))
+            assertThat(BotInputParser.extractTopicId("https://t.me/public_channel/abc"))
                     .isNull();
         }
 
         @Test
         @DisplayName("t.me/channel/1 — topic_id=1 (General topic) валиден")
         void testTopicIdOne() {
-            assertThat(ExportBot.extractTopicId("https://t.me/public_channel/1"))
+            assertThat(BotInputParser.extractTopicId("https://t.me/public_channel/1"))
                     .isEqualTo(1);
         }
 
         @Test
         @DisplayName("t.me/channel/148220 — реальный topic_id парсится")
         void testRealTopicId() {
-            assertThat(ExportBot.extractTopicId("https://t.me/strbypass/148220"))
+            assertThat(BotInputParser.extractTopicId("https://t.me/strbypass/148220"))
                     .isEqualTo(148220);
-            assertThat(ExportBot.extractUsername("https://t.me/strbypass/148220"))
+            assertThat(BotInputParser.extractUsername("https://t.me/strbypass/148220"))
                     .isEqualTo("strbypass");
         }
 
         @Test
         @DisplayName("t.me/channel/99999999999 — overflow Integer, extractTopicId возвращает null")
         void testOverflowTopicId() {
-            assertThat(ExportBot.extractTopicId("https://t.me/public_channel/99999999999"))
+            assertThat(BotInputParser.extractTopicId("https://t.me/public_channel/99999999999"))
                     .isNull();
         }
     }
@@ -440,7 +540,9 @@ class ExportBotTest {
         }
 
         private void newBot(String url) {
-            new ExportBot("token", url, jobProducerMock, messengerMock, emptyPublisher());
+            new ExportBot("token", url, jobProducerMock, messengerMock,
+                    i18n, new BotKeyboards(i18n), new BotSessionRegistry(),
+                    userUpserterMock, emptyPublisher());
         }
 
         @Test
@@ -477,6 +579,82 @@ class ExportBotTest {
         void acceptsPublicHttpsUrl() {
             assertThatCode(() -> newBot("https://tec.searchingforgamesforever.online/dashboard/mini-app"))
                     .doesNotThrowAnyException();
+        }
+    }
+
+    @Nested
+    @DisplayName("BotLanguage enum")
+    class BotLanguageTests {
+
+        @Test
+        @DisplayName("fromCode резолвит ru/en/fa case-insensitive")
+        void fromCodeCaseInsensitive() {
+            assertThat(BotLanguage.fromCode("ru")).contains(BotLanguage.RU);
+            assertThat(BotLanguage.fromCode("RU")).contains(BotLanguage.RU);
+            assertThat(BotLanguage.fromCode("fa")).contains(BotLanguage.FA);
+        }
+
+        @Test
+        @DisplayName("fromCode принимает pt-BR и pt_BR")
+        void fromCodePtBrBothForms() {
+            assertThat(BotLanguage.fromCode("pt-BR")).contains(BotLanguage.PT_BR);
+            assertThat(BotLanguage.fromCode("pt_BR")).contains(BotLanguage.PT_BR);
+        }
+
+        @Test
+        @DisplayName("fromCode невалидный → пусто")
+        void fromCodeInvalid() {
+            assertThat(BotLanguage.fromCode("xx")).isEmpty();
+            assertThat(BotLanguage.fromCode("")).isEmpty();
+            assertThat(BotLanguage.fromCode(null)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("RTL флаг установлен для fa и ar")
+        void rtlFlag() {
+            assertThat(BotLanguage.FA.isRtl()).isTrue();
+            assertThat(BotLanguage.AR.isRtl()).isTrue();
+            assertThat(BotLanguage.RU.isRtl()).isFalse();
+            assertThat(BotLanguage.EN.isRtl()).isFalse();
+        }
+
+        @Test
+        @DisplayName("allActive содержит ровно 10 языков")
+        void allActiveCount() {
+            assertThat(BotLanguage.allActive()).hasSize(10);
+        }
+    }
+
+    @Nested
+    @DisplayName("BotI18n")
+    class BotI18nTests {
+
+        @Test
+        @DisplayName("msg резолвит ключ в ru локали")
+        void msgResolvesRu() {
+            String result = i18n.msg(BotLanguage.RU, "bot.cancel.no_active");
+            assertThat(result).contains("Нет активного экспорта");
+        }
+
+        @Test
+        @DisplayName("msg резолвит ключ в en локали")
+        void msgResolvesEn() {
+            String result = i18n.msg(BotLanguage.EN, "bot.cancel.no_active");
+            assertThat(result).contains("No active export");
+        }
+
+        @Test
+        @DisplayName("msg с отсутствующим ключом возвращает сам ключ (graceful)")
+        void msgMissingKeyReturnsKey() {
+            String result = i18n.msg(BotLanguage.RU, "bot.nonexistent.key");
+            assertThat(result).isEqualTo("bot.nonexistent.key");
+        }
+
+        @Test
+        @DisplayName("msg с аргументами подставляет через MessageFormat")
+        void msgWithArgs() {
+            String result = i18n.msg(BotLanguage.RU, "bot.cancel.ok", "task_123");
+            assertThat(result).contains("task_123").contains("отменён");
         }
     }
 }

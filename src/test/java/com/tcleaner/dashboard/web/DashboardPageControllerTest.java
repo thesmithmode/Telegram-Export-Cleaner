@@ -1,5 +1,7 @@
 package com.tcleaner.dashboard.web;
 
+import java.util.Locale;
+
 import com.tcleaner.core.TelegramExporter;
 import com.tcleaner.dashboard.DashboardTestUsers;
 import com.tcleaner.dashboard.auth.DashboardUserDetails;
@@ -114,7 +116,9 @@ class DashboardPageControllerTest {
     @Test
     @DisplayName("GET /dashboard/overview (ADMIN) — 200, KPI + period-filter + chart canvases")
     void overviewRendersForAdmin() throws Exception {
-        mockMvc.perform(get("/dashboard/overview").with(user(ADMIN)))
+        // Явный Accept-Language — admin без botUserId резолвится через request.getLocale();
+        // без locale() тест зависит от JVM default и нестабилен между CI/dev-машинами.
+        mockMvc.perform(get("/dashboard/overview").with(user(ADMIN)).locale(new Locale("ru")))
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith("text/html"))
                 .andExpect(content().string(containsString("Обзор")))

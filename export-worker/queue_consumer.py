@@ -28,6 +28,7 @@ class QueueConsumer:
             else f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}"
         )
         self.queue_name = settings.REDIS_QUEUE_NAME
+        self.express_queue_name = self.queue_name + "_express"
         self.redis_client: Optional[redis.Redis] = None
 
         # Staging queues: jobs are atomically moved here via LMOVE before processing.
@@ -93,10 +94,6 @@ class QueueConsumer:
                 logger.info("✅ Disconnected from Redis")
         except Exception as e:
             logger.error(f"Error during disconnect: {e}")
-
-    @property
-    def express_queue_name(self) -> str:
-        return self.queue_name + "_express"
 
     async def get_job(self) -> Optional[ExportRequest]:
         if not self.redis_client:

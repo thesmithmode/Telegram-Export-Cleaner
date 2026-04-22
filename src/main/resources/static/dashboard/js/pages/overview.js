@@ -149,8 +149,16 @@
                     : (c.title
                         ? (c.topicId ? c.title + " (топик " + c.topicId + ")" : c.title)
                         : String(c.chatId));
+                // МСК-время для админ-панели. Intl сам учитывает DST и переходы часовых
+                // поясов — без хардкода смещения. Локаль sv-SE даёт ISO-подобный
+                // формат "YYYY-MM-DD HH:MM" без переводов.
                 const lastAccess = c.lastAccessed
-                    ? new Date(c.lastAccessed * 1000).toISOString().slice(0, 16).replace("T", " ")
+                    ? new Intl.DateTimeFormat("sv-SE", {
+                          timeZone: "Europe/Moscow",
+                          year: "numeric", month: "2-digit", day: "2-digit",
+                          hour: "2-digit", minute: "2-digit",
+                          hour12: false,
+                      }).format(new Date(c.lastAccessed * 1000)).replace(",", "")
                     : "—";
                 const cells = [
                     String(i + 1),

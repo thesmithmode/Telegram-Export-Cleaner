@@ -91,4 +91,45 @@ class BotUserUpserterTest {
 
         assertThat(user.getFirstSeen()).isBetween(before, after);
     }
+
+    // ─── language ──────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("getLanguage — Optional.empty() если BotUser отсутствует")
+    void getLanguageEmptyWhenMissing() {
+        assertThat(upserter.getLanguage(9999L)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("getLanguage — Optional.empty() если language == null")
+    void getLanguageEmptyWhenNullField() {
+        upserter.upsert(42L, "alice", "A", Instant.now());
+        assertThat(upserter.getLanguage(42L)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("getLanguage — Optional.empty() если language blank")
+    void getLanguageEmptyWhenBlank() {
+        upserter.upsert(42L, "alice", "A", Instant.now());
+        upserter.setLanguage(42L, "   ");
+        assertThat(upserter.getLanguage(42L)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("setLanguage создаёт BotUser если отсутствует")
+    void setLanguageCreatesUserIfMissing() {
+        upserter.setLanguage(777L, "fa");
+        assertThat(upserter.getLanguage(777L)).contains("fa");
+    }
+
+    @Test
+    @DisplayName("setLanguage обновляет существующего BotUser, не меняя firstSeen")
+    void setLanguageUpdatesExisting() {
+        Instant t1 = Instant.parse("2026-04-15T10:00:00Z");
+        upserter.upsert(42L, "alice", "A", t1);
+        upserter.setLanguage(42L, "ru");
+        upserter.setLanguage(42L, "en");
+
+        assertThat(upserter.getLanguage(42L)).contains("en");
+    }
 }

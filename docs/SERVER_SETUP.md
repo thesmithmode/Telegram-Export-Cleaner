@@ -59,10 +59,15 @@ TELEGRAM_API_HASH=...
 TELEGRAM_SESSION_STRING=...   # pyrogram string session
 TELEGRAM_BOT_TOKEN=...
 
-# Dashboard
-DASHBOARD_ADMIN_PASSWORD=<сложный_пароль>
-DASHBOARD_TEST_PASSWORD=<сложный_пароль>
-# DASHBOARD_TEST_BOT_USER_ID — Telegram user_id для USER-роли (необязательно)
+# Dashboard (Telegram Mini App auth, паролей нет)
+DASHBOARD_ENABLE_BOOTSTRAP=true
+DASHBOARD_ADMIN_TG_ID=<Telegram user_id админа, узнать у @userinfobot>
+
+# Java↔Python API (общий ключ для X-API-Key, java-bot ApiKeyFilter и Python worker)
+JAVA_API_KEY=<random_64_chars>
+
+# Host data path (bind mounts для cache + dashboard)
+HOST_DATA_PATH=/root/telegram-cleaner
 
 # Traefik / HTTPS
 TRAEFIK_ACME_EMAIL=your@email.com
@@ -104,7 +109,7 @@ docker compose -f docker-compose.prod.yml --env-file .env up -d --remove-orphans
 # Добавить в crontab (crontab -e):
 # Ежедневно в 3:00 — бэкап dashboard.db и redis RDB
 0 3 * * * docker exec telegram-export-redis redis-cli BGSAVE && \
-    cp $(docker volume inspect telegram-cleaner_dashboard_data -f '{{.Mountpoint}}')/dashboard.db \
+    cp ${HOST_DATA_PATH}/dashboard/dashboard.db \
        ~/backups/dashboard-$(date +%F).db && \
     find ~/backups -name "dashboard-*.db" -mtime +30 -delete
 ```
@@ -145,7 +150,7 @@ docker system df
 | Порт 80 занят | `ss -tlnp \| grep :80` — найти и остановить nginx/apache |
 | java-bot не стартует | `docker logs telegram-export-java-bot` — Liquibase error? |
 | Ошибка Pyrogram | Обновить `TELEGRAM_SESSION_STRING` через `python get_session.py` |
-| dashboard.db permission denied | `chown 1000:1000 $(docker volume inspect ... -f '{{.Mountpoint}}')` |
+| dashboard.db permission denied | `chown -R 100:101 ${HOST_DATA_PATH}/dashboard` |
 
 ## 10. Изоляция /api от интернета
 

@@ -110,17 +110,25 @@ public class BotMessenger {
         }
     }
 
-    public void setMyCommands(List<BotCommand> commands) {
+    /**
+     * Регистрирует slash-команды. Если {@code languageCode} задан (ISO 639-1, напр. "ru"),
+     * Telegram показывает этот набор клиентам с соответствующим language_code. Если null —
+     * регистрируется default-набор (используется как fallback).
+     */
+    public void setMyCommands(List<BotCommand> commands, String languageCode) {
         try {
-            telegramClient.execute(
-                    SetMyCommands.builder()
-                            .commands(commands)
-                            .scope(new BotCommandScopeDefault())
-                            .build()
-            );
-            log.info("Telegram slash-команды зарегистрированы: {}", commands.size());
+            SetMyCommands.SetMyCommandsBuilder<?, ?> builder = SetMyCommands.builder()
+                    .commands(commands)
+                    .scope(new BotCommandScopeDefault());
+            if (languageCode != null && !languageCode.isBlank()) {
+                builder.languageCode(languageCode);
+            }
+            telegramClient.execute(builder.build());
+            log.info("Telegram slash-команды зарегистрированы ({}): lang={}",
+                    commands.size(), languageCode != null ? languageCode : "default");
         } catch (TelegramApiException e) {
-            log.error("Не удалось зарегистрировать slash-команды: {}", e.getMessage());
+            log.error("Не удалось зарегистрировать slash-команды (lang={}): {}",
+                    languageCode, e.getMessage());
         }
     }
 

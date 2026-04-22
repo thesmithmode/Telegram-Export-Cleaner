@@ -1,0 +1,29 @@
+/*
+ * RTL overrides — подключаются из layout.html только при lang=fa/ar.
+ * Минимальный набор: зеркалирует nav, padding/margin, text-align.
+ * Расширять по мере обнаружения визуальных проблем в RTL-ревью.
+ */
+
+body { direction: rtl; text-align: right; }
+
+.dashboard-header__brand-link { flex-direction: row-reverse; }
+
+.dashboard-nav a {
+    margin-left: 0;
+    margin-right: 0.5rem;
+}
+
+.dashboard-header__user {
+    flex-direction: row-reverse;
+}
+
+.dashboard-header__lang-select {
+    direction: ltr; /* коды языков — латиница, удобнее слева-направо */
+}
+
+/* Таблицы — числа выравниваем по левому краю (в RTL числа всё равно LTR) */
+.dashboard-table td.number,
+.dashboard-table th.number {
+    text-align: left;
+    direction: ltr;
+}

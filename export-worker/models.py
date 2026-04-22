@@ -2,7 +2,13 @@
 from typing import List, Optional, Dict, Any, Union
 from datetime import datetime
 from enum import Enum
+from typing_extensions import TypedDict
 from pydantic import BaseModel, Field, ConfigDict, field_validator
+
+
+class FromIdInfo(TypedDict):
+    peer_type: str
+    peer_id: int
 
 class ErrorCode(str, Enum):
 
@@ -138,7 +144,7 @@ class ExportedMessage(BaseModel):
     date: str = Field(..., description="ISO 8601 datetime")
     text: str = Field(default="", description="Message text")
     from_user: Optional[str] = Field(None, description="Sender name")
-    from_id: Optional[Dict[str, Any]] = Field(None, description="Sender ID info")
+    from_id: Optional[FromIdInfo] = Field(None, description="Sender ID info")
     text_entities: Optional[List[MessageEntity]] = Field(None, description="Text formatting")
     media_type: Optional[str] = Field(None, description="photo, video, audio, etc")
     edited: Optional[bool] = Field(None, description="True if message was edited")
@@ -169,6 +175,10 @@ class SendResponsePayload(BaseModel):
         description="completed or failed",
         pattern="^(completed|failed)$"
     )
+    # Runtime-полиморфно: List[ExportedMessage] из in-memory путей или
+    # AsyncIterator/AsyncGenerator из cache-aware экспорта. Pydantic не валидирует
+    # async-итераторы — оставляем Any, валидация поля не нужна (сериализуется не
+    # через Pydantic, а напрямую в _stream_to_temp_json).
     messages: Union[List[ExportedMessage], Any] = Field(
         ...,
         description="Exported messages (list or AsyncIterator)"
