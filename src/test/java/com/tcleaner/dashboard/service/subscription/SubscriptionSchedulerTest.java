@@ -251,6 +251,45 @@ class SubscriptionSchedulerTest {
     }
 
     @Test
+    @DisplayName("isPeriodElapsed: lastRunAt только что (lastSuccessAt=null) → НЕ истёк — защита от 5-мин цикла")
+    void isPeriodElapsed_guardsAgainstReEnqueueByLastRunAt() {
+        Instant sinceDate = Instant.now().minusSeconds(25 * 3600L);
+        ChatSubscription sub = ChatSubscription.builder()
+                .id(11L).botUserId(100L).chatRefId(200L)
+                .periodHours(24).desiredTimeMsk("09:00").sinceDate(sinceDate)
+                .status(SubscriptionStatus.ACTIVE).consecutiveFailures(0)
+                .lastRunAt(Instant.now().minusSeconds(60))   // запустили минуту назад
+                .lastSuccessAt(null)                          // success ещё не пришёл
+                .lastConfirmAt(Instant.now())
+                .createdAt(Instant.now()).updatedAt(Instant.now())
+                .build();
+
+        boolean elapsed = scheduler.isPeriodElapsed(sub, Instant.now());
+
+        assertThat(elapsed).isFalse();
+    }
+
+    @Test
+    @DisplayName("isPeriodElapsed: lastFailureAt только что → НЕ истёк (не ретраим каждые 5 мин)")
+    void isPeriodElapsed_guardsByLastFailureAt() {
+        Instant sinceDate = Instant.now().minusSeconds(25 * 3600L);
+        ChatSubscription sub = ChatSubscription.builder()
+                .id(12L).botUserId(100L).chatRefId(200L)
+                .periodHours(24).desiredTimeMsk("09:00").sinceDate(sinceDate)
+                .status(SubscriptionStatus.ACTIVE).consecutiveFailures(1)
+                .lastRunAt(Instant.now().minusSeconds(120))
+                .lastFailureAt(Instant.now().minusSeconds(60))
+                .lastSuccessAt(null)
+                .lastConfirmAt(Instant.now())
+                .createdAt(Instant.now()).updatedAt(Instant.now())
+                .build();
+
+        boolean elapsed = scheduler.isPeriodElapsed(sub, Instant.now());
+
+        assertThat(elapsed).isFalse();
+    }
+
+    @Test
     @DisplayName("runDueSubscriptions: чат не найден в БД → recordFailure вызван, остальные подписки продолжают обрабатываться")
     void recordsFailureWhenChatNotFound() {
         when(jobProducer.hasActiveProcessingJob()).thenReturn(false);

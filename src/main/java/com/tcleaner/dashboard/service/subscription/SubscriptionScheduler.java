@@ -15,6 +15,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -133,12 +134,26 @@ public class SubscriptionScheduler {
     }
 
     boolean isPeriodElapsed(ChatSubscription sub, Instant now) {
-        Instant lastSuccess = sub.getLastSuccessAt();
-        if (lastSuccess == null) {
+        // Якорь — последнее "событие" по подписке: успех, попытка или провал.
+        // Без учёта lastRunAt scheduler зацикливался каждые 5 мин, пока worker не завершится
+        // и ingestion не проставит lastSuccessAt. lastFailureAt аналогично блокирует повтор
+        // до следующего окна периода (consecutive_failures=2 → PAUSED обрабатывается отдельно).
+        Instant anchor = latest(sub.getLastSuccessAt(), sub.getLastRunAt(), sub.getLastFailureAt());
+        if (anchor == null) {
             return now.isAfter(sub.getSinceDate());
         }
-        Instant nextRunMin = lastSuccess.plus(Duration.ofHours(sub.getPeriodHours())).minus(PREWINDOW);
+        Instant nextRunMin = anchor.plus(Duration.ofHours(sub.getPeriodHours())).minus(PREWINDOW);
         return now.isAfter(nextRunMin);
+    }
+
+    private static Instant latest(Instant... instants) {
+        Instant max = null;
+        for (Instant i : instants) {
+            if (i != null && (max == null || i.isAfter(max))) {
+                max = i;
+            }
+        }
+        return max;
     }
 
     private void enqueueOne(ChatSubscription sub, Chat chat, Instant now) {
@@ -146,9 +161,11 @@ public class SubscriptionScheduler {
         
         // Усекаем до секунд: Python worker валидирует формат до HH:MM:SS,
         // наносекунды из Instant.now() отправляют job в DLQ.
-        LocalDateTime ldt = LocalDateTime.ofInstant(now, MSK).truncatedTo(ChronoUnit.SECONDS);
-        String fromIso = ldt.minusHours(sub.getPeriodHours()).format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
-        String toIso = ldt.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+        // Диапазон строим в UTC: worker (ensure_utc) трактует naive datetime как UTC.
+        // Если отправлять МСК без offset, последние 3 часа (МСК) выпадают из выборки.
+        LocalDateTime ldtUtc = LocalDateTime.ofInstant(now, ZoneOffset.UTC).truncatedTo(ChronoUnit.SECONDS);
+        String fromIso = ldtUtc.minusHours(sub.getPeriodHours()).format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+        String toIso = ldtUtc.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
 
         String taskId = jobProducer.enqueueSubscription(sub.getBotUserId(), sub.getBotUserId(),
                 chatIdentifier, fromIso, toIso, sub.getId());

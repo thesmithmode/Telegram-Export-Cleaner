@@ -21,6 +21,7 @@
         empty:          i18nEl?.dataset.empty         || "Подписок нет",
         conflict:       i18nEl?.dataset.conflict       || "Уже есть активная подписка",
         firstRun:       i18nEl?.dataset.firstRun       || "Ожидается первый запуск",
+        inProgress:     i18nEl?.dataset.inProgress     || "Выполняется…",
         statusActive:   i18nEl?.dataset.statusActive   || "Активна",
         statusPaused:   i18nEl?.dataset.statusPaused   || "Приостановлена",
         statusArchived: i18nEl?.dataset.statusArchived || "Архивирована",
@@ -69,13 +70,23 @@
 
     /**
      * Вычисляет следующий запуск локально в браузере.
-     * Если lastSuccessAt null — значит ещё не было ни одного запуска.
+     * Якорь — последнее событие подписки (success / run / failure), чтобы
+     * не показывать "Ожидается первый запуск" пока идёт/провалился первый экспорт.
      */
-    function computeNextRun(lastSuccessAt, periodHours) {
-        if (!lastSuccessAt) { return I18N.firstRun; }
-        const last = new Date(lastSuccessAt);
-        if (Number.isNaN(last.getTime())) { return "—"; }
-        const next = new Date(last.getTime() + periodHours * 3600 * 1000);
+    function computeNextRun(sub) {
+        const success = sub.lastSuccessAt ? new Date(sub.lastSuccessAt).getTime() : null;
+        const run     = sub.lastRunAt     ? new Date(sub.lastRunAt).getTime()     : null;
+        const failure = sub.lastFailureAt ? new Date(sub.lastFailureAt).getTime() : null;
+
+        // Запуск начат, но terminal-событие не пришло → "Выполняется…"
+        if (run && (!success || run > success) && (!failure || run > failure)) {
+            return I18N.inProgress;
+        }
+
+        const anchor = Math.max(success || 0, run || 0, failure || 0);
+        if (!anchor) { return I18N.firstRun; }
+
+        const next = new Date(anchor + sub.periodHours * 3600 * 1000);
         return formatDateMsk(next.toISOString());
     }
 
@@ -129,7 +140,7 @@
         stCell.appendChild(stSpan);
         tr.appendChild(stCell);
 
-        tr.appendChild(td(computeNextRun(sub.lastSuccessAt, sub.periodHours)));
+        tr.appendChild(td(computeNextRun(sub)));
 
         // Кнопки действий
         const actCell = document.createElement("td");
