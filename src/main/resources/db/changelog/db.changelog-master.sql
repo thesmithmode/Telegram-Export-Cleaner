@@ -142,6 +142,7 @@ DELETE FROM dashboard_users WHERE telegram_id IS NULL;
 -- =============================================================================
 
 --changeset app:004-bot-users-language splitStatements:true endDelimiter:;
+--validCheckSum 9:ba87f4f4aa953e11bdfac671240bca8f
 
 ALTER TABLE bot_users ADD COLUMN language VARCHAR(5);
 
