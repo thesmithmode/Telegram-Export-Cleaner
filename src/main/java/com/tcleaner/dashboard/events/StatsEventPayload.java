@@ -86,14 +86,6 @@ public class StatsEventPayload {
     @JsonProperty("source")
     private String source;
 
-    /**
-     * ID подписки ({@link com.tcleaner.dashboard.domain.ChatSubscription}),
-     * инициировавшей экспорт. {@code null} для ручных экспортов.
-     * Передаётся Python-воркером при подписочных запусках.
-     */
-    @JsonProperty("subscription_id")
-    private Long subscriptionId;
-
     @JsonProperty("ts")
     private Instant ts;
 }

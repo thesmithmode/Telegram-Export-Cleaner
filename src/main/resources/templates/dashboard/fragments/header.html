@@ -14,10 +14,8 @@
     </div>
 
     <nav class="dashboard-nav" sec:authorize="isAuthenticated()">
-        <!-- USER видит только свой кабинет, подписки и вкладку "О проекте" (feedback + donate) -->
+        <!-- USER видит только свой кабинет и вкладку "О проекте" (feedback + donate) -->
         <a sec:authorize="hasRole('USER')" th:href="@{/dashboard/me}">My Dashboard</a>
-        <a sec:authorize="hasRole('USER')" th:href="@{/dashboard/subscriptions}"
-           th:text="#{nav.subscriptions}">Subscriptions</a>
         <a sec:authorize="hasRole('USER')" th:href="@{/dashboard/about}"
            th:text="#{nav.about}">About</a>
 
@@ -31,8 +29,6 @@
            th:text="#{nav.chats}">Chats</a>
         <a sec:authorize="hasRole('ADMIN')" th:href="@{/dashboard/events}"
            th:text="#{nav.events}">Events</a>
-        <a sec:authorize="hasRole('ADMIN')" th:href="@{/dashboard/subscriptions}"
-           th:text="#{nav.subscriptions}">Subscriptions</a>
     </nav>
 
     <div class="dashboard-header__user" sec:authorize="isAuthenticated()">

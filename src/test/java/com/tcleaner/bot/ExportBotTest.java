@@ -42,7 +42,6 @@ class ExportBotTest {
     private ExportJobProducer jobProducerMock;
     private BotMessenger messengerMock;
     private BotUserUpserter userUpserterMock;
-    private com.tcleaner.dashboard.service.subscription.SubscriptionService subscriptionServiceMock;
     private BotI18n i18n;
     private ExportBot bot;
 
@@ -51,12 +50,10 @@ class ExportBotTest {
         jobProducerMock = mock(ExportJobProducer.class);
         messengerMock = mock(BotMessenger.class);
         userUpserterMock = mock(BotUserUpserter.class);
-        subscriptionServiceMock = mock(com.tcleaner.dashboard.service.subscription.SubscriptionService.class);
 
         // По умолчанию — юзер уже выбрал русский (существующая проверка текстов в assertions
         // построена под русский; тесты, специфичные для выбора языка, явно перекрывают).
         when(userUpserterMock.getLanguage(anyLong())).thenReturn(Optional.of("ru"));
-        when(userUpserterMock.resolveLanguage(anyLong())).thenReturn(com.tcleaner.core.BotLanguage.RU);
 
         when(jobProducerMock.getActiveExport(anyLong())).thenReturn(null);
         when(jobProducerMock.enqueue(anyLong(), anyLong(), any(String.class), isNull(), isNull()))
@@ -79,7 +76,7 @@ class ExportBotTest {
         when(noPublisher.getIfAvailable()).thenReturn(null);
         bot = new ExportBot("token", "https://test.example.com/dashboard/mini-app",
                 jobProducerMock, messengerMock, i18n, new BotKeyboards(i18n),
-                new BotSessionRegistry(), userUpserterMock, noPublisher, subscriptionServiceMock);
+                new BotSessionRegistry(), userUpserterMock, noPublisher);
     }
 
     private static ReloadableResourceBundleMessageSource newTestMessageSource() {
@@ -345,7 +342,6 @@ class ExportBotTest {
         @DisplayName("/start без выбранного языка → клавиатура выбора, не HELP")
         void startWithoutLanguageShowsChooser() {
             when(userUpserterMock.getLanguage(anyLong())).thenReturn(Optional.empty());
-            when(userUpserterMock.resolveLanguage(anyLong())).thenReturn(com.tcleaner.core.BotLanguage.EN);
 
             bot.consume(createTextMessageUpdate(123L, "/start"));
 
@@ -360,7 +356,6 @@ class ExportBotTest {
         @DisplayName("callback lang:fa сохраняет fa и показывает фарси HELP")
         void callbackPersistsLanguageAndShowsHelp() {
             when(userUpserterMock.getLanguage(anyLong())).thenReturn(Optional.empty());
-            when(userUpserterMock.resolveLanguage(anyLong())).thenReturn(com.tcleaner.core.BotLanguage.EN);
             bot.consume(createTextMessageUpdate(123L, "/start"));
 
             bot.consume(createCallbackUpdate(123L, ExportBot.CB_LANG_PREFIX + "fa"));
@@ -404,7 +399,6 @@ class ExportBotTest {
         @DisplayName("/start у юзера с en отправляет английский HELP")
         void startWithEnSendsEnglishHelp() {
             when(userUpserterMock.getLanguage(anyLong())).thenReturn(Optional.of("en"));
-            when(userUpserterMock.resolveLanguage(anyLong())).thenReturn(com.tcleaner.core.BotLanguage.EN);
 
             bot.consume(createTextMessageUpdate(123L, "/start"));
 
@@ -562,8 +556,7 @@ class ExportBotTest {
         private void newBot(String url) {
             new ExportBot("token", url, jobProducerMock, messengerMock,
                     i18n, new BotKeyboards(i18n), new BotSessionRegistry(),
-                    userUpserterMock, emptyPublisher(),
-                    mock(com.tcleaner.dashboard.service.subscription.SubscriptionService.class));
+                    userUpserterMock, emptyPublisher());
         }
 
         @Test

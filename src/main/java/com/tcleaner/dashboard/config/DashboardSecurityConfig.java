@@ -66,12 +66,6 @@ public class DashboardSecurityConfig {
                     "/dashboard/api/stats/overview",
                     "/dashboard/api/stats/user/**",
                     "/dashboard/api/stats/recent").authenticated()
-                // Подписки: RBAC внутри SubscriptionController через BotUserAccessPolicy
-                .requestMatchers(
-                    "/dashboard/api/subscriptions",
-                    "/dashboard/api/subscriptions/**").authenticated()
-                // Страница подписок: доступна любому авторизованному (USER + ADMIN)
-                .requestMatchers("/dashboard/subscriptions").authenticated()
                 // Личный кабинет доступен любому авторизованному
                 .requestMatchers(
                     "/dashboard/me", "/dashboard/me/**",

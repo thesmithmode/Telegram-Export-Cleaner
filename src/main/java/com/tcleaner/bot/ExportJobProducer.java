@@ -1,7 +1,6 @@
 package com.tcleaner.bot;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.tcleaner.dashboard.domain.ExportSource;
 import com.tcleaner.dashboard.events.StatsEventPayload;
 import com.tcleaner.dashboard.events.StatsEventType;
 import com.tcleaner.dashboard.events.StatsStreamPublisher;
@@ -74,7 +73,6 @@ public class ExportJobProducer {
     private static final long QUEUE_MSG_TTL_HOURS = 2;
     private static final int TASK_ID_LENGTH = 16;
     private static final String EXPRESS_QUEUE_SUFFIX = "_express";
-    private static final String SUBSCRIPTION_QUEUE_SUFFIX = "_subscription";
 
     private String enqueue(long userId, long userChatId, Object chatId, Integer topicId,
                            String fromDate, String toDate, String keywords, String excludeKeywords) {
@@ -270,73 +268,6 @@ public class ExportJobProducer {
                 .source("bot")
                 .ts(Instant.now())
                 .build());
-    }
-
-    /**
-     * Помещает subscription-задачу в low-priority очередь (queueName + "_subscription").
-     * Отличия от обычного enqueue:
-     *   - taskId имеет префикс "sub_" вместо "export_"
-     *   - не выставляет active_export:<userId> блокировку (subscription — фоновая)
-     *   - добавляет в job-JSON поля "source":"subscription" и "subscription_id":<id>
-     *   - очередь {queueName}_subscription вместо main/express
-     *
-     * @param userId         пользователь, для которого подписка
-     * @param userChatId     куда доставить результат (обычно = userId для ЛС)
-     * @param chatIdentifier @username или t.me/... идентификатор целевого чата
-     * @param fromDate       ISO-строка начала окна (не null)
-     * @param toDate         ISO-строка конца окна (не null)
-     * @param subscriptionId id подписки в БД для обратной связи
-     * @return taskId созданной задачи
-     */
-    public String enqueueSubscription(long userId, long userChatId, String chatIdentifier,
-                                      String fromDate, String toDate, long subscriptionId) {
-        String taskId = "sub_" + UUID.randomUUID().toString().replace("-", "").substring(0, TASK_ID_LENGTH);
-
-        Map<String, Object> job = new HashMap<>();
-        job.put("task_id", taskId);
-        job.put("user_id", userId);
-        job.put("user_chat_id", userChatId);
-        job.put("chat_id", chatIdentifier);
-        job.put("limit", 0);
-        job.put("offset_id", 0);
-        job.put("from_date", fromDate);
-        job.put("to_date", toDate);
-        job.put("source", ExportSource.SUBSCRIPTION.name().toLowerCase());
-        job.put("subscription_id", subscriptionId);
-
-        String json;
-        try {
-            json = objectMapper.writeValueAsString(job);
-        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-            throw new RuntimeException("Ошибка сериализации subscription-задачи", e);
-        }
-
-        String targetQueue = queueName + SUBSCRIPTION_QUEUE_SUFFIX;
-        redis.opsForValue().set(JOB_JSON_PREFIX + taskId, json, ACTIVE_EXPORT_TTL_MINUTES, TimeUnit.MINUTES);
-        redis.opsForValue().set("job_queue:" + taskId, targetQueue, ACTIVE_EXPORT_TTL_MINUTES, TimeUnit.MINUTES);
-        redis.opsForList().rightPush(targetQueue, json);
-        log.info("Subscription task {} enqueued to {}", taskId, targetQueue);
-
-        StatsStreamPublisher publisher = statsPublisherProvider.getIfAvailable();
-        if (publisher != null) {
-            try {
-                publisher.publish(StatsEventPayload.builder()
-                        .type(StatsEventType.EXPORT_STARTED)
-                        .taskId(taskId)
-                        .botUserId(userId)
-                        .chatIdRaw(chatIdentifier)
-                        .fromDate(fromDate)
-                        .toDate(toDate)
-                        .status("queued")
-                        .source("subscription")
-                        .ts(Instant.now())
-                        .build());
-            } catch (Exception ex) {
-                log.debug("Публикация события статистики (subscription) не удалась: {}", ex.getMessage());
-            }
-        }
-
-        return taskId;
     }
 
     private void publishExportStarted(String taskId, long userId, Object chatId, Integer topicId,

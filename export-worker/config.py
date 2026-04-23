@@ -17,7 +17,6 @@ class Settings(BaseSettings):
     REDIS_DB: int = 0
     REDIS_PASSWORD: Optional[str] = None
     REDIS_QUEUE_NAME: str = "telegram_export"
-    REDIS_SUBSCRIPTION_QUEUE_SUFFIX: str = "_subscription"
 
     # Java Bot API
     JAVA_API_BASE_URL: str = "http://java-bot:8080"

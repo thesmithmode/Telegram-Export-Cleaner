@@ -7,7 +7,6 @@ import os
 import tempfile
 import time
 import unicodedata
-from datetime import datetime
 from typing import Optional, Union, AsyncIterator
 
 import httpx
@@ -316,40 +315,6 @@ class JavaBotClient:
         except Exception as e:
             logger.warning(f"Failed to notify user {chat_id} about failure: {e}")
 
-    async def notify_subscription_empty(
-        self, chat_id: int, chat_label: str, from_date: Optional[str], to_date: Optional[str]
-    ) -> None:
-        """Уведомить пользователя об итерации подписки без новых сообщений."""
-        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-        from_str = self._format_date_human(from_date)
-        to_str = self._format_date_human(to_date)
-        text = (
-            f"ℹ️ Итерация подписки по чату {chat_label} выполнена. "
-            f"Новых сообщений в окне {from_str} → {to_str} нет."
-        )
-        try:
-            response = await self._http_client.post(url, data={"chat_id": chat_id, "text": text})
-            if response.status_code != 200:
-                logger.warning(
-                    f"Bot API rejected subscription notification for {chat_id}: "
-                    f"{response.status_code} {response.text[:200]}"
-                )
-        except Exception as e:
-            logger.warning(f"Failed to notify user {chat_id} about empty subscription: {e}")
-
-    @staticmethod
-    def _format_date_human(date_str: Optional[str]) -> str:
-        """Преобразует ISO-строку даты в человекочитаемый формат 'YYYY-MM-DD HH:MM UTC'."""
-        if not date_str:
-            return "—"
-        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d"):
-            try:
-                dt = datetime.strptime(date_str, fmt)
-                return dt.strftime("%Y-%m-%d %H:%M UTC")
-            except ValueError:
-                continue
-        return date_str
-
     async def notify_empty_export(self, chat_id, task_id, from_date, to_date):
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
         period = self._format_period(from_date, to_date)
@@ -372,9 +337,6 @@ class JavaBotClient:
 
     @staticmethod
     def _format_period(from_date: Optional[str], to_date: Optional[str]) -> Optional[str]:
-        # NOTE: _format_date_human существует рядом и тоже форматирует даты, но с
-        # точностью до HH:MM UTC. Здесь намеренно используется [:10] (только дата)
-        # для компактного текста "За период X — Y". Объединять не стоит: контракты разные.
         if from_date and to_date:
             return f"период {from_date[:10]} — {to_date[:10]}"
         if from_date:

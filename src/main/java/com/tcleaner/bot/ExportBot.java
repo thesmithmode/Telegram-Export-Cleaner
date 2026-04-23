@@ -5,7 +5,6 @@ import com.tcleaner.dashboard.events.StatsEventPayload;
 import com.tcleaner.dashboard.events.StatsEventType;
 import com.tcleaner.dashboard.events.StatsStreamPublisher;
 import com.tcleaner.dashboard.service.ingestion.BotUserUpserter;
-import com.tcleaner.dashboard.service.subscription.SubscriptionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -55,7 +54,6 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     static final String CB_LANG_PREFIX = "lang:";
     static final String CB_SETTINGS_LANGUAGE = "settings:language";
     static final String CB_SETTINGS_OPEN = "settings:open";
-    static final String CB_SUB_CONFIRM_PREFIX = "sub_confirm:";
 
     private final String botToken;
     private final ExportJobProducer jobProducer;
@@ -65,7 +63,6 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     private final BotSessionRegistry sessionRegistry;
     private final BotUserUpserter userUpserter;
     private final ObjectProvider<StatsStreamPublisher> statsPublisherProvider;
-    private final SubscriptionService subscriptionService;
     private final String miniAppUrl;
 
     public ExportBot(
@@ -77,8 +74,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
             BotKeyboards keyboards,
             BotSessionRegistry sessionRegistry,
             BotUserUpserter userUpserter,
-            ObjectProvider<StatsStreamPublisher> statsPublisherProvider,
-            SubscriptionService subscriptionService
+            ObjectProvider<StatsStreamPublisher> statsPublisherProvider
     ) {
         String normalized = miniAppUrl.toLowerCase();
         if (!normalized.startsWith("https://")
@@ -98,7 +94,6 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         this.sessionRegistry = sessionRegistry;
         this.userUpserter = userUpserter;
         this.statsPublisherProvider = statsPublisherProvider;
-        this.subscriptionService = subscriptionService;
         log.info("Telegram-бот инициализирован");
     }
 
@@ -269,11 +264,6 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
             handleLanguageCallback(chatId, userId, messageId, data.substring(CB_LANG_PREFIX.length()));
             return;
         }
-        if (data.startsWith(CB_SUB_CONFIRM_PREFIX)) {
-            handleSubConfirmCallback(chatId, userId, messageId,
-                    data.substring(CB_SUB_CONFIRM_PREFIX.length()));
-            return;
-        }
         if (CB_SETTINGS_LANGUAGE.equals(data)) {
             messenger.editMessage(chatId, messageId,
                     i18n.msg(BotLanguage.EN, "bot.start.choose_language"),
@@ -350,35 +340,6 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
                 session.reset();
             }
             default -> log.warn("Неизвестный callback: {}", data);
-        }
-    }
-
-    private void handleSubConfirmCallback(long chatId, long userId, int messageId, String idStr) {
-        BotLanguage lang = resolveLanguage(userId);
-        long subscriptionId;
-        try {
-            subscriptionId = Long.parseLong(idStr);
-        } catch (NumberFormatException e) {
-            log.warn("Некорректный sub_confirm id: {}", idStr);
-            messenger.editMessage(chatId, messageId,
-                    i18n.msg(lang, "bot.sub.confirm.invalid"), null);
-            return;
-        }
-        try {
-            var subOpt = subscriptionService.findById(subscriptionId);
-            if (subOpt.isEmpty() || !subOpt.get().getBotUserId().equals(userId)) {
-                log.warn("User {} tried to confirm subscription {} (not owner or missing)", userId, subscriptionId);
-                messenger.editMessage(chatId, messageId,
-                        i18n.msg(lang, "bot.sub.confirm.not_found"), null);
-                return;
-            }
-            subscriptionService.confirmReceived(subscriptionId);
-            messenger.editMessage(chatId, messageId,
-                    i18n.msg(lang, "bot.sub.confirm.ok"), null);
-            log.info("Пользователь {} подтвердил подписку {}", userId, subscriptionId);
-        } catch (java.util.NoSuchElementException e) {
-            messenger.editMessage(chatId, messageId,
-                    i18n.msg(lang, "bot.sub.confirm.not_found"), null);
         }
     }
 
@@ -538,7 +499,8 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
      * гарантирующий понятный ответ до выбора.
      */
     private BotLanguage resolveLanguage(long userId) {
-        return userUpserter.resolveLanguage(userId);
+        BotLanguage stored = resolveStoredLanguage(userId);
+        return stored != null ? stored : BotLanguage.EN;
     }
 
     private String buildQueueInfoText(BotLanguage lang, boolean fromCache, long pendingInQueue, boolean hasActiveJob) {
