@@ -25,12 +25,10 @@
         <form id="create-subscription-form" class="subscription-form" novalidate>
             <div class="form-row">
                 <label for="sub-chat-id" th:text="#{dashboard.subscriptions.form.chat}">Чат</label>
-                <input type="text" id="sub-chat-id" name="chatRefId"
-                       inputmode="numeric"
-                       pattern="-?[0-9]+"
-                       th:placeholder="#{dashboard.subscriptions.form.chat}"
+                <input type="text" id="sub-chat-id" name="chatIdentifier"
+                       th:placeholder="#{dashboard.subscriptions.form.chat_placeholder}"
                        required>
-                <small class="form-hint" th:text="#{dashboard.subscriptions.form.chat.hint}">Chat ID из Telegram (может быть отрицательным для групп)</small>
+                <small class="form-hint" th:text="#{dashboard.subscriptions.form.chat.hint}">@username, ссылка t.me или числовой ID</small>
             </div>
 
             <div class="form-row">

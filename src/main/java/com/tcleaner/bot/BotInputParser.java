@@ -6,9 +6,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Чистые pure-функции для парсинга пользовательского ввода: t.me-ссылки,
- * @username, topic_id, dd.MM.yyyy даты. Выделено из ExportBot (God class).
- * Без зависимостей и состояния — статический utility-класс.
+ * Чистые pure-функции для парсинга пользовательского ввода.
+ * t.me-ссылки, @username, topic_id, dd.MM.yyyy даты.
  */
 public final class BotInputParser {
 
@@ -24,21 +23,33 @@ public final class BotInputParser {
         // utility
     }
 
-    /** Извлекает username из t.me-ссылки или @username. {@code null} если не распознано или input null. */
+    /**
+     * Извлекает username из t.me-ссылки или @username.
+     */
     public static String extractUsername(String input) {
-        if (input == null) return null;
+        if (input == null) {
+            return null;
+        }
         return parseTmeLink(input)[0];
     }
 
-    /** Извлекает topic_id из t.me/.../<id>. {@code null} если отсутствует, некорректен или input null. */
+    /**
+     * Извлекает topic_id из t.me/.../id.
+     */
     public static Integer extractTopicId(String input) {
-        if (input == null) return null;
+        if (input == null) {
+            return null;
+        }
         return parseTopicId(parseTmeLink(input)[1]);
     }
 
-    /** Парсит дату из формата dd.MM.yyyy. {@code null} при невалидном вводе или null. */
+    /**
+     * Парсит дату из формата dd.MM.yyyy.
+     */
     public static LocalDate parseDate(String text) {
-        if (text == null) return null;
+        if (text == null) {
+            return null;
+        }
         try {
             return LocalDate.parse(text.trim(), DATE_FORMAT);
         } catch (Exception e) {

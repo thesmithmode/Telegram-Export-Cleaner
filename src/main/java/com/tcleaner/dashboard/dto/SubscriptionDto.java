@@ -13,6 +13,7 @@ public record SubscriptionDto(
         Long id,
         Long botUserId,
         Long chatRefId,
+        String chatDisplay,
         Integer periodHours,
         String desiredTimeMsk,
         Instant sinceDate,
@@ -27,10 +28,15 @@ public record SubscriptionDto(
 ) {
 
     public static SubscriptionDto fromEntity(ChatSubscription s) {
+        return fromEntity(s, null);
+    }
+
+    public static SubscriptionDto fromEntity(ChatSubscription s, String chatDisplay) {
         return new SubscriptionDto(
                 s.getId(),
                 s.getBotUserId(),
                 s.getChatRefId(),
+                chatDisplay,
                 s.getPeriodHours(),
                 s.getDesiredTimeMsk(),
                 s.getSinceDate(),

@@ -15,7 +15,8 @@
 
     <nav class="dashboard-nav" sec:authorize="isAuthenticated()">
         <!-- USER видит только свой кабинет, подписки и вкладку "О проекте" (feedback + donate) -->
-        <a sec:authorize="hasRole('USER')" th:href="@{/dashboard/me}">My Dashboard</a>
+        <a sec:authorize="hasRole('USER')" th:href="@{/dashboard/me}"
+           th:text="#{nav.me}">My Dashboard</a>
         <a sec:authorize="hasRole('USER')" th:href="@{/dashboard/subscriptions}"
            th:text="#{nav.subscriptions}">Subscriptions</a>
         <a sec:authorize="hasRole('USER')" th:href="@{/dashboard/about}"

@@ -115,7 +115,7 @@
     function buildRow(sub) {
         const tr = document.createElement("tr");
 
-        tr.appendChild(td(sub.chatRefId));
+        tr.appendChild(td(sub.chatDisplay || sub.chatRefId));
         tr.appendChild(td(periodLabel(sub.periodHours)));
         tr.appendChild(td(sub.desiredTimeMsk || "—"));
         tr.appendChild(td(formatDateMsk(sub.sinceDate)));
@@ -254,22 +254,17 @@
 
         if (errorEl) { errorEl.hidden = true; }
 
-        const chatRefIdRaw  = form.querySelector("[name=chatRefId]")?.value?.trim();
-        const periodHoursEl = form.querySelector("[name=periodHours]:checked");
-        const timeMsk       = form.querySelector("[name=desiredTimeMsk]")?.value?.trim();
-        const sinceDateRaw  = form.querySelector("[name=sinceDate]")?.value?.trim();
+        const chatIdentifier = form.querySelector("[name=chatIdentifier]")?.value?.trim();
+        const periodHoursEl  = form.querySelector("[name=periodHours]:checked");
+        const timeMsk        = form.querySelector("[name=desiredTimeMsk]")?.value?.trim();
+        const sinceDateRaw   = form.querySelector("[name=sinceDate]")?.value?.trim();
 
         // Базовая клиентская валидация
-        if (!chatRefIdRaw || !periodHoursEl || !timeMsk) {
+        if (!chatIdentifier || !periodHoursEl || !timeMsk) {
             showError(errorEl, "Заполните все обязательные поля");
             return;
         }
 
-        const chatRefId   = parseInt(chatRefIdRaw, 10);
-        if (Number.isNaN(chatRefId)) {
-            showError(errorEl, "Введите корректный числовой Chat ID (может быть отрицательным)");
-            return;
-        }
         const periodHours = parseInt(periodHoursEl.value, 10);
 
         // Конвертируем datetime-local → ISO-8601 Instant (UTC).
@@ -282,7 +277,7 @@
             }
         }
 
-        const payload = { chatRefId, periodHours, desiredTimeMsk: timeMsk, sinceDate };
+        const payload = { chatIdentifier, periodHours, desiredTimeMsk: timeMsk, sinceDate };
         const headers = { "Content-Type": "application/json", "Accept": "application/json" };
         if (csrfToken && csrfHeader) { headers[csrfHeader] = csrfToken; }
 

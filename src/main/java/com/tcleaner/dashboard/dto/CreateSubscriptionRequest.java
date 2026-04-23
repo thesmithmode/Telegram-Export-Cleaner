@@ -15,7 +15,8 @@ import java.time.Instant;
  * <p>{@code sinceDate} опционально: если не передано, контроллер подставляет {@code Instant.now()}.
  */
 public record CreateSubscriptionRequest(
-        @NotNull Long chatRefId,
+        @NotBlank
+        String chatIdentifier,
         @NotNull Integer periodHours,
         @NotBlank
         @jakarta.validation.constraints.Pattern(

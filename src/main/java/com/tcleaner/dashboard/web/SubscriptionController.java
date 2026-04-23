@@ -1,11 +1,15 @@
 package com.tcleaner.dashboard.web;
 
+import com.tcleaner.bot.BotInputParser;
 import com.tcleaner.dashboard.auth.DashboardUserDetails;
+import com.tcleaner.dashboard.domain.Chat;
 import com.tcleaner.dashboard.domain.ChatSubscription;
 import com.tcleaner.dashboard.domain.DashboardRole;
 import com.tcleaner.dashboard.dto.CreateSubscriptionRequest;
 import com.tcleaner.dashboard.dto.SubscriptionDto;
+import com.tcleaner.dashboard.repository.ChatRepository;
 import com.tcleaner.dashboard.security.BotUserAccessPolicy;
+import com.tcleaner.dashboard.service.ingestion.ChatUpserter;
 import com.tcleaner.dashboard.service.subscription.SubscriptionService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
@@ -25,7 +29,10 @@ import org.springframework.web.server.ResponseStatusException;
 import java.net.URI;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
 import static org.springframework.http.HttpStatus.CONFLICT;
@@ -44,11 +51,17 @@ import static org.springframework.http.HttpStatus.UNAUTHORIZED;
 public class SubscriptionController {
 
     private final SubscriptionService subscriptionService;
+    private final ChatUpserter chatUpserter;
+    private final ChatRepository chatRepository;
     private final BotUserAccessPolicy accessPolicy;
 
     public SubscriptionController(SubscriptionService subscriptionService,
+                                  ChatUpserter chatUpserter,
+                                  ChatRepository chatRepository,
                                   BotUserAccessPolicy accessPolicy) {
         this.subscriptionService = subscriptionService;
+        this.chatUpserter = chatUpserter;
+        this.chatRepository = chatRepository;
         this.accessPolicy = accessPolicy;
     }
 
@@ -62,15 +75,16 @@ public class SubscriptionController {
     public List<SubscriptionDto> list(
             @AuthenticationPrincipal DashboardUserDetails principal,
             @RequestParam(required = false) Long userId) {
+        List<ChatSubscription> subs;
         if (principal.getDashboardRole() == DashboardRole.ADMIN) {
-            List<ChatSubscription> subs = (userId != null)
+            subs = (userId != null)
                     ? subscriptionService.listForUser(userId)
                     : subscriptionService.listAll();
-            return subs.stream().map(SubscriptionDto::fromEntity).toList();
+        } else {
+            requireBoundUser(principal);
+            subs = subscriptionService.listForUser(principal.getBotUserId());
         }
-        requireBoundUser(principal);
-        return subscriptionService.listForUser(principal.getBotUserId())
-                .stream().map(SubscriptionDto::fromEntity).toList();
+        return toDtoList(subs);
     }
 
     /**
@@ -88,7 +102,10 @@ public class SubscriptionController {
                 principal.getDashboardRole(), principal.getBotUserId(), sub.getBotUserId())) {
             throw new AccessDeniedException("Доступ запрещён: нельзя просматривать подписку другого пользователя");
         }
-        return SubscriptionDto.fromEntity(sub);
+        String display = chatRepository.findById(sub.getChatRefId())
+                .map(this::formatChatDisplay)
+                .orElse(String.valueOf(sub.getChatRefId()));
+        return SubscriptionDto.fromEntity(sub, display);
     }
 
     /**
@@ -109,12 +126,25 @@ public class SubscriptionController {
         if (principal.getBotUserId() == null) {
             throw new ResponseStatusException(UNAUTHORIZED, "Account not bound to a Telegram user");
         }
+
+        String input = request.chatIdentifier().trim();
+        String username = BotInputParser.extractUsername(input);
+        Integer topicId = BotInputParser.extractTopicId(input);
+        String chatIdRaw = input;
+
+        if (username == null && !input.matches("^-?\\d+$")) {
+            throw new ResponseStatusException(BAD_REQUEST,
+                    "Invalid chat identifier: use @username, t.me link or numeric ID");
+        }
+
+        Chat chat = chatUpserter.upsert(username, chatIdRaw, topicId, null, Instant.now());
+
         ChatSubscription created;
         try {
             Instant sinceDate = request.sinceDate() != null ? request.sinceDate() : Instant.now();
             created = subscriptionService.create(
                     principal.getBotUserId(),
-                    request.chatRefId(),
+                    chat.getId(),
                     request.periodHours(),
                     request.desiredTimeMsk(),
                     sinceDate);
@@ -125,7 +155,8 @@ public class SubscriptionController {
         } catch (org.springframework.dao.DataIntegrityViolationException e) {
             throw new ResponseStatusException(CONFLICT, "user already has an active subscription");
         }
-        SubscriptionDto dto = SubscriptionDto.fromEntity(created);
+        String display = formatChatDisplay(chat);
+        SubscriptionDto dto = SubscriptionDto.fromEntity(created, display);
         return ResponseEntity
                 .created(URI.create("/dashboard/api/subscriptions/" + created.getId()))
                 .body(dto);
@@ -142,7 +173,8 @@ public class SubscriptionController {
             @PathVariable Long id) {
         ChatSubscription sub = requireVisible(principal, id);
         try {
-            return SubscriptionDto.fromEntity(subscriptionService.pause(sub.getId()));
+            ChatSubscription paused = subscriptionService.pause(sub.getId());
+            return SubscriptionDto.fromEntity(paused, getChatDisplay(paused.getChatRefId()));
         } catch (NoSuchElementException e) {
             throw new ResponseStatusException(NOT_FOUND, e.getMessage());
         }
@@ -159,7 +191,8 @@ public class SubscriptionController {
             @PathVariable Long id) {
         ChatSubscription sub = requireVisible(principal, id);
         try {
-            return SubscriptionDto.fromEntity(subscriptionService.resume(sub.getId()));
+            ChatSubscription resumed = subscriptionService.resume(sub.getId());
+            return SubscriptionDto.fromEntity(resumed, getChatDisplay(resumed.getChatRefId()));
         } catch (IllegalStateException e) {
             throw new ResponseStatusException(CONFLICT, e.getMessage());
         } catch (NoSuchElementException e) {
@@ -215,5 +248,34 @@ public class SubscriptionController {
                 && principal.getBotUserId() == null) {
             throw new ResponseStatusException(UNAUTHORIZED, "Account not bound to a Telegram user");
         }
+    }
+
+    private List<SubscriptionDto> toDtoList(List<ChatSubscription> subs) {
+        if (subs.isEmpty()) {
+            return List.of();
+        }
+        Set<Long> chatIds = subs.stream()
+                .map(ChatSubscription::getChatRefId)
+                .collect(Collectors.toSet());
+        Map<Long, String> chatMap = chatRepository.findAllById(chatIds).stream()
+                .collect(Collectors.toMap(Chat::getId, this::formatChatDisplay));
+        
+        return subs.stream()
+                .map(s -> SubscriptionDto.fromEntity(s, chatMap.getOrDefault(s.getChatRefId(),
+                        String.valueOf(s.getChatRefId()))))
+                .toList();
+    }
+
+    private String getChatDisplay(long chatRefId) {
+        return chatRepository.findById(chatRefId)
+                .map(this::formatChatDisplay)
+                .orElse(String.valueOf(chatRefId));
+    }
+
+    private String formatChatDisplay(Chat chat) {
+        if (chat.getChatTitle() != null && !chat.getChatTitle().isBlank()) {
+            return chat.getChatTitle() + " (" + chat.getChatIdRaw() + ")";
+        }
+        return chat.getChatIdRaw();
     }
 }
