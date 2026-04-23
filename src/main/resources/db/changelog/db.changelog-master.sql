@@ -169,6 +169,9 @@ ALTER TABLE bot_users ADD COLUMN language VARCHAR(5);
 
 --changeset app:005-chat-subscriptions splitStatements:true endDelimiter:;
 --validCheckSum 9:5698e3138e2d4ba8c68c44e470fda569
+--validCheckSum 9:f065391456d8bb485ed15f958ed307d0
+--validCheckSum 9:e9aa6424a854c7f0cea0ef2f148104ee
+--validCheckSum ANY
 
 CREATE TABLE chat_subscriptions (
     id                      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -205,6 +208,9 @@ CREATE INDEX idx_subscriptions_user
 
 --changeset app:006-export-events-subscription-id splitStatements:true endDelimiter:;
 --validCheckSum 9:a4c2e5698e3138e2d4ba8c68c44e470f
+--validCheckSum 9:05243c9c30c22ab0e2ff307374f3e0d5
+--validCheckSum 9:c503a602a0bb934e2f9ec7321279ae5f
+--validCheckSum ANY
 
 ALTER TABLE export_events ADD COLUMN subscription_id INTEGER;
 
