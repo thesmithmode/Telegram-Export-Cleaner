@@ -192,7 +192,7 @@ CREATE TABLE chat_subscriptions (
     FOREIGN KEY (chat_ref_id) REFERENCES chats (id)
 );
 
--- SQLite < 3.8.0 не поддерживает WHERE в индексах. Уникальность проверим в сервисе.
+-- SQLite 3.8.0+ поддерживает WHERE в индексах. Уникальность обеспечена индексом 007 + сервисом.
 CREATE INDEX idx_subscriptions_status_last_run
     ON chat_subscriptions (status, last_run_at);
 
@@ -210,3 +210,14 @@ ALTER TABLE export_events ADD COLUMN subscription_id INTEGER;
 
 CREATE INDEX idx_events_subscription
     ON export_events (subscription_id);
+
+-- =============================================================================
+-- 007: Уникальный partial index — не более одной ACTIVE-подписки на пользователя.
+-- SQLite 3.8.0+ поддерживает WHERE в индексах. Прод: 3.46.1.
+-- =============================================================================
+
+--changeset app:007-subscriptions-unique-active-index splitStatements:true endDelimiter:;
+
+CREATE UNIQUE INDEX uk_subscriptions_one_active_per_user
+    ON chat_subscriptions (bot_user_id)
+    WHERE status = 'ACTIVE';

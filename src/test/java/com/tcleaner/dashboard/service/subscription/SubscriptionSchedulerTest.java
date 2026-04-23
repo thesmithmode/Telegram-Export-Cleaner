@@ -20,6 +20,8 @@ import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Optional;
 
+import org.mockito.ArgumentCaptor;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -139,6 +141,32 @@ class SubscriptionSchedulerTest {
     }
 
     @Test
+    @DisplayName("runDueSubscriptions: fromIso/toIso без наносекунд (формат YYYY-MM-DDTHH:MM:SS) — совместим с Python валидатором")
+    void enqueuedDateFormatHasNoNanoseconds() {
+        when(jobProducer.hasActiveProcessingJob()).thenReturn(false);
+        when(jobProducer.getQueueLength()).thenReturn(0L);
+
+        Instant sinceDate = Instant.now().minusSeconds(25 * 3600L);
+        String desiredTime = mskHhMm(10);
+        ChatSubscription sub = activeSub(1L, 100L, 200L, 24, desiredTime, sinceDate, null);
+        when(repository.findDueForRun(any())).thenReturn(List.of(sub));
+        when(chatRepository.findAllById(any())).thenReturn(List.of(chat(200L, "@testchat")));
+        when(jobProducer.enqueueSubscription(anyLong(), anyLong(), anyString(), anyString(), anyString(), anyLong()))
+                .thenReturn("sub_abc");
+
+        scheduler.runDueSubscriptions();
+
+        ArgumentCaptor<String> fromCap = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> toCap = ArgumentCaptor.forClass(String.class);
+        verify(jobProducer).enqueueSubscription(anyLong(), anyLong(), anyString(),
+                fromCap.capture(), toCap.capture(), anyLong());
+
+        String regex = "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}";
+        assertThat(fromCap.getValue()).matches(regex).doesNotContain(".");
+        assertThat(toCap.getValue()).matches(regex).doesNotContain(".");
+    }
+
+    @Test
     @DisplayName("runDueSubscriptions: кандидат ВНЕ окна desired_time (target=23:00 МСК, now=07:00 МСК) → isInDesiredWindow=false")
     void skipsWhenOutsideDesiredWindow() {
         // desired_time_msk = "23:00" МСК
@@ -204,12 +232,11 @@ class SubscriptionSchedulerTest {
     }
 
     @Test
-    @DisplayName("isInDesiredWindow: target в прошлом → сдвигается на завтра → окно не открыто сегодня")
-    void isInDesiredWindow_targetInPast_shiftsToTomorrow_windowNotOpen() {
-        // desiredTimeMsk = "09:00" МСК
-        // now = 13:00 МСК → сегодняшний target (09:00) уже в прошлом
-        // После фикса target сдвигается на завтра 09:00, windowStart = завтра 08:30
-        // now (13:00) < windowStart (завтра 08:30) → должен вернуть false
+    @DisplayName("isInDesiredWindow: после desired_time окно остаётся открытым до конца суток — catch-up при занятом воркере")
+    void isInDesiredWindow_afterDesiredTime_remainsOpen() {
+        // desiredTimeMsk = "09:00" МСК, windowStart = 08:30.
+        // now = 13:00 МСК — воркер был занят, но окно не должно закрываться +5 мин.
+        // isPeriodElapsed гарантирует, что после успешного run подписка не выстрелит повторно.
         String desiredTime = "09:00";
         Instant sinceDate = Instant.now().minusSeconds(25 * 3600L);
         ChatSubscription sub = activeSub(10L, 100L, 200L, 24, desiredTime, sinceDate, null);
@@ -220,7 +247,7 @@ class SubscriptionSchedulerTest {
 
         boolean inWindow = scheduler.isInDesiredWindow(sub, nowMsk13);
 
-        org.assertj.core.api.Assertions.assertThat(inWindow).isFalse();
+        org.assertj.core.api.Assertions.assertThat(inWindow).isTrue();
     }
 
     @Test

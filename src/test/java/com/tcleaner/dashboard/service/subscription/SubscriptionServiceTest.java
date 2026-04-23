@@ -368,6 +368,20 @@ class SubscriptionServiceTest {
                 .hasMessageContaining("active subscription");
     }
 
+    // ─── Validation: дублирующаяся PAUSED при create ─────────────────────────
+
+    @Test
+    @DisplayName("create когда у юзера есть PAUSED-подписка → IllegalStateException")
+    void createWhenPausedExistsThrows() {
+        Instant sinceDate = Instant.now().minusSeconds(3600);
+        ChatSubscription sub = subscriptionService.create(BOT_USER_ID, chatRefId, 24, "09:00", sinceDate);
+        subscriptionService.pause(sub.getId());
+
+        assertThatThrownBy(() -> subscriptionService.create(BOT_USER_ID, chatRefId, 48, "10:00", sinceDate))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("paused subscription");
+    }
+
     // ─── Validation: resume ARCHIVED ──────────────────────────────────────────
 
     @Test
@@ -404,7 +418,7 @@ class SubscriptionServiceTest {
         // Создаём первую подписку (будет ACTIVE)
         ChatSubscription first = subscriptionService.create(BOT_USER_ID, chatRefId, 24, "09:00", sinceDate);
 
-        // Имитируем вторую через прямое сохранение в репо (PAUSED — не конфликтует при create)
+        // Имитируем вторую через прямое сохранение в репо (bypassing service, чтобы обойти PAUSED-проверку)
         ChatSubscription second = ChatSubscription.builder()
                 .botUserId(BOT_USER_ID)
                 .chatRefId(secondChatRefId)

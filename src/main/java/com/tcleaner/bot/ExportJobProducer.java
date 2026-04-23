@@ -165,7 +165,8 @@ public class ExportJobProducer {
     public long getQueueLength() {
         Long main = redis.opsForList().size(queueName);
         Long express = redis.opsForList().size(queueName + EXPRESS_QUEUE_SUFFIX);
-        return (main != null ? main : 0L) + (express != null ? express : 0L);
+        Long subscription = redis.opsForList().size(queueName + SUBSCRIPTION_QUEUE_SUFFIX);
+        return (main != null ? main : 0L) + (express != null ? express : 0L) + (subscription != null ? subscription : 0L);
     }
 
     public boolean hasActiveProcessingJob() {

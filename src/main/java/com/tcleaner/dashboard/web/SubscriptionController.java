@@ -130,14 +130,13 @@ public class SubscriptionController {
         String input = request.chatIdentifier().trim();
         String username = BotInputParser.extractUsername(input);
         Integer topicId = BotInputParser.extractTopicId(input);
-        String chatIdRaw = input;
 
         if (username == null && !input.matches("^-?\\d+$")) {
             throw new ResponseStatusException(BAD_REQUEST,
                     "Invalid chat identifier: use @username, t.me link or numeric ID");
         }
 
-        Chat chat = chatUpserter.upsert(username, chatIdRaw, topicId, null, Instant.now());
+        Chat chat = chatUpserter.upsert(username, input, topicId, null, Instant.now());
 
         ChatSubscription created;
         try {

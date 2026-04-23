@@ -83,6 +83,9 @@ public class SubscriptionService {
         if (repository.findByBotUserIdAndStatus(botUserId, SubscriptionStatus.ACTIVE).isPresent()) {
             throw new IllegalStateException("user already has an active subscription");
         }
+        if (repository.findByBotUserIdAndStatus(botUserId, SubscriptionStatus.PAUSED).isPresent()) {
+            throw new IllegalStateException("user has a paused subscription — resume or delete it first");
+        }
 
         ChatSubscription subscription = ChatSubscription.builder()
                 .botUserId(botUserId)

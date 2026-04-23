@@ -64,7 +64,7 @@ public class ChatSubscription {
     private Instant lastFailureAt;
 
     @Column(name = "consecutive_failures", nullable = false)
-    private Integer consecutiveFailures;
+    private int consecutiveFailures;
 
     @Column(name = "last_confirm_at", nullable = false)
     private Instant lastConfirmAt;

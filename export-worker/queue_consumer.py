@@ -185,6 +185,16 @@ class QueueConsumer:
         except Exception as e:
             logger.error(f"Failed to move job to DLQ: {e}")
 
+        # Публикуем export.failed, чтобы Java пометил event FAILED — иначе QUEUED висит вечно.
+        # task_id пытаемся извлечь из сырого job_json (если он parseable даже при validation-error).
+        try:
+            raw = json.loads(job_json)
+            task_id = raw.get("task_id")
+            if task_id:
+                await self._publish_failed_event(task_id, f"DLQ: {reason}")
+        except Exception as e:
+            logger.debug(f"DLQ stats-event publish skipped: {e}")
+
     async def _track_staging_job(self, task_id: str) -> None:
         if self.redis_client:
             try:

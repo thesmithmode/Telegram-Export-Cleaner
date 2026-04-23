@@ -16,6 +16,7 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -29,18 +30,7 @@ import java.util.stream.Collectors;
 public class SubscriptionScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(SubscriptionScheduler.class);
-    private static final ZoneId MSK;
-
-    static {
-        ZoneId zone;
-        try {
-            zone = ZoneId.of("Europe/Moscow");
-        } catch (Exception e) {
-            log.warn("Europe/Moscow time zone not found, falling back to UTC+3 offset");
-            zone = ZoneId.of("UTC+3");
-        }
-        MSK = zone;
-    }
+    private static final ZoneId MSK = ZoneId.of("Europe/Moscow");
 
     private static final Duration PREWINDOW = Duration.ofMinutes(30);
     private static final DateTimeFormatter HHMM = DateTimeFormatter.ofPattern("HH:mm");
@@ -129,16 +119,17 @@ public class SubscriptionScheduler {
     boolean isInDesiredWindow(ChatSubscription sub, Instant now) {
         LocalTime desired = LocalTime.parse(sub.getDesiredTimeMsk(), HHMM);
         LocalTime currentMsk = LocalTime.from(now.atZone(MSK));
-        
         LocalTime windowStart = desired.minus(PREWINDOW);
-        LocalTime windowEnd = desired.plusMinutes(5);
-        
-        // Если окно пересекает полночь
+
+        // Midnight crossover: windowStart (e.g. 23:40) is numerically "after" desired (e.g. 00:10)
         if (windowStart.isAfter(desired)) {
+            LocalTime windowEnd = desired.plusHours(6);
             return currentMsk.isAfter(windowStart) || currentMsk.isBefore(windowEnd);
         }
-        
-        return currentMsk.isAfter(windowStart) && currentMsk.isBefore(windowEnd);
+
+        // Normal case: open-ended — fires any time from windowStart onward.
+        // isPeriodElapsed prevents double-fire after successful run.
+        return currentMsk.isAfter(windowStart);
     }
 
     boolean isPeriodElapsed(ChatSubscription sub, Instant now) {
@@ -153,7 +144,9 @@ public class SubscriptionScheduler {
     private void enqueueOne(ChatSubscription sub, Chat chat, Instant now) {
         String chatIdentifier = chat.getCanonicalChatId();
         
-        LocalDateTime ldt = LocalDateTime.ofInstant(now, MSK);
+        // Усекаем до секунд: Python worker валидирует формат до HH:MM:SS,
+        // наносекунды из Instant.now() отправляют job в DLQ.
+        LocalDateTime ldt = LocalDateTime.ofInstant(now, MSK).truncatedTo(ChronoUnit.SECONDS);
         String fromIso = ldt.minusHours(sub.getPeriodHours()).format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
         String toIso = ldt.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
 

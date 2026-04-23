@@ -520,6 +520,38 @@ class TestDeadLetterQueue:
             "telegram_export_processing", 1, invalid_job
         )
 
+    async def test_dlq_publishes_failed_event_with_task_id(self):
+        invalid_job = json.dumps({"task_id": "sub_abc123"})  # Missing required fields
+        mock_client = AsyncMock()
+        mock_client.blmove = AsyncMock(side_effect=[None, invalid_job])
+        mock_client.rpush = AsyncMock(return_value=1)
+        mock_client.lrem = AsyncMock(return_value=1)
+        mock_client.xadd = AsyncMock(return_value=b"1-0")
+
+        consumer = self._make_consumer(mock_client)
+        result = await consumer.get_job()
+
+        assert result is None
+        assert mock_client.xadd.call_count == 1, "DLQ должен опубликовать export.failed для task_id"
+        stream_key, payload_dict = mock_client.xadd.call_args.args
+        assert stream_key == "stats:events"
+        payload = json.loads(payload_dict["payload"])
+        assert payload["type"] == "export.failed"
+        assert payload["task_id"] == "sub_abc123"
+        assert "DLQ" in payload["error"]
+
+    async def test_dlq_skips_failed_event_when_job_unparseable(self):
+        mock_client = AsyncMock()
+        mock_client.blmove = AsyncMock(side_effect=[None, "not valid json {"])
+        mock_client.rpush = AsyncMock(return_value=1)
+        mock_client.lrem = AsyncMock(return_value=1)
+        mock_client.xadd = AsyncMock(return_value=b"1-0")
+
+        consumer = self._make_consumer(mock_client)
+        await consumer.get_job()
+
+        assert mock_client.xadd.call_count == 0, "Если task_id не извлечь, publish пропускается"
+
     async def test_valid_job_does_not_go_to_dlq(self):
         valid_job = json.dumps({
             "task_id": "export_ok",
