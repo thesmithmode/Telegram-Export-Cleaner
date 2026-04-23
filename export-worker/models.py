@@ -1,5 +1,5 @@
 
-from typing import Any, List, Optional, Union
+from typing import Any, List, Literal, Optional, Union
 from datetime import datetime
 from enum import Enum
 from typing_extensions import TypedDict
@@ -53,6 +53,10 @@ class ExportRequest(BaseModel):
     to_date: Optional[str] = Field(None, description="ISO date filter (YYYY-MM-DD, YYYY-MM-DDTHH:MM or YYYY-MM-DDTHH:MM:SS)")
     keywords: Optional[str] = Field(None, description="Comma-separated keywords to include")
     exclude_keywords: Optional[str] = Field(None, description="Comma-separated keywords to exclude")
+    source: Optional[Literal["bot", "api", "subscription"]] = Field(
+        default="bot", description="Request source: bot/api/subscription"
+    )
+    subscription_id: Optional[int] = Field(None, description="Subscription ID for subscription-initiated exports")
 
     @property
     def effective_topic_id(self) -> int:

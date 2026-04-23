@@ -16,6 +16,10 @@ import org.springframework.data.redis.core.ValueOperations;
 
 import java.util.concurrent.TimeUnit;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+
+import java.util.Map;
+
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -23,6 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -122,6 +127,74 @@ class ExportJobProducerTest {
 
             assertDoesNotThrow(() -> jobProducer.cancelExport(userId));
             verify(valueOps, never()).set(anyString(), eq("1"), anyLong(), any(TimeUnit.class));
+        }
+    }
+
+    @Nested
+    @DisplayName("Subscription-очередь (enqueueSubscription)")
+    class SubscriptionQueueTests {
+
+        @Test
+        @DisplayName("taskId начинается с 'sub_' и задача попадает в очередь telegram_export_subscription")
+        void shouldEnqueueToSubscriptionQueueWithSubPrefix() {
+            long userId = 99001L;
+            long userChatId = 99001L;
+            long subscriptionId = 42L;
+
+            String taskId = jobProducer.enqueueSubscription(
+                    userId, userChatId, "@testchannel",
+                    "2026-01-01", "2026-01-31", subscriptionId
+            );
+
+            assertNotNull(taskId);
+            assertTrue(taskId.startsWith("sub_"), "taskId должен начинаться с 'sub_', получено: " + taskId);
+            verify(listOps).rightPush(eq("telegram_export_subscription"), anyString());
+        }
+
+        @Test
+        @DisplayName("job-JSON содержит source=subscription и subscription_id")
+        void shouldIncludeSourceAndSubscriptionIdInJson() throws Exception {
+            long userId = 99002L;
+            long userChatId = 99002L;
+            long subscriptionId = 77L;
+            ObjectMapper mapper = new ObjectMapper();
+
+            jobProducer.enqueueSubscription(
+                    userId, userChatId, "@anotherchannel",
+                    "2026-02-01", "2026-02-28", subscriptionId
+            );
+
+            verify(listOps).rightPush(
+                    eq("telegram_export_subscription"),
+                    argThat(json -> {
+                        try {
+                            Map<String, Object> parsed = mapper.readValue(json, new TypeReference<>() {});
+                            return "subscription".equals(parsed.get("source"))
+                                    && subscriptionId == ((Number) parsed.get("subscription_id")).longValue();
+                        } catch (Exception e) {
+                            return false;
+                        }
+                    })
+            );
+        }
+
+        @Test
+        @DisplayName("active_export:<userId> НЕ выставляется при enqueueSubscription")
+        void shouldNotSetActiveExportLock() {
+            long userId = 99003L;
+            long subscriptionId = 55L;
+
+            jobProducer.enqueueSubscription(
+                    userId, userId, "@lockchannel",
+                    "2026-03-01", "2026-03-31", subscriptionId
+            );
+
+            verify(valueOps, never()).setIfAbsent(
+                    eq("active_export:" + userId),
+                    anyString(),
+                    anyLong(),
+                    any(TimeUnit.class)
+            );
         }
     }
 }

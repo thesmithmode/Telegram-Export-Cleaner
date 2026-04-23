@@ -1,5 +1,6 @@
 package com.tcleaner.dashboard.service.ingestion;
 
+import com.tcleaner.core.BotLanguage;
 import com.tcleaner.dashboard.domain.BotUser;
 import com.tcleaner.dashboard.repository.BotUserRepository;
 import org.slf4j.Logger;
@@ -61,6 +62,17 @@ public class BotUserUpserter {
         return repository.findById(botUserId)
                 .map(BotUser::getLanguage)
                 .filter(code -> code != null && !code.isBlank());
+    }
+
+    /**
+     * Возвращает {@link BotLanguage} пользователя или EN по умолчанию.
+     * Централизованный резолв для всех callers чтобы не дублировать fallback-логику.
+     */
+    @Transactional(readOnly = true)
+    public BotLanguage resolveLanguage(long botUserId) {
+        return getLanguage(botUserId)
+                .flatMap(BotLanguage::fromCode)
+                .orElse(BotLanguage.EN);
     }
 
     /**

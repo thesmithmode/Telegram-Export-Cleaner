@@ -410,6 +410,23 @@ class ExportWorker:
     ) -> None:
         """Отправка результата в Java + mark_completed/failed + counters."""
         chat_title = chat_info.get('title') or chat_info.get('username') if chat_info else None
+
+        # Subscription empty-export: вместо файла отправляем текстовое уведомление
+        if job.source == "subscription" and msg_count == 0:
+            logger.info(
+                f"ℹ️ Job {job.task_id} (subscription): 0 messages — "
+                f"sending text notification, skipping file send"
+            )
+            if job.user_chat_id:
+                chat_label = chat_title or str(job.chat_id)
+                await self.java_client.notify_subscription_empty(
+                    job.user_chat_id, chat_label, job.from_date, job.to_date
+                )
+            await self.queue_consumer.mark_job_completed(job.task_id)
+            await self._cleanup_job(job)
+            self.jobs_processed += 1
+            return
+
         if msg_count == 0:
             logger.info(
                 f"ℹ️ Job {job.task_id}: 0 messages in selected period — "

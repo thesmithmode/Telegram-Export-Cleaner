@@ -8,6 +8,7 @@ import com.tcleaner.dashboard.domain.ExportStatus;
 import com.tcleaner.dashboard.events.StatsEventPayload;
 import com.tcleaner.dashboard.events.StatsEventType;
 import com.tcleaner.dashboard.repository.ExportEventRepository;
+import com.tcleaner.dashboard.service.subscription.SubscriptionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -35,15 +36,18 @@ public class ExportEventIngestionService {
     private final ExportEventRepository eventRepository;
     private final BotUserUpserter botUserUpserter;
     private final ChatUpserter chatUpserter;
+    private final SubscriptionService subscriptionService;
 
     public ExportEventIngestionService(
             ExportEventRepository eventRepository,
             BotUserUpserter botUserUpserter,
-            ChatUpserter chatUpserter
+            ChatUpserter chatUpserter,
+            SubscriptionService subscriptionService
     ) {
         this.eventRepository = eventRepository;
         this.botUserUpserter = botUserUpserter;
         this.chatUpserter = chatUpserter;
+        this.subscriptionService = subscriptionService;
     }
 
     @Transactional
@@ -118,6 +122,7 @@ public class ExportEventIngestionService {
                     .excludeKeywords(payload.getExcludeKeywords())
                     .source(parseSource(payload.getSource()))
                     .errorMessage(payload.getError())
+                    .subscriptionId(payload.getSubscriptionId())
                     .createdAt(now)
                     .updatedAt(now)
                     .build();
@@ -126,6 +131,7 @@ public class ExportEventIngestionService {
             }
             eventRepository.save(created);
             maybeBumpUserTotals(user, null, created);
+            updateSubscriptionOnTerminal(created);
             return;
         }
 
@@ -138,6 +144,7 @@ public class ExportEventIngestionService {
         coalesce(payload.getKeywords(), existing::setKeywords);
         coalesce(payload.getExcludeKeywords(), existing::setExcludeKeywords);
         coalesce(payload.getError(), existing::setErrorMessage);
+        coalesce(payload.getSubscriptionId(), existing::setSubscriptionId);
         if (payload.getChatTitle() != null || payload.getCanonicalChatId() != null) {
             Chat chat = chatUpserter.upsert(
                     payload.getCanonicalChatId(), payload.getChatIdRaw(),
@@ -158,6 +165,38 @@ public class ExportEventIngestionService {
                     saved.getBotUserId(), payload.getUsername(),
                     payload.getDisplayName(), payload.getTs());
             maybeBumpUserTotals(user, prev, saved);
+            updateSubscriptionOnTerminal(saved);
+        }
+    }
+
+    /**
+     * Feedback-связь worker → подписка. При переходе задачи с {@code subscription_id != null}
+     * в terminal-статус обновляем lifecycle подписки:
+     * <ul>
+     *   <li>COMPLETED → {@link SubscriptionService#recordSuccess(long)}
+     *       (сбрасывает {@code consecutive_failures} и фиксирует {@code last_success_at}).</li>
+     *   <li>FAILED → {@link SubscriptionService#recordFailure(long)}
+     *       (инкрементирует {@code consecutive_failures}, 2 подряд → PAUSED).</li>
+     *   <li>CANCELLED → ничего не трогаем (юзер сам отменил).</li>
+     * </ul>
+     * Без этой связи worker-side failures (FloodWait, CHANNEL_PRIVATE, revoked session)
+     * никогда не увеличивали бы {@code consecutive_failures}, и правило «2 подряд → PAUSED»
+     * не срабатывало бы на практике.
+     */
+    private void updateSubscriptionOnTerminal(ExportEvent event) {
+        Long subscriptionId = event.getSubscriptionId();
+        if (subscriptionId == null) {
+            return;
+        }
+        try {
+            if (event.getStatus() == ExportStatus.COMPLETED) {
+                subscriptionService.recordSuccess(subscriptionId);
+            } else if (event.getStatus() == ExportStatus.FAILED) {
+                subscriptionService.recordFailure(subscriptionId);
+            }
+        } catch (RuntimeException ex) {
+            log.warn("Не удалось обновить lifecycle подписки {} по событию task={}: {}",
+                    subscriptionId, event.getTaskId(), ex.getMessage());
         }
     }
 

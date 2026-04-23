@@ -83,3 +83,11 @@ inline-клавиатуру с языками; выбор сохраняется
 - from/to даты.
 
 Старые сессии чистятся планировщиком (`evictStaleSessions`) по таймауту.
+
+---
+
+## Subscription confirmation
+
+При наступлении срока подтверждения (раз в 7 дней) бот отправляет пользователю сообщение с inline-кнопкой "Да, оставить активной" (`bot.button.sub_confirm`). Callback data формата `sub_confirm:{subscriptionId}` обрабатывается `ExportBot.handleSubConfirmCallback` → вызов `SubscriptionService.confirmReceived(id)`.
+
+i18n-ключи: `bot.button.sub_confirm`, `bot.sub.confirm.request`, `bot.sub.confirm.ok`, `bot.sub.confirm.not_found`, `bot.sub.confirm.invalid`, `bot.sub.empty`, `bot.sub.failure`, `bot.sub.paused`, `bot.sub.archived`. Локализация EN + RU; остальные 8 языков подхватывают EN fallback через `ReloadableResourceBundleMessageSource`.

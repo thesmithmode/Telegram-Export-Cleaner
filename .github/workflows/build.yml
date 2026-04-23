@@ -82,6 +82,8 @@ jobs:
             tests/test_queue_consumer.py \
             tests/test_pyrogram_client.py \
             tests/test_java_client.py \
+            tests/test_queue_priority.py \
+            tests/test_subscription_empty_export.py \
             -v --tb=short
 
   # ─── 2. Сборка и публикация Docker-образа ────────────────────────────────────
