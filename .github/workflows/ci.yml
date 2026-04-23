@@ -77,6 +77,8 @@ jobs:
             tests/test_coverage_gaps.py \
             tests/test_coverage_gaps2.py \
             tests/test_coverage_gaps3.py \
+            tests/test_queue_priority.py \
+            tests/test_subscription_empty_export.py \
             -v --cov=. --cov-report=term-missing --cov-fail-under=90
 
   # ─── Python Integration Tests (с Redis и mock Java) ──────────────────────────

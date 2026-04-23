@@ -629,15 +629,18 @@ class TestStagingDurability:
     @pytest.mark.asyncio
     async def test_recover_staging_jobs(self):
         mock_client = AsyncMock()
-        # First call moves item, second returns None (empty)
-        mock_client.lmove = AsyncMock(side_effect=[b'{"task_id":"t1"}', None, b'{"task_id":"t2"}', None])
+        # Три staging-очереди (express + main + subscription): для express recovery 1
+        # элемент, для main — 1, subscription пуста с первого lmove.
+        mock_client.lmove = AsyncMock(
+            side_effect=[b'{"task_id":"t1"}', None, b'{"task_id":"t2"}', None, None]
+        )
         mock_client.delete = AsyncMock()
 
         consumer = self._make_consumer(mock_client)
         count = await consumer.recover_staging_jobs()
 
         assert count == 2
-        assert mock_client.lmove.call_count == 4
+        assert mock_client.lmove.call_count == 5
         mock_client.delete.assert_called_once_with("staging:jobs")
 
     @pytest.mark.asyncio

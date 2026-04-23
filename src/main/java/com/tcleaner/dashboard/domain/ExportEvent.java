@@ -83,6 +83,13 @@ public class ExportEvent {
     @Column(name = "error_message")
     private String errorMessage;
 
+    /**
+     * Ссылка на {@link ChatSubscription} если экспорт инициирован подпиской,
+     * иначе NULL (ручной экспорт). Для аудита итераций подписки.
+     */
+    @Column(name = "subscription_id")
+    private Long subscriptionId;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

@@ -29,12 +29,14 @@ class QueueConsumer:
         )
         self.queue_name = settings.REDIS_QUEUE_NAME
         self.express_queue_name = self.queue_name + "_express"
+        self.subscription_queue_name = self.queue_name + settings.REDIS_SUBSCRIPTION_QUEUE_SUFFIX
         self.redis_client: Optional[redis.Redis] = None
 
         # Staging queues: jobs are atomically moved here via LMOVE before processing.
         # If the worker crashes, jobs remaining in staging are recovered on restart.
         self.staging_name = self.queue_name + "_processing"
         self.staging_express_name = self.express_queue_name + "_processing"
+        self.staging_subscription_name = self.subscription_queue_name + "_processing"
 
         logger.info(
             f"Queue Consumer initialized "
@@ -103,18 +105,27 @@ class QueueConsumer:
             # Atomically move job from source queue to staging queue.
             # This closes a durability gap from BLPOP+RPUSH (job loss on worker crash
             # between two commands).
+            # Priority: express > main > subscription.
             source_queue = self.express_queue_name
             dest_queue = self.staging_express_name
             job_json = await self.redis_client.blmove(
                 source_queue, dest_queue, timeout=1, src="LEFT", dest="RIGHT"
             )
 
-            # If express queue is empty, wait longer on regular queue.
+            # If express queue is empty, check regular queue.
             if not job_json:
                 source_queue = self.queue_name
                 dest_queue = self.staging_name
                 job_json = await self.redis_client.blmove(
-                    source_queue, dest_queue, timeout=4, src="LEFT", dest="RIGHT"
+                    source_queue, dest_queue, timeout=2, src="LEFT", dest="RIGHT"
+                )
+
+            # If main queue is also empty, check low-priority subscription queue.
+            if not job_json:
+                source_queue = self.subscription_queue_name
+                dest_queue = self.staging_subscription_name
+                job_json = await self.redis_client.blmove(
+                    source_queue, dest_queue, timeout=2, src="LEFT", dest="RIGHT"
                 )
 
             if not job_json:
@@ -337,7 +348,8 @@ class QueueConsumer:
             # Get true totals via LLEN (O(1), no memory cost)
             express_total = await self.redis_client.llen(self.express_queue_name)
             main_total = await self.redis_client.llen(self.queue_name)
-            total_count = express_total + main_total
+            subscription_total = await self.redis_client.llen(self.subscription_queue_name)
+            total_count = express_total + main_total + subscription_total
 
             # Deserialize only the first MAX_PENDING_RETURN items
             express_limit = min(express_total, MAX_PENDING_RETURN)
@@ -387,6 +399,15 @@ class QueueConsumer:
             while True:
                 item = await self.redis_client.lmove(
                     self.staging_name, self.queue_name, "LEFT", "RIGHT"
+                )
+                if item is None:
+                    break
+                recovered += 1
+
+            # staging_subscription → subscription
+            while True:
+                item = await self.redis_client.lmove(
+                    self.staging_subscription_name, self.subscription_queue_name, "LEFT", "RIGHT"
                 )
                 if item is None:
                     break
