@@ -13,8 +13,11 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -248,6 +251,42 @@ class SubscriptionSchedulerTest {
         boolean inWindow = scheduler.isInDesiredWindow(sub, nowMsk13);
 
         org.assertj.core.api.Assertions.assertThat(inWindow).isTrue();
+    }
+
+    @Test
+    @DisplayName("runDueSubscriptions: fromIso/toIso передаются в UTC — Python worker (ensure_utc) получает правильное окно")
+    void enqueuedDateRangeIsUtc() {
+        when(jobProducer.hasActiveProcessingJob()).thenReturn(false);
+        when(jobProducer.getQueueLength()).thenReturn(0L);
+
+        Instant sinceDate = Instant.now().minusSeconds(25 * 3600L);
+        String desiredTime = mskHhMm(10);
+        ChatSubscription sub = activeSub(20L, 100L, 200L, 24, desiredTime, sinceDate, null);
+        when(repository.findDueForRun(any())).thenReturn(List.of(sub));
+        when(chatRepository.findAllById(any())).thenReturn(List.of(chat(200L, "@testchat")));
+        when(jobProducer.enqueueSubscription(anyLong(), anyLong(), anyString(), anyString(), anyString(), anyLong()))
+                .thenReturn("sub_utc");
+
+        Instant before = Instant.now();
+        scheduler.runDueSubscriptions();
+        Instant after = Instant.now();
+
+        ArgumentCaptor<String> fromCap = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> toCap = ArgumentCaptor.forClass(String.class);
+        verify(jobProducer).enqueueSubscription(anyLong(), anyLong(), anyString(),
+                fromCap.capture(), toCap.capture(), anyLong());
+
+        LocalDateTime toLdt = LocalDateTime.parse(toCap.getValue(), DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+        LocalDateTime fromLdt = LocalDateTime.parse(fromCap.getValue(), DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+
+        // Интерпретируем как UTC (контракт с Python ensure_utc: naive → UTC)
+        Instant toInstant = toLdt.toInstant(ZoneOffset.UTC);
+        Instant fromInstant = fromLdt.toInstant(ZoneOffset.UTC);
+
+        // toIso ≈ now (±1 сек на усечение). Если код пишет МСК — отклонение будет ±3 часа.
+        assertThat(toInstant).isBetween(before.minusSeconds(2), after.plusSeconds(2));
+        // fromIso = toIso − periodHours
+        assertThat(Duration.between(fromInstant, toInstant)).isEqualTo(Duration.ofHours(24));
     }
 
     @Test
