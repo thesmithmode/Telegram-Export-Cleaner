@@ -35,7 +35,6 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.util.Collections;
 import java.util.Map;
 
 @RestController
@@ -150,7 +149,7 @@ public class TelegramController {
 
     @GetMapping("/health")
     public ResponseEntity<Map<String, String>> health() {
-        return ResponseEntity.ok(Collections.singletonMap("status", "UP"));
+        return ResponseEntity.ok(Map.of("status", "UP"));
     }
 
     /**

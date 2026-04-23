@@ -13,9 +13,15 @@
     <link rel="stylesheet" th:href="@{/dashboard/css/app.css}">
     <link rel="stylesheet" th:href="@{/dashboard/css/rtl.css}"
           th:if="${#locale.language == 'fa' or #locale.language == 'ar'}">
+    <!-- Ранний preconnect к CDN Telegram сокращает TLS-handshake перед первым запросом
+         telegram-web-app.js (~50-100ms экономии на cold load). -->
+    <link rel="preconnect" href="https://telegram.org" crossorigin>
     <!-- Telegram SDK + identity-guard грузятся синхронно до остальных скриптов:
          guard сверяет cookie tg_uid с initData.user.id и форсит re-login
-         при mismatch (attachment menu WebView reuse). -->
+         при mismatch (attachment menu WebView reuse).
+         SRI не используем намеренно: telegram.org отдаёт SDK без версионирования,
+         официально предполагается living URL; замороженный SRI будет отваливаться
+         на каждом silent update от Telegram и ломать Mini App авторизацию. -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script th:src="@{/dashboard/js/tg-identity-guard.js}"></script>
     <!-- defer в <head> гарантирует что app.js выполнится до page-specific скриптов из <main> -->

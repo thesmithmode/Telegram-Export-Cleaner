@@ -7,6 +7,7 @@ import com.tcleaner.dashboard.dto.OverviewDto;
 import com.tcleaner.dashboard.dto.TimeSeriesPointDto;
 import com.tcleaner.dashboard.service.stats.PeriodResolver;
 import com.tcleaner.dashboard.service.stats.StatsQueryService;
+import com.tcleaner.dashboard.util.PaginationUtils;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -65,7 +66,7 @@ public class DashboardMeApiController {
         if (my == null) {
             return List.of();
         }
-        return stats.topChats(periods.resolve(period, from, to), my, clamp(limit, 200));
+        return stats.topChats(periods.resolve(period, from, to), my, PaginationUtils.clamp(limit, 200));
     }
 
     @GetMapping("/events")
@@ -77,7 +78,7 @@ public class DashboardMeApiController {
         if (my == null) {
             return List.of();
         }
-        return stats.recentEvents(my, chatId, status, clamp(limit, 500));
+        return stats.recentEvents(my, chatId, status, PaginationUtils.clamp(limit, 500));
     }
 
     @GetMapping("/timeseries")
@@ -107,9 +108,5 @@ public class DashboardMeApiController {
             return Map.of();
         }
         return stats.statusBreakdown(periods.resolve(period, from, to), my);
-    }
-
-    private static int clamp(int value, int max) {
-        return Math.max(1, Math.min(value, max));
     }
 }

@@ -1041,6 +1041,10 @@ class ExportWorker:
 
         return count, nocache_messages
 
+    # Лимит одновременных HTTP-звонков к Telegram Bot API при рассылке позиций очереди.
+    # Telegram API throttles ~30 req/sec/bot — без лимита 100+ pending jobs дают 429.
+    _NOTIFY_MAX_CONCURRENCY: int = 10
+
     async def _update_all_queue_positions(self, current_task_id: str) -> None:
         if not self.control_redis or not self.java_client or not self.queue_consumer:
             return
@@ -1048,11 +1052,17 @@ class ExportWorker:
             pending_result = await self.queue_consumer.get_pending_jobs()
             pending = pending_result["jobs"]
             total = pending_result["total_count"]
-            # Notify all jobs in parallel (one HTTP call per user, no sequential waiting)
+
+            semaphore = asyncio.Semaphore(self._NOTIFY_MAX_CONCURRENCY)
+
+            async def _notify_bounded(task_id: str, position: int) -> None:
+                async with semaphore:
+                    await self._notify_queue_position(task_id, position, total)
+
             await asyncio.gather(
-                self._notify_queue_position(current_task_id, 0, total),
+                _notify_bounded(current_task_id, 0),
                 *[
-                    self._notify_queue_position(job.task_id, i + 1, total)
+                    _notify_bounded(job.task_id, i + 1)
                     for i, job in enumerate(pending)
                 ],
                 return_exceptions=True,

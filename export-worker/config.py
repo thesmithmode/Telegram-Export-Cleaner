@@ -1,6 +1,6 @@
 
 from typing import Optional
-from pydantic import ConfigDict, field_validator
+from pydantic import ConfigDict, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
@@ -88,6 +88,19 @@ class Settings(BaseSettings):
         # Only required for file-based session (development)
         # Return empty string if not provided - will use SESSION_STRING instead
         return v or ""
+
+    @model_validator(mode="after")
+    def validate_auth_mode(self) -> "Settings":
+        # В Docker нет stdin — fallback на file-based session с phone_number
+        # упрётся в interactive 2FA prompt и worker упадёт. Явно требуем
+        # один из двух режимов: SESSION_STRING (prod) или PHONE_NUMBER (dev).
+        if not self.TELEGRAM_SESSION_STRING and not self.TELEGRAM_PHONE_NUMBER:
+            raise ValueError(
+                "Either TELEGRAM_SESSION_STRING (stateless, production) or "
+                "TELEGRAM_PHONE_NUMBER (interactive, local dev only) must be set. "
+                "Docker containers have no stdin for 2FA — prod MUST use SESSION_STRING."
+            )
+        return self
 
 # Global settings instance
 settings = Settings()

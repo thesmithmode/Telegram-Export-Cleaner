@@ -14,6 +14,7 @@ import com.tcleaner.dashboard.service.cache.CacheMetricsService;
 import com.tcleaner.dashboard.service.stats.PeriodResolver;
 import com.tcleaner.dashboard.service.stats.StatsPeriod;
 import com.tcleaner.dashboard.service.stats.StatsQueryService;
+import com.tcleaner.dashboard.util.PaginationUtils;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -78,7 +79,7 @@ public class DashboardApiController {
 
     @GetMapping("/stats/users")
     public List<UserStatsRow> users(@RequestParam(defaultValue = "50") int limit) {
-        return statsQueryService.topUsers(clamp(limit, 500), null);
+        return statsQueryService.topUsers(PaginationUtils.clamp(limit, 500), null);
     }
 
     @GetMapping("/stats/user/{botUserId}")
@@ -102,7 +103,7 @@ public class DashboardApiController {
             @RequestParam(required = false) Long userId,
             @RequestParam(defaultValue = "20") int limit) {
         Scope s = scope(principal, period, from, to, userId);
-        return statsQueryService.topChats(s.period(), s.botUserId(), clamp(limit, 200));
+        return statsQueryService.topChats(s.period(), s.botUserId(), PaginationUtils.clamp(limit, 200));
     }
 
     @GetMapping("/stats/timeseries")
@@ -140,7 +141,7 @@ public class DashboardApiController {
             @RequestParam(required = false) String status,
             @RequestParam(defaultValue = "100") int limit) {
         Long effective = effectiveUserId(principal, userId);
-        return statsQueryService.recentEvents(effective, chatId, status, clamp(limit, 500));
+        return statsQueryService.recentEvents(effective, chatId, status, PaginationUtils.clamp(limit, 500));
     }
 
     private Scope scope(DashboardUserDetails principal, String period,
@@ -158,10 +159,6 @@ public class DashboardApiController {
     }
 
     private record Scope(StatsPeriod period, Long botUserId) {}
-
-    private static int clamp(int value, int max) {
-        return Math.max(1, Math.min(value, max));
-    }
 
     private static StatsPeriod overrideGranularity(StatsPeriod base, String granularity) {
         if (granularity == null || granularity.isBlank() || "auto".equalsIgnoreCase(granularity)) {

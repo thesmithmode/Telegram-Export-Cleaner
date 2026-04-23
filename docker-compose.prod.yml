@@ -86,7 +86,7 @@ services:
       - "traefik.http.routers.dashboard.rule=Host(`${TRAEFIK_DASHBOARD_DOMAIN}`) && PathPrefix(`/dashboard`)"
       - "traefik.http.routers.dashboard.entrypoints=websecure"
       - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.dashboard.middlewares=sec-headers"
+      - "traefik.http.routers.dashboard.middlewares=sec-headers,dashboard-ratelimit"
       - "traefik.http.services.java-bot.loadbalancer.server.port=8080"
       # ── Security headers middleware ───────────────────────────────────────
       - "traefik.http.middlewares.sec-headers.headers.stsSeconds=31536000"
@@ -95,6 +95,13 @@ services:
       - "traefik.http.middlewares.sec-headers.headers.customFrameOptionsValue=DENY"
       - "traefik.http.middlewares.sec-headers.headers.contentTypeNosniff=true"
       - "traefik.http.middlewares.sec-headers.headers.referrerPolicy=strict-origin-when-cross-origin"
+      # ── Rate-limit middleware (per-IP) ───────────────────────────────────
+      # 20 req/s в среднем, burst 40. IP берётся из X-Forwarded-For
+      # (depth=1, за Let's Encrypt HTTP-01 proxy нет, клиентский IP идёт напрямую
+      # в Traefik → RemoteAddr). Превышение → 429 Too Many Requests.
+      - "traefik.http.middlewares.dashboard-ratelimit.ratelimit.average=20"
+      - "traefik.http.middlewares.dashboard-ratelimit.ratelimit.burst=40"
+      - "traefik.http.middlewares.dashboard-ratelimit.ratelimit.period=1s"
     depends_on:
       redis:
         condition: service_healthy

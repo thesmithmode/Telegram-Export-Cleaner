@@ -7,7 +7,9 @@ import com.tcleaner.dashboard.dto.OverviewDto;
 import com.tcleaner.dashboard.dto.TimeSeriesPointDto;
 import com.tcleaner.dashboard.dto.UserDetailDto;
 import com.tcleaner.dashboard.dto.UserStatsRow;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -29,9 +31,13 @@ import static com.tcleaner.dashboard.config.CacheConfig.PROFILE;
 public class StatsQueryService {
 
     private final JdbcTemplate jdbc;
+    // Self-reference через Spring proxy — без этого nested вызовы (overview → topUsers)
+    // игнорируют @Cacheable advice и бьют SQL на каждый запрос. @Lazy ломает цикл бинов.
+    private final StatsQueryService self;
 
-    public StatsQueryService(JdbcTemplate jdbc) {
+    public StatsQueryService(JdbcTemplate jdbc, @Lazy @Autowired StatsQueryService self) {
         this.jdbc = jdbc;
+        this.self = self;
     }
 
     // Единая точка фильтрации: склеивает SQL-фрагмент bot_user_id и добавляет параметр,
@@ -48,9 +54,9 @@ public class StatsQueryService {
         return new OverviewDto(
                 totals[0], totals[1], totals[2],
                 users != null ? users : 0,
-                topUsers(10, botUserId),
-                topChats(period, botUserId, 10),
-                statusBreakdown(period, botUserId),
+                self.topUsers(10, botUserId),
+                self.topChats(period, botUserId, 10),
+                self.statusBreakdown(period, botUserId),
                 null, null, null, null);
     }
 
@@ -91,9 +97,9 @@ public class StatsQueryService {
         return new OverviewDto(
                 current[0], current[1], current[2],
                 users != null ? users : 0,
-                topUsers(10, botUserId),
-                topChats(period, botUserId, 10),
-                statusBreakdown(period, botUserId),
+                self.topUsers(10, botUserId),
+                self.topChats(period, botUserId, 10),
+                self.statusBreakdown(period, botUserId),
                 computeDeltaPercent(current[0], prev[0]),
                 computeDeltaPercent(current[1], prev[1]),
                 computeDeltaPercent(current[2], prev[2]),

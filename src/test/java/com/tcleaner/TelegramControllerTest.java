@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -31,6 +32,11 @@ class TelegramControllerTest {
 
     @MockitoBean
     private TelegramExporter mockExporter;
+
+    // IdempotencyKeyFilter требует StringRedisTemplate; в @WebMvcTest auto-config Redis
+    // не поднимается, поэтому подставляем мок.
+    @MockitoBean
+    private StringRedisTemplate stringRedisTemplate;
 
     @Autowired
     private MockMvc mockMvc;
