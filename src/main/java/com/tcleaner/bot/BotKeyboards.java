@@ -65,8 +65,6 @@ public class BotKeyboards {
                 .build();
     }
 
-<<<<<<< HEAD
-=======
     /**
      * Клавиатура с одной кнопкой "Подтвердить подписку" для confirmation-flow.
      * Callback data: "sub_confirm:{subscriptionId}".
@@ -81,7 +79,6 @@ public class BotKeyboards {
                 .build();
     }
 
->>>>>>> feat/chat-subscriptions
     /** Клавиатура выбора языка — 2 кнопки в ряд. Callback {@code lang:<code>}. */
     public InlineKeyboardMarkup languageChoiceKeyboard() {
         InlineKeyboardMarkup.InlineKeyboardMarkupBuilder markup = InlineKeyboardMarkup.builder();

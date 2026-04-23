@@ -550,11 +550,8 @@ class TestQueueConsumerMisc:
     async def test_get_pending_jobs_happy_path(self):
         c = QueueConsumer()
         c.redis_client = AsyncMock()
-<<<<<<< HEAD
         c.redis_client.llen = AsyncMock(side_effect=[2, 1])  # express_total, main_total
-=======
         c.redis_client.llen = AsyncMock(side_effect=[2, 1, 0])  # express, main, subscription
->>>>>>> feat/chat-subscriptions
         job_data = json.dumps(ExportRequest(
             task_id="t1", user_id=1, chat_id=1, user_chat_id=1, limit=0
         ).model_dump())
@@ -567,11 +564,8 @@ class TestQueueConsumerMisc:
     async def test_get_pending_jobs_skips_corrupt(self):
         c = QueueConsumer()
         c.redis_client = AsyncMock()
-<<<<<<< HEAD
         c.redis_client.llen = AsyncMock(side_effect=[1, 0])
-=======
         c.redis_client.llen = AsyncMock(side_effect=[1, 0, 0])  # express, main, subscription
->>>>>>> feat/chat-subscriptions
         c.redis_client.lrange = AsyncMock(return_value=["{not-json"])
         result = await c.get_pending_jobs()
         assert result["total_count"] == 1  # total из llen
