@@ -117,7 +117,7 @@ class StatsQueryServiceTest {
         assertThat(dto.totalExports()).isEqualTo(3);
         assertThat(dto.totalMessages()).isEqualTo(350L);   // 100+200+50
         assertThat(dto.totalBytes()).isEqualTo(3500L);     // 1000+2000+500
-        assertThat(dto.totalUsers()).isEqualTo(2);         // bot_users без период-фильтра
+        assertThat(dto.totalUsers()).isEqualTo(2);         // 2 distinct активных юзера в периоде
     }
 
     @Test
@@ -163,7 +163,8 @@ class StatsQueryServiceTest {
         assertThat(dto.deltaExports()).isEqualTo(200.0);  // (3-1)/1*100
         assertThat(dto.deltaMessages()).isEqualTo(250.0); // (350-100)/100*100
         assertThat(dto.deltaBytes()).isEqualTo(250.0);    // (3500-1000)/1000*100
-        assertThat(dto.deltaUsers()).isNull();
+        // current: 2 активных юзера (1,2), prev: 1 (юзер 1 из prev1) → (2-1)/1*100
+        assertThat(dto.deltaUsers()).isEqualTo(100.0);
     }
 
     @Test
