@@ -66,8 +66,13 @@ public class ExportEventIngestionService {
                 case EXPORT_BYTES_MEASURED -> upsertEvent(payload, null);
             }
         } catch (Exception ex) {
+            // Re-throw: @Transactional откатывает частичный upsert (chat/user/event),
+            // иначе failure после части writes оставлял БД в несогласованном состоянии.
+            // Upstream (StatsStreamConsumer#onMessage) поймает и всё равно ACK'нет запись
+            // — at-least-once + идемпотентность task_id страхует от повторов.
             log.error("Ошибка ingest события {} (task={}): {}",
                     payload.getType(), payload.getTaskId(), ex.getMessage(), ex);
+            throw ex;
         }
     }
 

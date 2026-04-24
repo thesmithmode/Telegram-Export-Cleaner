@@ -23,8 +23,15 @@ Base URL (локально): `http://localhost:8080`
 | `file` | file | ✅ | JSON export (`result.json`) |
 | `startDate` | `YYYY-MM-DD` | Нет | Нижняя граница по дате |
 | `endDate` | `YYYY-MM-DD` | Нет | Верхняя граница по дате |
-| `keywords` | CSV string | Нет | Include-фильтр по словам |
-| `excludeKeywords` | CSV string | Нет | Exclude-фильтр по словам |
+| `keywords` | CSV string | Нет | Include-фильтр по словам (≤4096 символов) |
+| `excludeKeywords` | CSV string | Нет | Exclude-фильтр по словам (≤4096 символов) |
+| `taskId` | string | Нет | ID задачи в Redis-очереди; используется для связи события экспорта с job'ом при публикации метрик в `stats:events`. |
+| `botUserId` | long (≥0) | Нет | Telegram ID пользователя бота — для атрибуции экспорта в дашборде статистики. |
+| `chatTitle` | string | Нет | Человекочитаемое имя чата, попадает в `export_events.chat_title`. |
+| `messagesCount` | long (≥0) | Нет | Количество исходных сообщений в экспорте (до фильтров); пишется в событие `EXPORT_COMPLETED`. |
+| `subscriptionId` | long (>0) | Нет | ID подписки, если экспорт запущен периодическим триггером. Используется для обновления lifecycle подписки (`recordSuccess` / `recordFailure`). |
+
+> Параметры `taskId`/`botUserId`/`chatTitle`/`messagesCount`/`subscriptionId` опциональны и используются исключительно для телеметрии дашборда. Если не передать, экспорт выполнится полноценно, но соответствующее событие не попадёт в Redis Stream `stats:events` (запись в `export_events` для этого задания не появится).
 
 ### Успешный ответ
 
@@ -76,6 +83,20 @@ curl -X POST http://localhost:8080/api/convert \
   -F "endDate=2024-12-31" \
   -F "keywords=release,note" \
   -F "excludeKeywords=spam" \
+  -o output.txt
+```
+
+С метриками для дашборда (вызов из Python-worker'а):
+
+```bash
+curl -X POST http://localhost:8080/api/convert \
+  -H "X-API-Key: $JAVA_API_KEY" \
+  -F "file=@result.json" \
+  -F "taskId=b3c9f1e2-..." \
+  -F "botUserId=123456789" \
+  -F "chatTitle=My Channel" \
+  -F "messagesCount=42000" \
+  -F "subscriptionId=17" \
   -o output.txt
 ```
 
