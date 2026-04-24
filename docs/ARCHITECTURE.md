@@ -105,6 +105,10 @@
 
 Поток подписки: USER создаёт подписку в дашборде → `SubscriptionScheduler` (cron каждые 5 мин) находит готовые к запуску → idle-check → enqueue в низкоприоритетную очередь `telegram_export_subscription` → worker забирает по приоритету `express > main > subscription` → экспорт выполняется → файл идёт пользователю в ЛС.
 
+Защита от 5-мин цикла: `isPeriodElapsed` якорит на `max(lastSuccessAt, lastRunAt, lastFailureAt)`. После enqueue scheduler не стреляет повторно, даже если terminal-событие от worker ещё не пришло.
+
+Контракт дат с Python worker: `fromIso`/`toIso` отправляются как ISO-local **в UTC** (`LocalDateTime.ofInstant(now, ZoneOffset.UTC)`). Python `ensure_utc` трактует naive datetime как UTC. Отправка в МСК без offset обрезала бы 3 последних часа из выборки.
+
 ### Lifecycle статуса
 
 `ACTIVE` → `PAUSED` (две подряд неудачи или ручная пауза) → обратно `ACTIVE` через dashboard

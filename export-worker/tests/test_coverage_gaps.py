@@ -672,3 +672,21 @@ class TestEnsureUtc:
         aware = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone(timedelta(hours=3)))
         result = ensure_utc(aware)
         assert result.tzinfo == timezone(timedelta(hours=3))
+
+    def test_java_iso_local_parsed_as_utc_without_shift(self):
+        """Контракт с Java SubscriptionScheduler.enqueueOne: fromIso/toIso
+        отправляются как ISO-local без offset, в UTC. Python fromisoformat
+        → ensure_utc должен считать naive как UTC (без сдвига часов).
+
+        Если Java снова отправит МСК (как было в проде до 2026-04-24),
+        этот тест не завалится — он проверяет Python-сторону контракта.
+        Контракт на Java-стороне покрыт SubscriptionSchedulerTest.enqueuedDateRangeIsUtc.
+        """
+        from datetime import datetime, timezone
+        java_iso = "2026-04-24T05:00:00"
+        parsed = datetime.fromisoformat(java_iso)
+        assert parsed.tzinfo is None
+        utc_dt = ensure_utc(parsed)
+        assert utc_dt.tzinfo == timezone.utc
+        assert utc_dt.hour == 5
+        assert utc_dt.year == 2026 and utc_dt.month == 4 and utc_dt.day == 24

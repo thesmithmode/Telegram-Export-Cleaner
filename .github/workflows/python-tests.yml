@@ -1,0 +1,201 @@
+name: Python Tests (reusable)
+
+# Единый источник истины для Python-тестов. build.yml (main) и ci.yml
+# (feature) раньше содержали независимые копии Python jobs, что давало
+# дрейф конфигов — баг с циклом подписки прошёл main CI. Теперь оба
+# workflow вызывают этот reusable job через `uses:`.
+
+on:
+  workflow_call: {}
+
+jobs:
+
+  unit:
+    name: Python Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Create environment file
+        run: |
+          cat > export-worker/.env << EOF
+          TELEGRAM_API_ID=1
+          TELEGRAM_API_HASH=test_hash_for_ci
+          TELEGRAM_PHONE_NUMBER=+1234567890
+          TELEGRAM_BOT_TOKEN=000000000:AAAAAA
+          REDIS_HOST=localhost
+          REDIS_PORT=6379
+          JAVA_API_BASE_URL=http://localhost:8080
+          LOG_LEVEL=DEBUG
+          CACHE_ENABLED=false
+          EOF
+
+      - name: Install dependencies
+        run: |
+          cd export-worker
+          pip install -r requirements.txt
+          pip install pytest==8.3.5 pytest-asyncio==0.23.8 pytest-cov==5.0.0 ruff
+
+      - name: Lint Python (ruff)
+        run: |
+          cd export-worker
+          ruff check --select F,E9,W605 --exclude tests .
+
+      - name: Run unit tests
+        run: |
+          cd export-worker
+          pytest \
+            tests/test_models.py \
+            tests/test_json_converter.py \
+            tests/test_export_worker.py \
+            tests/test_message_cache.py \
+            tests/test_queue_consumer.py \
+            tests/test_pyrogram_client.py \
+            tests/test_java_client.py \
+            tests/test_coverage_gaps.py \
+            tests/test_coverage_gaps2.py \
+            tests/test_coverage_gaps3.py \
+            tests/test_queue_priority.py \
+            tests/test_subscription_empty_export.py \
+            -v --cov=. --cov-report=term-missing --cov-fail-under=90
+
+  integration:
+    name: Python Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Create environment file
+        run: |
+          cat > export-worker/.env << EOF
+          TELEGRAM_API_ID=1
+          TELEGRAM_API_HASH=test_hash_for_ci
+          TELEGRAM_PHONE_NUMBER=+1234567890
+          TELEGRAM_BOT_TOKEN=000000000:AAAAAA
+          REDIS_HOST=localhost
+          REDIS_PORT=6379
+          JAVA_API_BASE_URL=http://localhost:8080
+          LOG_LEVEL=DEBUG
+          CACHE_ENABLED=true
+          EOF
+
+      - name: Install dependencies
+        run: |
+          cd export-worker
+          pip install -r requirements.txt
+          pip install pytest==8.3.5 pytest-asyncio==0.23.8 pytest-cov==5.0.0
+
+      - name: Run integration tests
+        run: |
+          cd export-worker
+          pytest tests/test_integration.py -v --tb=short
+
+  e2e:
+    name: Python E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Create environment file
+        run: |
+          cat > export-worker/.env << EOF
+          TELEGRAM_API_ID=1
+          TELEGRAM_API_HASH=test_hash_for_ci
+          TELEGRAM_PHONE_NUMBER=+1234567890
+          TELEGRAM_BOT_TOKEN=000000000:AAAAAA
+          REDIS_HOST=localhost
+          REDIS_PORT=6379
+          JAVA_API_BASE_URL=http://localhost:8080
+          LOG_LEVEL=DEBUG
+          CACHE_ENABLED=true
+          EOF
+
+      - name: Install dependencies
+        run: |
+          cd export-worker
+          pip install -r requirements.txt
+          pip install pytest==8.3.5 pytest-asyncio==0.23.8 pytest-cov==5.0.0
+
+      - name: Run E2E tests
+        run: |
+          cd export-worker
+          pytest tests/test_end_to_end.py -v --tb=short
+
+  performance:
+    name: Python Performance Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Create environment file
+        run: |
+          cat > export-worker/.env << EOF
+          TELEGRAM_API_ID=1
+          TELEGRAM_API_HASH=test_hash_for_ci
+          TELEGRAM_PHONE_NUMBER=+1234567890
+          TELEGRAM_BOT_TOKEN=000000000:AAAAAA
+          REDIS_HOST=localhost
+          REDIS_PORT=6379
+          JAVA_API_BASE_URL=http://localhost:8080
+          LOG_LEVEL=DEBUG
+          CACHE_ENABLED=false
+          EOF
+
+      - name: Install dependencies
+        run: |
+          cd export-worker
+          pip install -r requirements.txt
+          pip install pytest==8.3.5 pytest-asyncio==0.23.8 pytest-cov==5.0.0
+
+      - name: Run performance tests
+        run: |
+          cd export-worker
+          pytest tests/test_performance.py -v --tb=short

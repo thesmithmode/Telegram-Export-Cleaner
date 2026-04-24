@@ -2,12 +2,16 @@ package com.tcleaner.dashboard.service.ingestion;
 
 import com.tcleaner.core.TelegramExporter;
 import com.tcleaner.dashboard.domain.BotUser;
+import com.tcleaner.dashboard.domain.Chat;
+import com.tcleaner.dashboard.domain.ChatSubscription;
 import com.tcleaner.dashboard.domain.ExportEvent;
 import com.tcleaner.dashboard.domain.ExportStatus;
+import com.tcleaner.dashboard.domain.SubscriptionStatus;
 import com.tcleaner.dashboard.events.StatsEventPayload;
 import com.tcleaner.dashboard.events.StatsEventType;
 import com.tcleaner.dashboard.repository.BotUserRepository;
 import com.tcleaner.dashboard.repository.ChatRepository;
+import com.tcleaner.dashboard.repository.ChatSubscriptionRepository;
 import com.tcleaner.dashboard.repository.ExportEventRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -45,6 +49,9 @@ class ExportEventIngestionServiceTest {
 
     @Autowired
     private ChatRepository chats;
+
+    @Autowired
+    private ChatSubscriptionRepository subscriptions;
 
     @MockitoBean
     private TelegramExporter mockExporter;
@@ -228,6 +235,132 @@ class ExportEventIngestionServiceTest {
         ExportEvent ev = events.findByTaskId(TASK).orElseThrow();
         assertThat(ev.getFromDate()).isNotNull();
         assertThat(ev.getFromDate().toString()).isEqualTo("2026-04-14");
+    }
+
+    // ─── updateSubscriptionOnTerminal: мост ingestion → subscription lifecycle ─
+    //
+    // Без этих проверок цикл подписки (1 экспорт раз в 5 мин вместо раз в 24ч)
+    // мог бы вернуться: если recordSuccess перестанет вызываться на COMPLETED,
+    // scheduler.isPeriodElapsed никогда не "упрётся" в свежий lastSuccessAt.
+
+    @Test
+    @DisplayName("terminal COMPLETED с subscriptionId → recordSuccess (lastSuccessAt выставлен, consecutiveFailures=0)")
+    void completedUpdatesSubscriptionLifecycle() {
+        ChatSubscription sub = newActiveSubscription(USER_ID, 2);
+
+        service.ingest(started(sub.getId()));
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_COMPLETED)
+                .taskId(TASK).botUserId(USER_ID)
+                .subscriptionId(sub.getId())
+                .messagesCount(10L).bytesCount(100L)
+                .status("completed").ts(TS.plusSeconds(30)).build());
+
+        ChatSubscription after = subscriptions.findById(sub.getId()).orElseThrow();
+        assertThat(after.getLastSuccessAt()).isNotNull();
+        assertThat(after.getConsecutiveFailures()).isZero();
+        assertThat(after.getStatus()).isEqualTo(SubscriptionStatus.ACTIVE);
+    }
+
+    @Test
+    @DisplayName("terminal FAILED с subscriptionId → recordFailure (consecutiveFailures++)")
+    void failedIncrementsConsecutiveFailures() {
+        ChatSubscription sub = newActiveSubscription(USER_ID, 0);
+
+        service.ingest(started(sub.getId()));
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_FAILED)
+                .taskId(TASK).botUserId(USER_ID)
+                .subscriptionId(sub.getId())
+                .error("boom").status("failed")
+                .ts(TS.plusSeconds(30)).build());
+
+        ChatSubscription after = subscriptions.findById(sub.getId()).orElseThrow();
+        assertThat(after.getLastFailureAt()).isNotNull();
+        assertThat(after.getConsecutiveFailures()).isEqualTo(1);
+        assertThat(after.getStatus()).isEqualTo(SubscriptionStatus.ACTIVE);
+    }
+
+    @Test
+    @DisplayName("две подряд FAILED → подписка PAUSED")
+    void twoFailuresInARowPause() {
+        ChatSubscription sub = newActiveSubscription(USER_ID, 1);
+
+        service.ingest(started(sub.getId()));
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_FAILED)
+                .taskId(TASK).botUserId(USER_ID)
+                .subscriptionId(sub.getId())
+                .error("boom").status("failed")
+                .ts(TS.plusSeconds(30)).build());
+
+        ChatSubscription after = subscriptions.findById(sub.getId()).orElseThrow();
+        assertThat(after.getStatus()).isEqualTo(SubscriptionStatus.PAUSED);
+        assertThat(after.getConsecutiveFailures()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("terminal CANCELLED с subscriptionId → lifecycle не трогается (ручная отмена юзером)")
+    void cancelledDoesNotMutateSubscription() {
+        ChatSubscription sub = newActiveSubscription(USER_ID, 0);
+        Instant preUpdated = sub.getUpdatedAt();
+
+        service.ingest(started(sub.getId()));
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_CANCELLED)
+                .taskId(TASK).botUserId(USER_ID)
+                .subscriptionId(sub.getId())
+                .status("cancelled")
+                .ts(TS.plusSeconds(30)).build());
+
+        ChatSubscription after = subscriptions.findById(sub.getId()).orElseThrow();
+        assertThat(after.getLastSuccessAt()).isNull();
+        assertThat(after.getLastFailureAt()).isNull();
+        assertThat(after.getConsecutiveFailures()).isZero();
+        assertThat(after.getUpdatedAt()).isEqualTo(preUpdated);
+    }
+
+    private ChatSubscription newActiveSubscription(long botUserId, int failures) {
+        Instant now = Instant.now();
+
+        // FK constraints: bot_user_id → bot_users, chat_ref_id → chats
+        users.save(BotUser.builder()
+                .botUserId(botUserId)
+                .firstSeen(now).lastSeen(now)
+                .totalExports(0).totalMessages(0L).totalBytes(0L)
+                .build());
+        Chat chat = chats.save(Chat.builder()
+                .canonicalChatId("-100888").chatIdRaw("-100888")
+                .firstSeen(now).lastSeen(now)
+                .build());
+
+        return subscriptions.save(ChatSubscription.builder()
+                .botUserId(botUserId)
+                .chatRefId(chat.getId())
+                .periodHours(24)
+                .desiredTimeMsk("09:00")
+                .sinceDate(now.minusSeconds(25 * 3600L))
+                .status(SubscriptionStatus.ACTIVE)
+                .consecutiveFailures(failures)
+                .lastConfirmAt(now)
+                .createdAt(now)
+                .updatedAt(now)
+                .build());
+    }
+
+    private static StatsEventPayload started(Long subscriptionId) {
+        return StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_STARTED)
+                .taskId(TASK)
+                .botUserId(USER_ID)
+                .chatIdRaw("@chat")
+                .canonicalChatId("-100777")
+                .chatTitle("Test Chat")
+                .source("bot")
+                .status("queued")
+                .subscriptionId(subscriptionId)
+                .ts(TS)
+                .build();
     }
 
     private static StatsEventPayload started() {
