@@ -9,7 +9,7 @@
 (function () {
     "use strict";
 
-    const { fetchJson, escapeHtml, setCountBadge, onReady } = window.Dashboard || {};
+    const { fetchJson, escapeHtml, setCountBadge, initSortableTable, onReady } = window.Dashboard || {};
     if (!fetchJson) { return; }
 
     const csrfToken  = document.querySelector('meta[name="_csrf"]')?.content;
@@ -73,13 +73,17 @@
      * Якорь — последнее событие подписки (success / run / failure), чтобы
      * не показывать "Ожидается первый запуск" пока идёт/провалился первый экспорт.
      */
+    const MAX_JOB_MS = 4 * 60 * 60 * 1000; // 4 часа — максимальная длительность экспорта
+
     function computeNextRun(sub) {
         const success = sub.lastSuccessAt ? new Date(sub.lastSuccessAt).getTime() : null;
         const run     = sub.lastRunAt     ? new Date(sub.lastRunAt).getTime()     : null;
         const failure = sub.lastFailureAt ? new Date(sub.lastFailureAt).getTime() : null;
 
         // Запуск начат, но terminal-событие не пришло → "Выполняется…"
-        if (run && (!success || run > success) && (!failure || run > failure)) {
+        // Таймаут 4ч: если lastRunAt слишком давно — terminal событие потеряно, не зависаем.
+        if (run && (!success || run > success) && (!failure || run > failure)
+                && (Date.now() - run) < MAX_JOB_MS) {
             return I18N.inProgress;
         }
 
@@ -126,6 +130,7 @@
     function buildRow(sub) {
         const tr = document.createElement("tr");
 
+        tr.appendChild(td(sub.userDisplay || sub.botUserId || "—"));
         tr.appendChild(td(sub.chatDisplay || sub.chatRefId));
         tr.appendChild(td(periodLabel(sub.periodHours)));
         tr.appendChild(td(sub.desiredTimeMsk || "—"));
@@ -160,17 +165,12 @@
 
     // ── Render ─────────────────────────────────────────────────────────────────
 
-    function renderTable(rows) {
-        const tbody = document.getElementById("subscriptions-body");
-        if (!tbody) { return; }
-
-        // Очищаем через removeChild в цикле — безопаснее replaceChildren
+    function renderRows(tbody, rows) {
         while (tbody.firstChild) { tbody.removeChild(tbody.firstChild); }
-
         if (!rows || rows.length === 0) {
             const emptyRow = document.createElement("tr");
             const emptyCell = document.createElement("td");
-            emptyCell.colSpan = 7;
+            emptyCell.colSpan = 8;
             emptyCell.style.textAlign = "center";
             emptyCell.style.color = "var(--muted)";
             emptyCell.textContent = I18N.empty;
@@ -179,8 +179,20 @@
         } else {
             rows.forEach(sub => tbody.appendChild(buildRow(sub)));
         }
+    }
 
+    function renderTable(rows) {
+        const tbody = document.getElementById("subscriptions-body");
+        if (!tbody) { return; }
+        renderRows(tbody, rows);
         setCountBadge("subscriptions", (rows || []).length);
+        if (initSortableTable) {
+            initSortableTable(document.getElementById("subscriptions-table"), {
+                rows: rows || [],
+                rerender: (sorted) => renderRows(tbody, sorted),
+                getValue: (sub, key) => sub[key],
+            });
+        }
     }
 
     // ── API calls ──────────────────────────────────────────────────────────────
@@ -195,7 +207,7 @@
                 while (tbody.firstChild) { tbody.removeChild(tbody.firstChild); }
                 const errRow = document.createElement("tr");
                 const errCell = document.createElement("td");
-                errCell.colSpan = 7;
+                errCell.colSpan = 8;
                 errCell.style.color = "var(--danger)";
                 errCell.textContent = `Ошибка загрузки: ${e.message}`;
                 errRow.appendChild(errCell);

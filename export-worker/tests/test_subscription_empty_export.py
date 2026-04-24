@@ -71,8 +71,10 @@ class TestSubscriptionEmptyExport:
         # send_response (отправка файла) НЕ должен вызываться
         worker.java_client.send_response.assert_not_called()
 
-        # Задача должна быть помечена как завершённая
-        worker.queue_consumer.mark_job_completed.assert_called_once_with(job.task_id)
+        # Задача должна быть помечена как завершённая, со subscription_id для recordSuccess
+        worker.queue_consumer.mark_job_completed.assert_called_once_with(
+            job.task_id, bot_user_id=job.user_id, subscription_id=job.subscription_id
+        )
 
     @pytest.mark.asyncio
     async def test_non_empty_export_for_subscription_sends_file(self):

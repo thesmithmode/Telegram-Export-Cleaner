@@ -307,7 +307,9 @@ class QueueConsumer:
             logger.error(f"_finalize_job failed for {task_id}: {e}")
             return False
 
-    async def mark_job_completed(self, task_id: str) -> bool:
+    async def mark_job_completed(self, task_id: str,
+                                 bot_user_id: Optional[int] = None,
+                                 subscription_id: Optional[int] = None) -> bool:
         ok = await self._finalize_job(
             task_id,
             terminal_key=f"job:completed:{task_id}",
@@ -315,9 +317,36 @@ class QueueConsumer:
         )
         if ok:
             logger.debug(f"Marked job completed: {task_id}")
+            if subscription_id is not None:
+                await self._publish_completed_event(task_id, bot_user_id, subscription_id)
         return ok
 
-    async def mark_job_failed(self, task_id: str, error: str) -> bool:
+    async def _publish_completed_event(self, task_id: str,
+                                       bot_user_id: Optional[int],
+                                       subscription_id: int) -> None:
+        """XADD export.completed для subscription empty-итераций — обновляет lastSuccessAt."""
+        try:
+            event_data: dict = {
+                "type": "export.completed",
+                "task_id": task_id,
+                "status": "completed",
+                "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "subscription_id": subscription_id,
+            }
+            if bot_user_id is not None:
+                event_data["bot_user_id"] = bot_user_id
+            await self.redis_client.xadd(
+                settings.STATS_STREAM_KEY,
+                {"payload": json.dumps(event_data)},
+                maxlen=100_000,
+                approximate=True,
+            )
+        except Exception as e:
+            logger.debug(f"stats completed-xadd failed for {task_id}: {e}")
+
+    async def mark_job_failed(self, task_id: str, error: str,
+                              subscription_id: Optional[int] = None,
+                              bot_user_id: Optional[int] = None) -> bool:
         ok = await self._finalize_job(
             task_id,
             terminal_key=f"job:failed:{task_id}",
@@ -328,19 +357,26 @@ class QueueConsumer:
         )
         if ok:
             logger.debug(f"Marked job failed: {task_id}")
-            await self._publish_failed_event(task_id, error)
+            await self._publish_failed_event(task_id, error, subscription_id, bot_user_id)
         return ok
 
-    async def _publish_failed_event(self, task_id: str, error: str) -> None:
+    async def _publish_failed_event(self, task_id: str, error: str,
+                                    subscription_id: Optional[int] = None,
+                                    bot_user_id: Optional[int] = None) -> None:
         """XADD export.failed в stats:events. Ошибки здесь не должны ронять основной flow."""
         try:
-            payload = json.dumps({
+            event_data: dict = {
                 "type": "export.failed",
                 "task_id": task_id,
                 "status": "failed",
                 "error": error,
                 "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            })
+            }
+            if subscription_id is not None:
+                event_data["subscription_id"] = subscription_id
+            if bot_user_id is not None:
+                event_data["bot_user_id"] = bot_user_id
+            payload = json.dumps(event_data)
             await self.redis_client.xadd(
                 settings.STATS_STREAM_KEY,
                 {"payload": payload},

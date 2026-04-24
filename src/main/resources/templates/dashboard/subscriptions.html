@@ -84,18 +84,19 @@
             <table class="data-table" id="subscriptions-table">
                 <thead>
                 <tr>
-                    <th th:text="#{dashboard.subscriptions.table.chat}">Чат</th>
-                    <th th:text="#{dashboard.subscriptions.table.period}">Период</th>
-                    <th th:text="#{dashboard.subscriptions.table.time}">Время МСК</th>
-                    <th th:text="#{dashboard.subscriptions.table.since}">С даты</th>
-                    <th th:text="#{dashboard.subscriptions.table.status}">Статус</th>
+                    <th data-sort-key="userDisplay" data-sort-type="string" th:text="#{dashboard.subscriptions.table.user}">Пользователь</th>
+                    <th data-sort-key="chatDisplay" data-sort-type="string" th:text="#{dashboard.subscriptions.table.chat}">Чат</th>
+                    <th data-sort-key="periodHours" data-sort-type="number" th:text="#{dashboard.subscriptions.table.period}">Период</th>
+                    <th data-sort-key="desiredTimeMsk" data-sort-type="string" th:text="#{dashboard.subscriptions.table.time}">Время МСК</th>
+                    <th data-sort-key="sinceDate" data-sort-type="date" th:text="#{dashboard.subscriptions.table.since}">С даты</th>
+                    <th data-sort-key="status" data-sort-type="string" th:text="#{dashboard.subscriptions.table.status}">Статус</th>
                     <th th:text="#{dashboard.subscriptions.table.next_run}">Следующий запуск</th>
                     <th th:text="#{dashboard.subscriptions.table.actions}">Действия</th>
                 </tr>
                 </thead>
                 <tbody id="subscriptions-body">
                 <tr>
-                    <td colspan="7">—</td>
+                    <td colspan="8">—</td>
                 </tr>
                 </tbody>
             </table>

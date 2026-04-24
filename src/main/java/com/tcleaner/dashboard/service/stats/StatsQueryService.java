@@ -7,6 +7,7 @@ import com.tcleaner.dashboard.dto.OverviewDto;
 import com.tcleaner.dashboard.dto.TimeSeriesPointDto;
 import com.tcleaner.dashboard.dto.UserDetailDto;
 import com.tcleaner.dashboard.dto.UserStatsRow;
+import com.tcleaner.dashboard.util.PaginationUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.context.annotation.Lazy;
@@ -64,8 +65,8 @@ public class StatsQueryService {
      * Три агрегата (exports, messages, bytes) за период — без top/breakdown.
      */
     private long[] periodTotals(StatsPeriod period, Long botUserId) {
-        String from = period.from().toString();
-        String to = period.to().toString() + "T23:59:59Z";
+        String from = period.fromSql();
+        String to = period.toSql();
         String sql = "SELECT COUNT(*) AS exports, "
                 + "COALESCE(SUM(messages_count), 0) AS messages, "
                 + "COALESCE(SUM(bytes_count), 0) AS bytes "
@@ -125,6 +126,25 @@ public class StatsQueryService {
                 userStatsMapper(), limit);
     }
 
+    @Cacheable(value = HISTORICAL, key = "#period.toString() + '_users_' + #limit + '_' + #botUserId")
+    public List<UserStatsRow> topUsersByPeriod(StatsPeriod period, int limit, Long botUserId) {
+        String from = period.fromSql();
+        String to = period.toSql();
+        String sql = "SELECT e.bot_user_id, u.username, u.display_name, "
+                + "COUNT(*) AS total_exports, "
+                + "COALESCE(SUM(e.messages_count), 0) AS total_messages, "
+                + "COALESCE(SUM(e.bytes_count), 0) AS total_bytes, "
+                + "MAX(e.started_at) AS last_seen "
+                + "FROM export_events e LEFT JOIN bot_users u ON e.bot_user_id = u.bot_user_id "
+                + "WHERE e.started_at >= ? AND e.started_at <= ? "
+                + (byUser(botUserId) ? "AND e.bot_user_id = ? " : "")
+                + "GROUP BY e.bot_user_id ORDER BY total_exports DESC LIMIT ?";
+        Object[] args = byUser(botUserId)
+                ? new Object[]{from, to, botUserId, PaginationUtils.clamp(limit, 500)}
+                : new Object[]{from, to, PaginationUtils.clamp(limit, 500)};
+        return jdbc.query(sql, userStatsMapper(), args);
+    }
+
     private static org.springframework.jdbc.core.RowMapper<UserStatsRow> userStatsMapper() {
         return (rs, n) -> new UserStatsRow(
                 rs.getLong("bot_user_id"), rs.getString("username"),
@@ -135,8 +155,8 @@ public class StatsQueryService {
 
     @Cacheable(value = HISTORICAL, key = "#period.toString() + '_' + #botUserId + '_' + #limit")
     public List<ChatStatsRow> topChats(StatsPeriod period, Long botUserId, int limit) {
-        String from = period.from().toString();
-        String to = period.to().toString() + "T23:59:59Z";
+        String from = period.fromSql();
+        String to = period.toSql();
         String sql = "SELECT e.chat_ref_id, c.canonical_chat_id, c.chat_title, "
                 + "COUNT(*) AS export_count, "
                 + "COALESCE(SUM(e.messages_count), 0) AS total_messages, "
@@ -158,8 +178,8 @@ public class StatsQueryService {
 
     @Cacheable(value = HISTORICAL, key = "#period.toString() + '_' + #botUserId")
     public Map<String, Long> statusBreakdown(StatsPeriod period, Long botUserId) {
-        String from = period.from().toString();
-        String to = period.to().toString() + "T23:59:59Z";
+        String from = period.fromSql();
+        String to = period.toSql();
         String sql = "SELECT status, COUNT(*) AS cnt FROM export_events "
                 + "WHERE started_at >= ? AND started_at <= ? "
                 + (byUser(botUserId) ? "AND bot_user_id = ? " : "")
@@ -180,8 +200,8 @@ public class StatsQueryService {
     @Cacheable(value = HISTORICAL, key = "#period.toString() + '_' + #metric + '_' + #botUserId")
     public List<TimeSeriesPointDto> timeSeries(StatsPeriod period, String metric, Long botUserId) {
         String fmt = period.strftimeFormat();
-        String from = period.from().toString();
-        String to = period.to().toString() + "T23:59:59Z";
+        String from = period.fromSql();
+        String to = period.toSql();
         // aggregate и fmt — whitelist через switch/enum, не пользовательский ввод.
         String aggregate = switch (metric == null ? "exports" : metric) {
             case "messages" -> "COALESCE(SUM(messages_count), 0)";
@@ -243,7 +263,7 @@ public class StatsQueryService {
                         rs.getString("task_id"), rs.getLong("bot_user_id"),
                         rs.getString("username"), rs.getString("chat_title"),
                         rs.getString("canonical_chat_id"),
-                        rs.getString("started_at"), rs.getString("finished_at"),
+                        toIso(rs.getString("started_at")), toIso(rs.getString("finished_at")),
                         rs.getString("status"),
                         nullableLong(rs.getObject("messages_count")),
                         nullableLong(rs.getObject("bytes_count")),
@@ -253,6 +273,12 @@ public class StatsQueryService {
 
     private static Long nullableLong(Object o) {
         return o == null ? null : ((Number) o).longValue();
+    }
+
+    /** SQLite "YYYY-MM-DD HH:MM:SS.sss" → ISO-8601 "YYYY-MM-DDTHH:MM:SS.sssZ" для JS Date. */
+    private static String toIso(String sqlite) {
+        if (sqlite == null) return null;
+        return sqlite.replace(' ', 'T') + "Z";
     }
 
     @Cacheable(value = PROFILE, key = "#botUserId")

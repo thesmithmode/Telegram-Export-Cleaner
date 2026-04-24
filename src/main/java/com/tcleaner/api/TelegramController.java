@@ -67,7 +67,8 @@ public class TelegramController {
             @RequestParam(value = "taskId", required = false) @Size(max = 128) String taskId,
             @RequestParam(value = "botUserId", required = false) @Positive Long botUserId,
             @RequestParam(value = "chatTitle", required = false) @Size(max = 1024) String chatTitle,
-            @RequestParam(value = "messagesCount", required = false) @PositiveOrZero Long messagesCount
+            @RequestParam(value = "messagesCount", required = false) @PositiveOrZero Long messagesCount,
+            @RequestParam(value = "subscriptionId", required = false) @Positive Long subscriptionId
     ) throws IOException {
 
         if (file == null || file.isEmpty()) {
@@ -85,18 +86,21 @@ public class TelegramController {
         final String capturedTaskId = taskId;
         final Long capturedBotUserId = botUserId;
         final Long capturedMessages = messagesCount;
+        final Long capturedSubscriptionId = subscriptionId;
 
         StreamingResponseBody responseBody = outputStream -> {
             CountingOutputStream counting = new CountingOutputStream(outputStream);
+            boolean[] succeeded = {false};
             try (BufferedWriter writer = new BufferedWriter(
                     new OutputStreamWriter(counting, StandardCharsets.UTF_8))) {
                 exporter.processFileStreaming(tempFile, filter, writer);
                 writer.flush();
+                succeeded[0] = true;
             } catch (Exception e) {
                 log.error("ASYNCHRONOUS ERROR in streaming response", e);
             } finally {
                 long bytesWritten = counting.getByteCount();
-                publishBytesAndCompleted(capturedTaskId, capturedBotUserId, capturedMessages, bytesWritten);
+                publishBytesAndCompleted(capturedTaskId, capturedBotUserId, capturedMessages, bytesWritten, capturedSubscriptionId, succeeded[0]);
                 try {
                     Files.deleteIfExists(tempFile);
                 } catch (IOException ex) {
@@ -112,8 +116,12 @@ public class TelegramController {
     }
 
     private void publishBytesAndCompleted(String taskId, Long botUserId,
-                                          Long messagesCount, long bytesWritten) {
+                                          Long messagesCount, long bytesWritten,
+                                          Long subscriptionId, boolean succeeded) {
         if (taskId == null || taskId.isBlank()) {
+            return;
+        }
+        if (!succeeded) {
             return;
         }
         StatsStreamPublisher publisher = statsPublisherProvider.getIfAvailable();
@@ -138,6 +146,7 @@ public class TelegramController {
                     .botUserId(botUserId)
                     .messagesCount(messagesCount)
                     .bytesCount(bytesWritten)
+                    .subscriptionId(subscriptionId)
                     .status("completed")
                     .source("bot")
                     .ts(now)

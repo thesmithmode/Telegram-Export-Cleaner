@@ -92,6 +92,7 @@ class JavaBotClient:
                 bot_user_id=payload.user_id,
                 chat_title=payload.chat_title,
                 messages_count=payload.actual_count,
+                subscription_id=payload.subscription_id,
             )
         finally:
             try:
@@ -191,6 +192,7 @@ class JavaBotClient:
         bot_user_id: Optional[int] = None,
         chat_title: Optional[str] = None,
         messages_count: Optional[int] = None,
+        subscription_id: Optional[int] = None,
     ) -> Optional[str]:
         url = f"{self.base_url}/api/convert"
 
@@ -203,6 +205,7 @@ class JavaBotClient:
         if bot_user_id is not None: data["botUserId"] = str(bot_user_id)
         if chat_title: data["chatTitle"] = chat_title
         if messages_count: data["messagesCount"] = str(messages_count)
+        if subscription_id is not None: data["subscriptionId"] = str(subscription_id)
 
         retry_count = 0
         while retry_count <= self.max_retries:

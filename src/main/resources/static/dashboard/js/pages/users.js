@@ -36,7 +36,13 @@
         const tbody = document.getElementById("users-tbody");
         if (!tbody) { return; }
         try {
-            const rows = await fetchJson("/dashboard/api/stats/users", { limit: 200 });
+            const readPeriod = window.Dashboard?.readPeriodFromUrl;
+            const { period, from, to } = readPeriod ? readPeriod() : {};
+            const params = { limit: 200 };
+            if (period) params.period = period;
+            if (from) params.from = from;
+            if (to) params.to = to;
+            const rows = await fetchJson("/dashboard/api/stats/users", params);
             render(tbody, rows);
             setCountBadge("users", rows.length);
             if (initSortableTable) {

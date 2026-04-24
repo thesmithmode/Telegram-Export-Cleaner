@@ -12,6 +12,7 @@ import java.time.Instant;
 public record SubscriptionDto(
         Long id,
         Long botUserId,
+        String userDisplay,
         Long chatRefId,
         String chatDisplay,
         Integer periodHours,
@@ -29,13 +30,18 @@ public record SubscriptionDto(
 ) {
 
     public static SubscriptionDto fromEntity(ChatSubscription s) {
-        return fromEntity(s, null);
+        return fromEntity(s, null, null);
     }
 
     public static SubscriptionDto fromEntity(ChatSubscription s, String chatDisplay) {
+        return fromEntity(s, chatDisplay, null);
+    }
+
+    public static SubscriptionDto fromEntity(ChatSubscription s, String chatDisplay, String userDisplay) {
         return new SubscriptionDto(
                 s.getId(),
                 s.getBotUserId(),
+                userDisplay,
                 s.getChatRefId(),
                 chatDisplay,
                 s.getPeriodHours(),

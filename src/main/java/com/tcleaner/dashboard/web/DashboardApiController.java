@@ -78,8 +78,17 @@ public class DashboardApiController {
     }
 
     @GetMapping("/stats/users")
-    public List<UserStatsRow> users(@RequestParam(defaultValue = "50") int limit) {
-        return statsQueryService.topUsers(PaginationUtils.clamp(limit, 500), null);
+    public List<UserStatsRow> users(
+            @AuthenticationPrincipal DashboardUserDetails principal,
+            @RequestParam(required = false) String period,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(defaultValue = "200") int limit) {
+        Scope s = scope(principal, period, from, to, null);
+        if (period != null && !"all".equalsIgnoreCase(period)) {
+            return statsQueryService.topUsersByPeriod(s.period(), PaginationUtils.clamp(limit, 500), s.botUserId());
+        }
+        return statsQueryService.topUsers(PaginationUtils.clamp(limit, 500), s.botUserId());
     }
 
     @GetMapping("/stats/user/{botUserId}")

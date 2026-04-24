@@ -24,6 +24,12 @@ public record StatsPeriod(LocalDate from, LocalDate to, Granularity granularity)
         };
     }
 
+    /** ISO-строка начала для SQL-сравнения: "YYYY-MM-DD". */
+    public String fromSql() { return from.toString(); }
+
+    /** ISO-строка конца для SQL-сравнения: "YYYY-MM-DDT23:59:59Z" (включительно). */
+    public String toSql() { return to.toString() + "T23:59:59Z"; }
+
     /**
      * Возвращает предыдущий период той же длины, расположенный строго перед {@code from}.
      * Пример: период [2024-03-01, 2024-03-31] → [2024-01-30, 2024-02-29].

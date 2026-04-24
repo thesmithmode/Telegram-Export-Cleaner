@@ -301,7 +301,7 @@ class ExportWorker:
                     user_chat_id=job.user_chat_id,
                 )
             )
-            await self.queue_consumer.mark_job_failed(job.task_id, error)
+            await self.queue_consumer.mark_job_failed(job.task_id, error, job.subscription_id, job.user_id)
             await self._cleanup_job(job)
             return False, job, None, None
 
@@ -422,7 +422,9 @@ class ExportWorker:
                 await self.java_client.notify_subscription_empty(
                     job.user_chat_id, chat_label, job.from_date, job.to_date
                 )
-            await self.queue_consumer.mark_job_completed(job.task_id)
+            await self.queue_consumer.mark_job_completed(
+                job.task_id, bot_user_id=job.user_id, subscription_id=job.subscription_id
+            )
             await self._cleanup_job(job)
             self.jobs_processed += 1
             return
@@ -447,6 +449,7 @@ class ExportWorker:
                 to_date=job.to_date,
                 keywords=job.keywords,
                 exclude_keywords=job.exclude_keywords,
+                subscription_id=job.subscription_id,
             )
         )
 
@@ -458,7 +461,7 @@ class ExportWorker:
         else:
             error = "Failed to send response to Java Bot"
             logger.error(f"❌ {error}")
-            await self.queue_consumer.mark_job_failed(job.task_id, error)
+            await self.queue_consumer.mark_job_failed(job.task_id, error, job.subscription_id, job.user_id)
             self.jobs_failed += 1
             self.log_memory_usage("JOB_FAILED")
 
@@ -503,7 +506,7 @@ class ExportWorker:
                 )
 
         try:
-            await self.queue_consumer.mark_job_failed(job.task_id, error_text)
+            await self.queue_consumer.mark_job_failed(job.task_id, error_text, job.subscription_id, job.user_id)
         except Exception as mark_err:
             logger.error(f"Failed to mark job {job.task_id} as failed: {mark_err}")
 

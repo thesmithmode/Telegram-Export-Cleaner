@@ -197,6 +197,7 @@ class SendResponsePayload(BaseModel):
     to_date: Optional[str] = Field(None, description="Date range filter end")
     keywords: Optional[str] = Field(None, description="Keywords filter")
     exclude_keywords: Optional[str] = Field(None, description="Exclude keywords filter")
+    subscription_id: Optional[int] = Field(None, description="Subscription ID for lifecycle feedback")
 
 class ExportResponse(BaseModel):
 

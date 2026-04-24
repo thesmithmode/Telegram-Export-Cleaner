@@ -2,11 +2,13 @@ package com.tcleaner.dashboard.web;
 
 import com.tcleaner.bot.BotInputParser;
 import com.tcleaner.dashboard.auth.DashboardUserDetails;
+import com.tcleaner.dashboard.domain.BotUser;
 import com.tcleaner.dashboard.domain.Chat;
 import com.tcleaner.dashboard.domain.ChatSubscription;
 import com.tcleaner.dashboard.domain.DashboardRole;
 import com.tcleaner.dashboard.dto.CreateSubscriptionRequest;
 import com.tcleaner.dashboard.dto.SubscriptionDto;
+import com.tcleaner.dashboard.repository.BotUserRepository;
 import com.tcleaner.dashboard.repository.ChatRepository;
 import com.tcleaner.dashboard.security.BotUserAccessPolicy;
 import com.tcleaner.dashboard.service.ingestion.ChatUpserter;
@@ -53,15 +55,18 @@ public class SubscriptionController {
     private final SubscriptionService subscriptionService;
     private final ChatUpserter chatUpserter;
     private final ChatRepository chatRepository;
+    private final BotUserRepository botUserRepository;
     private final BotUserAccessPolicy accessPolicy;
 
     public SubscriptionController(SubscriptionService subscriptionService,
                                   ChatUpserter chatUpserter,
                                   ChatRepository chatRepository,
+                                  BotUserRepository botUserRepository,
                                   BotUserAccessPolicy accessPolicy) {
         this.subscriptionService = subscriptionService;
         this.chatUpserter = chatUpserter;
         this.chatRepository = chatRepository;
+        this.botUserRepository = botUserRepository;
         this.accessPolicy = accessPolicy;
     }
 
@@ -258,10 +263,17 @@ public class SubscriptionController {
                 .collect(Collectors.toSet());
         Map<Long, String> chatMap = chatRepository.findAllById(chatIds).stream()
                 .collect(Collectors.toMap(Chat::getId, this::formatChatDisplay));
-        
+
+        Set<Long> userIds = subs.stream()
+                .map(ChatSubscription::getBotUserId)
+                .collect(Collectors.toSet());
+        Map<Long, String> userMap = botUserRepository.findAllById(userIds).stream()
+                .collect(Collectors.toMap(BotUser::getBotUserId, this::formatUserDisplay));
+
         return subs.stream()
-                .map(s -> SubscriptionDto.fromEntity(s, chatMap.getOrDefault(s.getChatRefId(),
-                        String.valueOf(s.getChatRefId()))))
+                .map(s -> SubscriptionDto.fromEntity(s,
+                        chatMap.getOrDefault(s.getChatRefId(), String.valueOf(s.getChatRefId())),
+                        userMap.get(s.getBotUserId())))
                 .toList();
     }
 
@@ -276,5 +288,11 @@ public class SubscriptionController {
             return chat.getChatTitle() + " (" + chat.getChatIdRaw() + ")";
         }
         return chat.getChatIdRaw();
+    }
+
+    private String formatUserDisplay(BotUser user) {
+        if (user.getUsername() != null) return "@" + user.getUsername();
+        if (user.getDisplayName() != null) return user.getDisplayName();
+        return String.valueOf(user.getBotUserId());
     }
 }
