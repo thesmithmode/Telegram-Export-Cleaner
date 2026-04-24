@@ -50,11 +50,11 @@ public class StatsQueryService {
     @Cacheable(value = LIVE, key = "#period.toString() + '_' + #botUserId")
     public OverviewDto overview(StatsPeriod period, Long botUserId) {
         long[] totals = periodTotals(period, botUserId);
-        Long users = jdbc.queryForObject("SELECT COUNT(*) FROM bot_users", Long.class);
+        long users = activeUsers(period, botUserId);
 
         return new OverviewDto(
                 totals[0], totals[1], totals[2],
-                users != null ? users : 0,
+                users,
                 self.topUsers(10, botUserId),
                 self.topChats(period, botUserId, 10),
                 self.statusBreakdown(period, botUserId),
@@ -94,17 +94,18 @@ public class StatsQueryService {
     public OverviewDto overviewWithDelta(StatsPeriod period, Long botUserId) {
         long[] current = periodTotals(period, botUserId);
         long[] prev = periodTotals(period.previous(), botUserId);
-        Long users = jdbc.queryForObject("SELECT COUNT(*) FROM bot_users", Long.class);
+        long users = activeUsers(period, botUserId);
+        long usersPrev = activeUsers(period.previous(), botUserId);
         return new OverviewDto(
                 current[0], current[1], current[2],
-                users != null ? users : 0,
+                users,
                 self.topUsers(10, botUserId),
                 self.topChats(period, botUserId, 10),
                 self.statusBreakdown(period, botUserId),
                 computeDeltaPercent(current[0], prev[0]),
                 computeDeltaPercent(current[1], prev[1]),
                 computeDeltaPercent(current[2], prev[2]),
-                null);
+                computeDeltaPercent(users, usersPrev));
     }
 
     private static Double computeDeltaPercent(long current, long previous) {
@@ -206,6 +207,7 @@ public class StatsQueryService {
         String aggregate = switch (metric == null ? "exports" : metric) {
             case "messages" -> "COALESCE(SUM(messages_count), 0)";
             case "bytes" -> "COALESCE(SUM(bytes_count), 0)";
+            case "users" -> "COUNT(DISTINCT bot_user_id)";
             default -> "COUNT(*)";
         };
         String groupBucket = "strftime('" + fmt + "', started_at)";
@@ -269,6 +271,17 @@ public class StatsQueryService {
                         nullableLong(rs.getObject("bytes_count")),
                         rs.getString("source"), rs.getString("error_message")),
                 args.toArray());
+    }
+
+    private long activeUsers(StatsPeriod period, Long botUserId) {
+        String sql = "SELECT COUNT(DISTINCT bot_user_id) FROM export_events "
+                + "WHERE started_at >= ? AND started_at <= ?"
+                + (byUser(botUserId) ? " AND bot_user_id = ?" : "");
+        Object[] args = byUser(botUserId)
+                ? new Object[]{period.fromSql(), period.toSql(), botUserId}
+                : new Object[]{period.fromSql(), period.toSql()};
+        Long result = jdbc.queryForObject(sql, Long.class, args);
+        return result != null ? result : 0L;
     }
 
     private static Long nullableLong(Object o) {

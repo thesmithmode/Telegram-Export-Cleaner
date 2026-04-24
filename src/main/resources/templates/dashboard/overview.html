@@ -51,6 +51,9 @@
             id='chart-status', title=#{overview.chart.status}, height=240)}"></div>
 
     <div th:replace="~{dashboard/fragments/chart-block :: chart(
+            id='chart-users', title=#{overview.chart.activeUsers}, height=220)}"></div>
+
+    <div th:replace="~{dashboard/fragments/chart-block :: chart(
             id='chart-top-users', title=#{overview.chart.topUsers}, height=260)}"></div>
 
     <div th:replace="~{dashboard/fragments/chart-block :: chart(
