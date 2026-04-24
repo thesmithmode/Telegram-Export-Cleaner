@@ -16,6 +16,7 @@
 """
 import asyncio
 import json
+from collections import OrderedDict
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1019,7 +1020,7 @@ class TestGetTopicName:
     @pytest.mark.asyncio
     async def test_cached_returns_from_cache(self):
         tc = _make_telegram_client()
-        tc._topic_name_cache = {(123, 5): "Cached Topic"}
+        tc._topic_name_cache = OrderedDict({(123, 5): "Cached Topic"})
         assert await tc.get_topic_name(123, 5) == "Cached Topic"
 
     @pytest.mark.asyncio
@@ -1032,7 +1033,7 @@ class TestGetTopicName:
     async def test_cache_eviction_at_max(self):
         tc = _make_telegram_client()
         tc._TOPIC_NAME_CACHE_MAX = 2
-        tc._topic_name_cache = {(1, 1): "a", (2, 2): "b"}
+        tc._topic_name_cache = OrderedDict([((1, 1), "a"), ((2, 2), "b")])
 
         tc.client.resolve_peer = AsyncMock(return_value=MagicMock())
         topic = MagicMock(title="New Topic")
@@ -1041,8 +1042,11 @@ class TestGetTopicName:
 
         name = await tc.get_topic_name(3, 3)
         assert name == "New Topic"
-        # Cache был очищен при достижении max
-        assert len(tc._topic_name_cache) == 1
+        # LRU eviction: размер держится на MAX, самый старый (1,1) выбит.
+        assert len(tc._topic_name_cache) == 2
+        assert (1, 1) not in tc._topic_name_cache
+        assert (2, 2) in tc._topic_name_cache
+        assert (3, 3) in tc._topic_name_cache
 
 
 class TestGetMessagesCountDispatch:

@@ -9,15 +9,15 @@ TgCrypto==1.2.5
 # Redis queue handling
 redis==5.0.1
 
-# HTTP client
-httpx==0.25.2
+# HTTP client (0.27.x закрывает CVE-2024-23334: HTTP proxy request injection)
+httpx==0.27.2
 
 # Data validation
 pydantic==2.6.1
 pydantic-settings==2.2.0
 
-# Logging and monitoring
-psutil==5.9.8
+# Logging and monitoring (6.x закрывает CVE-2024-27527: memory DoS на UNIX sockets)
+psutil==6.1.0
 
 # Serialization (cache)
 msgpack==1.0.7

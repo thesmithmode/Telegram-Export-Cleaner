@@ -1,7 +1,8 @@
 
 import asyncio
 import logging
-from typing import Awaitable, Callable, Dict, Optional, AsyncGenerator, Union
+from collections import OrderedDict, deque
+from typing import Awaitable, Callable, Optional, AsyncGenerator, Union
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -100,10 +101,19 @@ class TelegramClient:
     # Check cancel every N messages to reduce Redis round-trips.
     _CANCEL_CHECK_EVERY: int = 200
 
+    # Upper bound for FloodWait-dedup window. Pyrogram iterates newest→oldest
+    # and restarts from last_offset_id; only a narrow head of recently yielded
+    # IDs can potentially repeat across a retry. Раньше set рос безгранично
+    # (до ~8 MB на 1M сообщений + FloodWait) и держал память до конца экспорта.
+    _SEEN_IDS_MAX: int = 20_000
+
     def __init__(self):
         self.session_path = Path("session")
         self.session_path.mkdir(exist_ok=True)
-        self._topic_name_cache: Dict[tuple, Optional[str]] = {}
+        # OrderedDict как LRU: move_to_end на hit, popitem(last=False) на overflow.
+        # Раньше использовался dict с clear() при переполнении → thrashing
+        # при 500+ уникальных топиках (кэш дропался полностью и пересобирался).
+        self._topic_name_cache: "OrderedDict[tuple, Optional[str]]" = OrderedDict()
         self._TOPIC_NAME_CACHE_MAX = 500
 
         # Create Pyrogram client
@@ -204,8 +214,12 @@ class TelegramClient:
             last_offset_id = offset_id
             max_retries = settings.MAX_RETRIES
             # Dedup set is only needed after a FloodWait retry — Pyrogram's iterator
-            # does not yield duplicates during a normal sequential pass.
+            # does not yield duplicates during a normal sequential pass. Bounded
+            # via paired deque (FIFO eviction) to prevent unbounded growth on
+            # multi-million exports: duplicates can only repeat at the narrow
+            # head around last_offset_id после restart.
             seen_message_ids: Optional[set[int]] = None
+            seen_message_order: Optional[deque] = None
 
             retry_count = 0
             while True:
@@ -258,7 +272,12 @@ class TelegramClient:
 
                             # Track this message ID and update last offset for restart-on-FloodWait
                             if seen_message_ids is not None:
-                                seen_message_ids.add(message.id)
+                                if message.id not in seen_message_ids:
+                                    seen_message_ids.add(message.id)
+                                    seen_message_order.append(message.id)
+                                    if len(seen_message_order) > self._SEEN_IDS_MAX:
+                                        evicted = seen_message_order.popleft()
+                                        seen_message_ids.discard(evicted)
                             last_offset_id = message.id
 
                             # Convert to export format
@@ -291,6 +310,7 @@ class TelegramClient:
                     # Create dedup set on first FloodWait, starting with last yielded message
                     if seen_message_ids is None:
                         seen_message_ids = {last_offset_id}
+                        seen_message_order = deque([last_offset_id])
 
                     # Use Telegram's suggested wait as minimum
                     wait_time = min(
@@ -358,7 +378,9 @@ class TelegramClient:
             message_count = 0
             last_offset_id = offset_id
             max_retries = settings.MAX_RETRIES
+            # Bounded dedup (FIFO): см. комментарий в get_chat_history.
             seen_message_ids: set[int] = set()
+            seen_message_order: deque = deque()
             batch_size = 100
 
             retry_count = 0
@@ -430,6 +452,10 @@ class TelegramClient:
                             continue
 
                         seen_message_ids.add(msg_id)
+                        seen_message_order.append(msg_id)
+                        if len(seen_message_order) > self._SEEN_IDS_MAX:
+                            evicted = seen_message_order.popleft()
+                            seen_message_ids.discard(evicted)
                         last_offset_id = msg_id
 
                         exported = MessageConverter.convert_message(parsed)
@@ -588,6 +614,7 @@ class TelegramClient:
     ) -> Optional[str]:
         cache_key = (int(chat_id), topic_id)
         if cache_key in self._topic_name_cache:
+            self._topic_name_cache.move_to_end(cache_key)
             return self._topic_name_cache[cache_key]
         try:
             peer = await self.client.resolve_peer(chat_id)
@@ -599,9 +626,9 @@ class TelegramClient:
             )
             topics = getattr(result, "topics", [])
             name = getattr(topics[0], "title", None) if topics else None
-            if len(self._topic_name_cache) >= self._TOPIC_NAME_CACHE_MAX:
-                self._topic_name_cache.clear()
             self._topic_name_cache[cache_key] = name
+            if len(self._topic_name_cache) > self._TOPIC_NAME_CACHE_MAX:
+                self._topic_name_cache.popitem(last=False)
             return name
         except Exception as e:
             logger.warning(f"Could not get topic {topic_id} name for chat {chat_id}: {e}")

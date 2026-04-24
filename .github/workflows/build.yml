@@ -127,11 +127,19 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           envs: GH_TOKEN,GH_ACTOR
           script: |
+            set -euo pipefail
             cd ${{ secrets.SERVER_DEPLOY_PATH }}
+
+            # ── Внешняя сеть для Traefik (создаём idempotent) ────────────────
+            # docker-compose.prod.yml объявляет traefik-proxy как external:
+            # если сеть отсутствует, compose up падает на первом деплое.
+            docker network inspect traefik-proxy >/dev/null 2>&1 \
+              || docker network create traefik-proxy
 
             # ── Секреты в .env (не коммитится) ──────────────────────────────
             # Структура сервисов — в docker-compose.prod.yml (в репо).
             # Разделение: конфиг → git, секреты → GitHub Secrets → .env на сервере.
+            umask 077
             cat > .env << 'ENVEOF'
             TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
             TELEGRAM_API_ID=${{ secrets.TELEGRAM_API_ID }}
@@ -146,6 +154,7 @@ jobs:
             JAVA_API_KEY=${{ secrets.JAVA_API_KEY }}
             DONATE_TON=${{ secrets.DONATE_TON }}
             ENVEOF
+            chmod 600 .env
 
             echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
 
@@ -161,8 +170,9 @@ jobs:
 
             PREV_JAVA_ID=$(docker image inspect "$JAVA_IMG:latest" --format='{{.Id}}' 2>/dev/null || echo "")
             PREV_WORKER_ID=$(docker image inspect "$WORKER_IMG:latest" --format='{{.Id}}' 2>/dev/null || echo "")
-            [ -n "$PREV_JAVA_ID" ]   && docker tag "$PREV_JAVA_ID"   "$JAVA_IMG:rollback"
-            [ -n "$PREV_WORKER_ID" ] && docker tag "$PREV_WORKER_ID" "$WORKER_IMG:rollback"
+            # if-форма обязательна под `set -e`: `[ -n "" ] && cmd` exit 1 уронит скрипт.
+            if [ -n "$PREV_JAVA_ID" ];   then docker tag "$PREV_JAVA_ID"   "$JAVA_IMG:rollback";   fi
+            if [ -n "$PREV_WORKER_ID" ]; then docker tag "$PREV_WORKER_ID" "$WORKER_IMG:rollback"; fi
             echo "Rollback checkpoint: java=${PREV_JAVA_ID:-none} worker=${PREV_WORKER_ID:-none}"
 
             rollback() {

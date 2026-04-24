@@ -1190,6 +1190,14 @@ class ExportWorker:
         if self.message_cache:
             await self.message_cache.close()
 
+        # control_redis держит собственный connection pool; без явного close
+        # SIGTERM висит до hard-kill timeout Docker → ломает graceful shutdown.
+        if getattr(self, "control_redis", None) is not None:
+            try:
+                await self.control_redis.aclose()
+            except Exception as e:
+                logger.warning(f"control_redis close failed: {e}")
+
         logger.info(
             f"📊 Final stats: {self.jobs_processed} processed, "
             f"{self.jobs_failed} failed"

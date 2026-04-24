@@ -246,8 +246,23 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         try {
             handleCallback(callback);
         } catch (Exception e) {
-            log.error("Callback error for user {}: {}", callback.getFrom().getId(), e.getMessage(), e);
-            messenger.answerCallback(callback.getId());
+            long userId = callback.getFrom().getId();
+            log.error("Callback error for user {}: {}", userId, e.getMessage(), e);
+            try {
+                messenger.answerCallback(callback.getId());
+            } catch (Exception ack) {
+                log.warn("answerCallback failed: {}", ack.getMessage());
+            }
+            Object maybe = callback.getMessage();
+            if (maybe instanceof Message cbMessage) {
+                try {
+                    BotLanguage lang = resolveLanguage(userId);
+                    messenger.send(cbMessage.getChatId(), i18n.msg(lang, "bot.error.internal"));
+                } catch (Exception notify) {
+                    log.warn("Failed to notify user {} about callback error: {}",
+                            userId, notify.getMessage());
+                }
+            }
         }
     }
 
