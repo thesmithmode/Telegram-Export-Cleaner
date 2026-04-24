@@ -12,7 +12,7 @@
             renderTimeseries, renderBarChart, initSortableTable, onReady } = window.Dashboard || {};
     if (!fetchJson) { return; }
 
-    const METRICS = ["exports", "messages", "bytes"];
+    const METRICS = ["exports", "messages", "bytes", "users"];
 
     async function load() {
         const period = readPeriodFromUrl();
@@ -24,6 +24,7 @@
                         { ...params, metric: m, granularity: "auto" })),
             ]);
             const tsExports = series[0];
+            const tsUsers  = series[3];
 
             setKpi("totalExports", formatNumber(overview.totalExports));
             setKpi("totalMessages", formatNumber(overview.totalMessages));
@@ -51,6 +52,7 @@
 
             renderTimeseries("chart-timeseries", tsExports);
             renderStatsBar("stats-chart-timeseries", tsExports);
+            renderTimeseries("chart-users", tsUsers);
 
             renderStatusDoughnut("chart-status", overview.statusBreakdown || {});
 
