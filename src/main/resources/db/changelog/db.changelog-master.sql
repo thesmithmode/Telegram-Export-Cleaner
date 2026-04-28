@@ -248,6 +248,7 @@ CREATE INDEX idx_events_subscription
 -- =============================================================================
 
 --changeset app:007-subscriptions-unique-active-index splitStatements:true endDelimiter:;
+--validCheckSum 9:b54412870696c824ce5f071fa18ba35c
 
 CREATE UNIQUE INDEX uk_subscriptions_one_active_per_user
     ON chat_subscriptions (bot_user_id)
