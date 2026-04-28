@@ -82,25 +82,25 @@ class ApiExceptionHandlerTest {
         }
 
         @Test
-        @DisplayName("ошибка должна содержать type")
-        void shouldIncludeType() throws Exception {
+        @DisplayName("ошибка не должна раскрывать type (anti-fingerprinting)")
+        void shouldNotIncludeType() throws Exception {
             mockMvc.perform(multipart("/api/convert")
                     .file(dummyFile())
                     .param("startDate", "bad-date")
 )
                     .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.type").exists());
+                    .andExpect(jsonPath("$.type").doesNotExist());
         }
 
         @Test
-        @DisplayName("ошибка должна содержать details")
-        void shouldIncludeDetails() throws Exception {
+        @DisplayName("ошибка не должна раскрывать details (anti-fingerprinting)")
+        void shouldNotIncludeDetails() throws Exception {
             mockMvc.perform(multipart("/api/convert")
                     .file(dummyFile())
                     .param("startDate", "bad-date")
 )
                     .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.details").exists());
+                    .andExpect(jsonPath("$.details").doesNotExist());
         }
     }
 

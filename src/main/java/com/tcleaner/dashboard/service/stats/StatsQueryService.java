@@ -55,7 +55,7 @@ public class StatsQueryService {
         return new OverviewDto(
                 totals[0], totals[1], totals[2],
                 users,
-                self.topUsers(10, botUserId),
+                self.topUsersByPeriod(period, 10, botUserId),
                 self.topChats(period, botUserId, 10),
                 self.statusBreakdown(period, botUserId),
                 null, null, null, null);
@@ -99,7 +99,7 @@ public class StatsQueryService {
         return new OverviewDto(
                 current[0], current[1], current[2],
                 users,
-                self.topUsers(10, botUserId),
+                self.topUsersByPeriod(period, 10, botUserId),
                 self.topChats(period, botUserId, 10),
                 self.statusBreakdown(period, botUserId),
                 computeDeltaPercent(current[0], prev[0]),

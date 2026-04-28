@@ -26,7 +26,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Create non-root user and necessary directories (including SQLite cache dir)
-RUN groupadd -r app && useradd -r -g app app && \
+RUN groupadd -r -g 1001 app && useradd -r -u 1001 -g app app && \
     mkdir -p session logs /data/cache && chown -R app:app /app /data
 USER app
 
@@ -36,7 +36,7 @@ ENV LOG_LEVEL=INFO
 
 # Health check
 HEALTHCHECK --interval=15s --timeout=5s --retries=3 --start-period=10s \
-    CMD pgrep -f 'python.*main.py' || exit 1
+    CMD pid=$(pgrep -f 'python.*main.py' | head -1) && [ -n "$pid" ] && grep -qE "^State:[[:space:]]*[RS]" /proc/$pid/status || exit 1
 
 # Graceful shutdown
 STOPSIGNAL SIGTERM

@@ -19,14 +19,7 @@ import org.springframework.data.redis.stream.StreamMessageListenerContainer;
 
 import java.time.Duration;
 
-/**
- * Конфигурация Redis Streams event-bus для статистики.
- * <p>
- * Создаёт consumer group при старте (идемпотентно — BUSYGROUP игнорируется),
- * поднимает {@link StreamMessageListenerContainer} и подписывает
- * {@link StatsStreamConsumer} на {@code StreamOffset.create(key, ReadOffset.lastConsumed())} —
- * с нуля читать не нужно: back-fill не делаем (см. docs/DASHBOARD.md).
- */
+// ReadOffset.lastConsumed() — back-fill не делаем: события до старта consumer-group не нужны.
 @Configuration
 @ConditionalOnProperty(prefix = "dashboard.stats.stream", name = "enabled", havingValue = "true",
         matchIfMissing = true)
@@ -43,12 +36,8 @@ public class RedisStreamsConfig {
         this.props = props;
     }
 
-    /**
-     * Создаёт consumer group один раз при старте.
-     * BUSYGROUP (уже существует) — не ошибка, подавляем.
-     * Spring Data Redis оборачивает BUSYGROUP в generic "Error in execution",
-     * поэтому проверяем всю цепочку causes.
-     */
+    // BUSYGROUP = already exists → ok. Spring Data Redis оборачивает в generic Error, поэтому
+    // идём по всей цепочке causes, не ловим по типу.
     @PostConstruct
     void ensureConsumerGroup() {
         try {
@@ -74,10 +63,6 @@ public class RedisStreamsConfig {
         return false;
     }
 
-    /**
-     * {@link StreamMessageListenerContainer} читает стрим пачками по 10 сообщений
-     * с блокировкой 2с — это даёт быструю реакцию в проде и не жжёт CPU на пустом стриме.
-     */
     @Bean
     public StreamMessageListenerContainer<String, MapRecord<String, String, String>>
             statsStreamContainer(RedisConnectionFactory connectionFactory, StatsStreamConsumer consumer) {

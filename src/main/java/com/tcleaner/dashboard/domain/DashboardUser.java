@@ -17,13 +17,7 @@ import lombok.ToString;
 
 import java.time.Instant;
 
-/**
- * Учётная запись веб-UI дашборда.
- * {@code telegramId} — Telegram user_id, основной идентификатор при логине (Telegram Login Widget).
- * {@code botUserId} связывает USER-роль с записью в {@code bot_users} (личный кабинет);
- * для ADMIN — {@code null}. {@code passwordHash} оставлен NOT NULL для совместимости,
- * новые записи содержат пустую строку — пароли не используются.
- */
+// botUserId: null для ADMIN. passwordHash: NOT NULL в схеме, но empty string — пароли не используются.
 @Entity
 @Table(name = "dashboard_users")
 @Getter

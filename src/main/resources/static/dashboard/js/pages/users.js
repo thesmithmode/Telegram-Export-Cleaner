@@ -53,8 +53,10 @@
                 });
             }
         } catch (e) {
-            tbody.innerHTML =
-                `<tr><td colspan="5" style="color:var(--danger)">Ошибка загрузки: ${e.message}</td></tr>`;
+            const ec = document.createElement("td");
+            ec.colSpan = 5; ec.style.color = "var(--danger)"; ec.textContent = `Ошибка загрузки: ${e.message}`;
+            tbody.textContent = "";
+            tbody.appendChild(document.createElement("tr")).appendChild(ec);
         }
     }
 

@@ -1,93 +1,13 @@
 # Telegram Bot
 
-Java-бот реализован в `src/main/java/com/tcleaner/bot/ExportBot.java`.
+Реализован в `com/tcleaner/bot/ExportBot.java`. Только личные чаты. Команды: `/start`, `/settings` (язык), `/cancel`.
 
-## Поведение
+## Нетривиальные детали
 
-- Обрабатывает только личные чаты (`private`).
-- Регистрирует команды:
-  - `/start` — приветствие и (для нового пользователя) выбор языка UI
-  - `/settings` — смена языка UI в любой момент
-  - `/cancel` — отмена активного экспорта
-- Поддерживает ввод:
-  - `@username`
-  - `https://t.me/username`
+**Блокировка параллельных экспортов:** перед enqueue проверяется `active_export:{userId}` в Redis. Дубль → подсказка дождаться или `/cancel`.
 
-> Числовые chat ID напрямую пользовательским сообщением не поддерживаются в текущем UX.
+**Subscription confirmation:** `ConfirmationScheduler` раз в 7 дней шлёт inline-кнопку "Да, оставить активной". Callback `sub_confirm:{id}` → `SubscriptionService.confirmReceived(id)`. Нет ответа 48 ч → ARCHIVED.
 
----
+**i18n:** язык хранится в `bot_users.language` (единый источник для бота и дашборда). RTL-языки (fa, ar) — бот добавляет RLM в форматирование.
 
-## Выбор языка
-
-Поддерживается 10 языков (см. `docs/I18N.md`). При первом `/start` бот показывает
-inline-клавиатуру с языками; выбор сохраняется в `bot_users.language`
-(один источник правды для бота и дашборда).
-Сменить язык позже — `/settings`. Для RTL-языков (fa, ar) бот добавляет `RLM` в
-форматирование.
-
----
-
-## Сценарий диалога
-
-1. Пользователь отправляет `@username`/ссылку.
-2. Бот показывает выбор диапазона:
-   - `📦 Весь чат`
-   - `⏱ 24 часа`
-   - `🗓 3 дня`
-   - `🗓 7 дней`
-   - `🗓 30 дней`
-   - `📅 Указать диапазон дат`
-3. Для ручного диапазона:
-   - дата начала: `дд.мм.гггг`
-   - дата конца: `дд.мм.гггг`
-4. Бот ставит задачу в очередь и отправляет сообщение с task ID + кнопкой отмены.
-
----
-
-## Анти-дубли и блокировка
-
-Перед постановкой задачи проверяется `active_export:{userId}`.
-
-Если активная задача уже есть:
-- новый запуск не делается;
-- пользователь получает подсказку дождаться завершения или выполнить `/cancel`.
-
----
-
-## Отмена
-
-Два пути:
-- команда `/cancel`;
-- callback-кнопка `❌ Отменить экспорт`.
-
-Отмена выставляет `cancel_export:{taskId}` в Redis и снимает `active_export:{userId}`.
-Если задача еще не взята воркером — она удаляется из очереди.
-
----
-
-## Очереди
-
-`ExportJobProducer` может направить задачу:
-- в `telegram_export_express` (вероятный cache hit),
-- в `telegram_export` (обычный путь).
-
-Пользователю показывается ориентир по очереди, если задача не express.
-
----
-
-## Сессии пользователей
-
-`UserSession` хранит:
-- текущий шаг диалога,
-- выбранный chat identifier,
-- from/to даты.
-
-Старые сессии чистятся планировщиком (`evictStaleSessions`) по таймауту.
-
----
-
-## Subscription confirmation
-
-При наступлении срока подтверждения (раз в 7 дней) бот отправляет пользователю сообщение с inline-кнопкой "Да, оставить активной" (`bot.button.sub_confirm`). Callback data формата `sub_confirm:{subscriptionId}` обрабатывается `ExportBot.handleSubConfirmCallback` → вызов `SubscriptionService.confirmReceived(id)`.
-
-i18n-ключи: `bot.button.sub_confirm`, `bot.sub.confirm.request`, `bot.sub.confirm.ok`, `bot.sub.confirm.not_found`, `bot.sub.confirm.invalid`, `bot.sub.empty`, `bot.sub.failure`, `bot.sub.paused`, `bot.sub.archived`. Локализация EN + RU; остальные 8 языков подхватывают EN fallback через `ReloadableResourceBundleMessageSource`.
+**Числовые chat ID** в текущем UX напрямую не поддерживаются пользовательским вводом.

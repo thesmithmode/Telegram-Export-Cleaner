@@ -55,13 +55,15 @@ class DashboardUserServiceTest {
     }
 
     @Test
-    void usernameFallsBackToFirstNameWhenUsernameIsNull() {
+    void usernameFallsBackToFirstNamePlusTelegramIdWhenUsernameIsNull() {
+        // firstName глобально не уникален → добавляем _telegramId суффикс
+        // чтобы избежать UNIQUE-коллизии на username-столбце.
         when(repo.findByTelegramId(999L)).thenReturn(Optional.empty());
         when(repo.save(any(DashboardUser.class))).thenAnswer(inv -> inv.getArgument(0));
 
         DashboardUser user = service.findOrCreate(999L, "Admin", null, DashboardRole.ADMIN, null);
 
-        assertThat(user.getUsername()).isEqualTo("Admin");
+        assertThat(user.getUsername()).isEqualTo("Admin_999");
     }
 
     @Test

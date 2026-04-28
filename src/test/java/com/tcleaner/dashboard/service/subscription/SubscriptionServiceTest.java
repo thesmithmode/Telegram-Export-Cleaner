@@ -368,18 +368,21 @@ class SubscriptionServiceTest {
                 .hasMessageContaining("active subscription");
     }
 
-    // ─── Validation: дублирующаяся PAUSED при create ─────────────────────────
+    // ─── Behavior: PAUSED auto-архивируется при create новой ────────────────
 
     @Test
-    @DisplayName("create когда у юзера есть PAUSED-подписка → IllegalStateException")
-    void createWhenPausedExistsThrows() {
+    @DisplayName("create когда у юзера есть PAUSED → старая ARCHIVED, новая ACTIVE (auto-archive)")
+    void createWhenPausedExists_archivesAndCreates() {
         Instant sinceDate = Instant.now().minusSeconds(3600);
-        ChatSubscription sub = subscriptionService.create(BOT_USER_ID, chatRefId, 24, "09:00", sinceDate);
-        subscriptionService.pause(sub.getId());
+        ChatSubscription oldSub = subscriptionService.create(BOT_USER_ID, chatRefId, 24, "09:00", sinceDate);
+        subscriptionService.pause(oldSub.getId());
 
-        assertThatThrownBy(() -> subscriptionService.create(BOT_USER_ID, chatRefId, 48, "10:00", sinceDate))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("paused subscription");
+        ChatSubscription newSub = subscriptionService.create(BOT_USER_ID, chatRefId, 48, "10:00", sinceDate);
+
+        assertThat(newSub.getId()).isNotEqualTo(oldSub.getId());
+        assertThat(newSub.getStatus()).isEqualTo(SubscriptionStatus.ACTIVE);
+        ChatSubscription reloadedOld = subscriptionRepo.findById(oldSub.getId()).orElseThrow();
+        assertThat(reloadedOld.getStatus()).isEqualTo(SubscriptionStatus.ARCHIVED);
     }
 
     // ─── Validation: resume ARCHIVED ──────────────────────────────────────────

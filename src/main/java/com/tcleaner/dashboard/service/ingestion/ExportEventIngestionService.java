@@ -19,15 +19,8 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
 
-/**
- * Центральный обработчик событий стрима {@code stats:events}: маршрутизирует payload
- * по типу и выполняет идемпотентный upsert в {@code bot_users}/{@code chats}/{@code export_events}.
- * <p>
- * Идемпотентность обеспечивается UNIQUE({@code export_events.task_id}): повтор события
- * или late-arriving {@code completed} до {@code started} приводят к merge через {@code COALESCE(new, old)},
- * а не к дубликатам. Счётчики {@code total_*} у {@link BotUser} инкрементируются строго при переходах
- * статуса — дважды не считаем.
- */
+// Идемпотентность по UNIQUE(task_id): late-arriving completed до started → merge COALESCE(new, old).
+// total_* счётчики инкрементируются только при первом переходе в terminal — двойной счёт исключён.
 @Service
 public class ExportEventIngestionService {
 
@@ -88,10 +81,6 @@ public class ExportEventIngestionService {
                 payload.getTs());
     }
 
-    /**
-     * Upsert export_events по task_id.
-     * @param desiredStatus новый статус или {@code null} для bytes_measured (статус не трогаем).
-     */
     private void upsertEvent(StatsEventPayload payload, ExportStatus desiredStatus) {
         if (payload.getTaskId() == null || payload.getTaskId().isBlank()) {
             log.warn("{} без task_id — пропуск", payload.getType());
@@ -140,7 +129,6 @@ public class ExportEventIngestionService {
             return;
         }
 
-        // MERGE: non-null поля из payload перекрывают старые, остальные — остаются.
         ExportStatus prev = existing.getStatus();
         coalesce(payload.getMessagesCount(), existing::setMessagesCount);
         coalesce(payload.getBytesCount(), existing::setBytesCount);
@@ -151,10 +139,11 @@ public class ExportEventIngestionService {
         coalesce(payload.getError(), existing::setErrorMessage);
         coalesce(payload.getSubscriptionId(), existing::setSubscriptionId);
         if (payload.getChatTitle() != null || payload.getCanonicalChatId() != null) {
-            Chat chat = chatUpserter.upsert(
+            // Upsert обновляет метаданные чата (title, type), но chat_ref_id события
+            // не меняем — late event с другим canonical сломал бы агрегаты по истории.
+            chatUpserter.upsert(
                     payload.getCanonicalChatId(), payload.getChatIdRaw(),
                     payload.getTopicId(), payload.getChatTitle(), payload.getTs());
-            existing.setChatRefId(chat.getId());
         }
         if (desiredStatus != null && canAdvanceStatus(prev, desiredStatus)) {
             existing.setStatus(desiredStatus);
@@ -174,20 +163,7 @@ public class ExportEventIngestionService {
         }
     }
 
-    /**
-     * Feedback-связь worker → подписка. При переходе задачи с {@code subscription_id != null}
-     * в terminal-статус обновляем lifecycle подписки:
-     * <ul>
-     *   <li>COMPLETED → {@link SubscriptionService#recordSuccess(long)}
-     *       (сбрасывает {@code consecutive_failures} и фиксирует {@code last_success_at}).</li>
-     *   <li>FAILED → {@link SubscriptionService#recordFailure(long)}
-     *       (инкрементирует {@code consecutive_failures}, 2 подряд → PAUSED).</li>
-     *   <li>CANCELLED → ничего не трогаем (юзер сам отменил).</li>
-     * </ul>
-     * Без этой связи worker-side failures (FloodWait, CHANNEL_PRIVATE, revoked session)
-     * никогда не увеличивали бы {@code consecutive_failures}, и правило «2 подряд → PAUSED»
-     * не срабатывало бы на практике.
-     */
+    // CANCELLED не трогаем — юзер сам отменил, consecutive_failures не растёт.
     private void updateSubscriptionOnTerminal(ExportEvent event) {
         Long subscriptionId = event.getSubscriptionId();
         if (subscriptionId == null) {
@@ -205,17 +181,15 @@ public class ExportEventIngestionService {
         }
     }
 
-    /**
-     * Накидываем плюс-одну в счётчики пользователя при каждом реальном переходе в terminal-статус
-     * (а не при апсерте уже-completed-записи). {@code COMPLETED} приносит messages/bytes; failed/cancelled
-     * считаются только в {@code totalExports}.
-     */
     private void maybeBumpUserTotals(BotUser user, ExportStatus prev, ExportEvent event) {
         if (!isTerminal(event.getStatus())) {
             return;
         }
         if (prev != null && isTerminal(prev)) {
-            return; // уже учитывали
+            return;
+        }
+        if (event.getStatus() == ExportStatus.CANCELLED) {
+            return;
         }
         user.setTotalExports(user.getTotalExports() + 1);
         if (event.getStatus() == ExportStatus.COMPLETED) {
@@ -240,11 +214,7 @@ public class ExportEventIngestionService {
                 || status == ExportStatus.CANCELLED;
     }
 
-    /**
-     * Разрешает только переходы QUEUED → PROCESSING → terminal.
-     * Не даёт откатить уже завершённую задачу «более ранним» событием
-     * (например, если по какой-то причине late {@code started} прилетит после {@code completed}).
-     */
+    // Предотвращает откат статуса: late started после completed не перезаписывает terminal.
     private static boolean canAdvanceStatus(ExportStatus prev, ExportStatus next) {
         if (prev == null) {
             return true;

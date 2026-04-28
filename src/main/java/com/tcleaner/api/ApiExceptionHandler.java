@@ -26,14 +26,12 @@ public class ApiExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
 
-    
     @ExceptionHandler(DateTimeParseException.class)
     public ResponseEntity<Map<String, String>> handleDateTimeParse(DateTimeParseException ex) {
         log.warn("Date parse error: {}", ex.getMessage());
         return ResponseEntity.badRequest().body(makeError("Невалидный формат даты. Используйте YYYY-MM-DD", ex));
     }
 
-    
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     public ResponseEntity<Map<String, String>> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
         log.warn("Parameter type mismatch for '{}': {}", ex.getName(), ex.getMessage());
@@ -60,7 +58,6 @@ public class ApiExceptionHandler {
         return ResponseEntity.badRequest().body(error);
     }
 
-    
     @ExceptionHandler(TelegramExporterException.class)
     public ResponseEntity<Map<String, String>> handleExporterException(TelegramExporterException ex) {
         log.error("Exporter error [{}]: {}", ex.getErrorCode(), ex.getMessage());
@@ -83,10 +80,6 @@ public class ApiExceptionHandler {
     private Map<String, String> makeError(String message, Exception ex) {
         Map<String, String> body = new HashMap<>();
         body.put("message", message != null ? message : "Unknown error");
-        body.put("type", ex.getClass().getSimpleName());
-        if (ex.getMessage() != null) {
-            body.put("details", ex.getMessage());
-        }
         return body;
     }
 }

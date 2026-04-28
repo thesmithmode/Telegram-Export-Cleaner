@@ -2,20 +2,13 @@ package com.tcleaner.dashboard.dto;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 
 import java.time.Instant;
 
-/**
- * Тело запроса для создания подписки ({@code POST /dashboard/api/subscriptions}).
- *
- * <p>Поле {@code botUserId} намеренно отсутствует: идентификатор пользователя
- * берётся из {@code principal} на стороне контроллера — USER не может создать
- * подписку за другого, а ADMIN не может создавать подписки вообще.
- *
- * <p>{@code sinceDate} опционально: если не передано, контроллер подставляет {@code Instant.now()}.
- */
+// botUserId отсутствует намеренно — берётся из principal; USER не может создать за другого.
 public record CreateSubscriptionRequest(
-        @NotBlank
+        @NotBlank @Size(max = 512)
         String chatIdentifier,
         @NotNull Integer periodHours,
         @NotBlank

@@ -59,7 +59,6 @@ public class DashboardPageController {
         return "dashboard/overview";
     }
 
-    /** Таблица всех пользователей — только ADMIN (URL-guard в DashboardSecurityConfig). */
     @GetMapping("/users")
     public String users() {
         return "dashboard/users";

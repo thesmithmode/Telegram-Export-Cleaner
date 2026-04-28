@@ -19,39 +19,40 @@ class PeriodResolverTest {
     private static final ZoneId UTC = ZoneId.of("UTC");
 
     @Test
-    @DisplayName("'day' → from=сегодня-1d, granularity=DAY")
+    @DisplayName("'day' → только сегодня, granularity=DAY")
     void dayPeriod() {
         StatsPeriod p = resolver.resolve("day", null, null, UTC);
         LocalDate today = LocalDate.now(UTC);
-        assertThat(p.from()).isEqualTo(today.minusDays(1));
+        assertThat(p.from()).isEqualTo(today);
         assertThat(p.to()).isEqualTo(today);
         assertThat(p.granularity()).isEqualTo(StatsPeriod.Granularity.DAY);
     }
 
     @Test
-    @DisplayName("'week' → from=сегодня-7d, granularity=DAY")
+    @DisplayName("'week' → ровно 7 дней (from=today-6), granularity=DAY")
     void weekPeriod() {
         StatsPeriod p = resolver.resolve("week", null, null, UTC);
         LocalDate today = LocalDate.now(UTC);
-        assertThat(p.from()).isEqualTo(today.minusDays(7));
+        assertThat(p.from()).isEqualTo(today.minusDays(6));
+        assertThat(p.to()).isEqualTo(today);
         assertThat(p.granularity()).isEqualTo(StatsPeriod.Granularity.DAY);
     }
 
     @Test
-    @DisplayName("'month' → from=сегодня-30d, granularity=DAY")
+    @DisplayName("'month' → ровно 30 дней (from=today-29), granularity=DAY")
     void monthPeriod() {
         StatsPeriod p = resolver.resolve("month", null, null, UTC);
         LocalDate today = LocalDate.now(UTC);
-        assertThat(p.from()).isEqualTo(today.minusDays(30));
+        assertThat(p.from()).isEqualTo(today.minusDays(29));
         assertThat(p.granularity()).isEqualTo(StatsPeriod.Granularity.DAY);
     }
 
     @Test
-    @DisplayName("'year' → from=сегодня-1y, granularity=MONTH")
+    @DisplayName("'year' → ровно 365/366 дней (from=today-1y+1d), granularity=MONTH")
     void yearPeriod() {
         StatsPeriod p = resolver.resolve("year", null, null, UTC);
         LocalDate today = LocalDate.now(UTC);
-        assertThat(p.from()).isEqualTo(today.minusYears(1));
+        assertThat(p.from()).isEqualTo(today.minusYears(1).plusDays(1));
         assertThat(p.granularity()).isEqualTo(StatsPeriod.Granularity.MONTH);
     }
 

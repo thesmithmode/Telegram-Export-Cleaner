@@ -23,10 +23,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-/**
- * Планировщик периодических подписок.
- * Находит активные подписки, у которых истек период, и ставит их в очередь.
- */
 @Service
 public class SubscriptionScheduler {
 
@@ -51,9 +47,6 @@ public class SubscriptionScheduler {
         this.chatRepository = chatRepository;
     }
 
-    /**
-     * Основной метод планировщика: находит ACTIVE-подписки, готовые к запуску.
-     */
     @Scheduled(cron = "${subscription.scheduler.cron:0 */5 * * * *}")
     public void runDueSubscriptions() {
         try {
@@ -114,9 +107,6 @@ public class SubscriptionScheduler {
         }
     }
 
-    /**
-     * Проверяет, попадает ли текущий момент в допустимое окно запуска подписки.
-     */
     boolean isInDesiredWindow(ChatSubscription sub, Instant now) {
         LocalTime desired = LocalTime.parse(sub.getDesiredTimeMsk(), HHMM);
         LocalTime currentMsk = LocalTime.from(now.atZone(MSK));
@@ -167,9 +157,9 @@ public class SubscriptionScheduler {
         String fromIso = ldtUtc.minusHours(sub.getPeriodHours()).format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
         String toIso = ldtUtc.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
 
+        subscriptionService.recordRunStarted(sub.getId());
         String taskId = jobProducer.enqueueSubscription(sub.getBotUserId(), sub.getBotUserId(),
                 chatIdentifier, fromIso, toIso, sub.getId());
-        subscriptionService.recordRunStarted(sub.getId());
         log.info("Subscription {} enqueued as {} for chat {}", sub.getId(), taskId, chatIdentifier);
     }
 }

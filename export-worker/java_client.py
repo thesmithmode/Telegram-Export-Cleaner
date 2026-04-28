@@ -258,7 +258,7 @@ class JavaBotClient:
 
     @staticmethod
     def _sanitize_filename(name: str) -> str:
-        name = re.sub(r'[^\w\s\-.]', '', name)
+        name = re.sub(r'[^\w\s\-.]', '', name, flags=re.ASCII)
         return re.sub(r'\s+', '_', name.strip())[:80] or "export"
 
     def _build_filename(self, title, f_date, t_date) -> str:

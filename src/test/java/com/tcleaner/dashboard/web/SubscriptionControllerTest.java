@@ -148,14 +148,14 @@ class SubscriptionControllerTest {
     // ─── GET by ID ───────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("get: USER пытается открыть чужую → 403")
-    void getById_user_foreignSubscription_403() throws Exception {
+    @DisplayName("get: USER пытается открыть чужую → 404 (anti-IDOR: не раскрывает существование)")
+    void getById_user_foreignSubscription_404() throws Exception {
         ChatSubscription foreignSub = stubSubscription(20L, 2L);
         when(subscriptionService.findById(20L)).thenReturn(Optional.of(foreignSub));
 
         mockMvc.perform(get("/dashboard/api/subscriptions/20")
                         .with(user(USER_1)))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isNotFound());
     }
 
     @Test
@@ -251,14 +251,14 @@ class SubscriptionControllerTest {
     // ─── PAUSE ───────────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("pause: USER чужую → 403")
-    void pause_user_foreignSubscription_403() throws Exception {
+    @DisplayName("pause: USER чужую → 404 (anti-IDOR: не раскрывает существование)")
+    void pause_user_foreignSubscription_404() throws Exception {
         ChatSubscription foreignSub = stubSubscription(20L, 2L);
         when(subscriptionService.findById(20L)).thenReturn(Optional.of(foreignSub));
 
         mockMvc.perform(patch("/dashboard/api/subscriptions/20/pause")
                         .with(user(USER_1)).with(csrf()))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isNotFound());
     }
 
     @Test
@@ -361,14 +361,14 @@ class SubscriptionControllerTest {
     }
 
     @Test
-    @DisplayName("delete: USER foreign → 403")
-    void delete_user_foreignSubscription_403() throws Exception {
+    @DisplayName("delete: USER foreign → 404 (anti-IDOR: не раскрывает существование)")
+    void delete_user_foreignSubscription_404() throws Exception {
         ChatSubscription foreignSub = stubSubscription(20L, 2L);
         when(subscriptionService.findById(20L)).thenReturn(Optional.of(foreignSub));
 
         mockMvc.perform(delete("/dashboard/api/subscriptions/20")
                         .with(user(USER_1)).with(csrf()))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isNotFound());
     }
 
     // ─── AUTH ────────────────────────────────────────────────────────────────

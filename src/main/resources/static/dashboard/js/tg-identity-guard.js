@@ -38,14 +38,15 @@
     // Loop-guard: если для этого же tgId re-login уже пробовали в текущем
     // запуске WebView и он не поставил cookie (бэк вернул ?error=invalid
     // из-за протухшего auth_date или broken initData) — не зацикливаемся.
+    // Используем sessionStorage с fallback на in-memory переменную (private mode).
     const ATTEMPT_KEY = "tg_identity_guard_attempted";
     try {
         if (sessionStorage.getItem(ATTEMPT_KEY) === currentTgId) return;
         sessionStorage.setItem(ATTEMPT_KEY, currentTgId);
     } catch (e) {
-        // sessionStorage недоступен (приватный режим) → пропускаем guard,
-        // чтобы избежать риска бесконечного редиректа.
-        return;
+        // sessionStorage недоступен (приватный режим) → используем in-memory fallback.
+        if (window._tgGuardAttempted === currentTgId) return;
+        window._tgGuardAttempted = currentTgId;
     }
 
     // Mismatch или нет cookie → форсим re-login. 200ms лоадера не заметен,

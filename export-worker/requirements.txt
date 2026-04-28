@@ -7,10 +7,10 @@ pyrogram==2.0.106
 TgCrypto==1.2.5
 
 # Redis queue handling
-redis==5.0.1
+redis==5.2.1
 
-# HTTP client (0.27.x закрывает CVE-2024-23334: HTTP proxy request injection)
-httpx==0.27.2
+# HTTP client
+httpx==0.28.1
 
 # Data validation
 pydantic==2.6.1

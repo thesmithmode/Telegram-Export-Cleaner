@@ -160,6 +160,11 @@
             renderEventsTable(events);
         } catch (e) {
             console.error("me load failed:", e);
+            const main = document.querySelector("main") || document.body;
+            const banner = document.createElement("p");
+            banner.style.cssText = "color:var(--danger,red);padding:8px;text-align:center";
+            banner.textContent = "Не удалось загрузить данные. Попробуйте обновить страницу.";
+            main.prepend(banner);
         }
     }
 

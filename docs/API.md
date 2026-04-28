@@ -52,15 +52,10 @@ Base URL (локально): `http://localhost:8080`
 
 Формат body ошибок (JSON):
 
-```json
-{
-  "message": "...",
-  "type": "ExceptionClass",
-  "details": "..."
-}
-```
+- `4xx`: `{"message": "..."}`. Для `TelegramExporterException` и ConstraintViolation добавляется `"error": "<code>"`.
+- `500`: `{"message": "Внутренняя ошибка сервера", "type": "InternalError"}`.
 
-Для `TelegramExporterException` добавляется поле `error`.
+Полей `type: ExceptionClass` и `details: stacktrace` нет — убраны для предотвращения fingerprinting.
 
 ### Примеры
 

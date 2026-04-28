@@ -17,13 +17,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-/**
- * Сервис конвертации Telegram JSON export в текстовый формат.
- *
- * <p>Использует Jackson Streaming API для эффективной обработки файлов любого размера.
- * Результат записывается напрямую в HTTP response stream — без буферизации в памяти.
- * Временная директория автоматически очищается после обработки.</p>
- */
 @Service
 public class FileConversionService {
 
@@ -31,27 +24,11 @@ public class FileConversionService {
 
     private final TelegramExporter exporter;
 
-    /**
-     * Конструктор с внедрением экспортера.
-     *
-     * @param exporter сервис для обработки и конвертации Telegram JSON-данных
-     */
     public FileConversionService(TelegramExporter exporter) {
         this.exporter = exporter;
     }
 
-    /**
-     * Конвертирует multipart JSON-файл в текстовый формат.
-     *
-     * <p>Результат стримится напрямую в {@code HttpServletResponse.getOutputStream()}
-     * через {@link StreamingResponseBody} — потребление памяти не зависит от размера
-     * файла, что предотвращает OOM при больших экспортах.</p>
-     *
-     * @param file   загруженный файл {@code result.json}
-     * @param filter фильтр сообщений (nullable)
-     * @return ResponseEntity с StreamingResponseBody для потоковой записи
-     * @throws IOException при ошибках ввода/вывода
-     */
+    // Результат стримится напрямую в response stream — потребление памяти не зависит от размера файла.
     public ResponseEntity<StreamingResponseBody> convert(MultipartFile file, MessageFilter filter) throws IOException {
         Path inputFile = Files.createTempFile("telegram-cleaner-", ".json");
 

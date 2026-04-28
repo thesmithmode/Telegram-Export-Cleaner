@@ -10,6 +10,7 @@ import jakarta.servlet.http.HttpSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContext;
@@ -29,14 +30,18 @@ public class TelegramAuthController {
 
     private static final Logger log = LoggerFactory.getLogger(TelegramAuthController.class);
 
+    private static final String NONCE_PREFIX = "tg:nonce:";
+
     private final TelegramMiniAppAuthVerifier verifier;
     private final TelegramLoginService loginService;
     private final long adminTelegramId;
     private final SecurityContextRepository contextRepository;
+    private final StringRedisTemplate redis;
 
     public TelegramAuthController(TelegramMiniAppAuthVerifier verifier,
                                   TelegramLoginService loginService,
                                   SecurityContextRepository contextRepository,
+                                  StringRedisTemplate redis,
                                   @Value("${dashboard.auth.admin.telegram-id}") long adminTelegramId) {
         if (adminTelegramId <= 0) {
             throw new IllegalArgumentException(
@@ -45,6 +50,7 @@ public class TelegramAuthController {
         this.verifier = verifier;
         this.loginService = loginService;
         this.contextRepository = contextRepository;
+        this.redis = redis;
         this.adminTelegramId = adminTelegramId;
     }
 
@@ -65,6 +71,18 @@ public class TelegramAuthController {
         } catch (TelegramAuthenticationException e) {
             log.warn("Telegram Mini App login rejected: id={} reason={}", data.id(), e.getMessage());
             return "redirect:/dashboard/login?error=invalid";
+        }
+
+        // Replay protection: одноразовый nonce по hash, TTL = MAX_AGE окна initData.
+        try {
+            Boolean isNew = redis.opsForValue().setIfAbsent(
+                    NONCE_PREFIX + data.hash(), "1", TelegramMiniAppAuthVerifier.MAX_AGE);
+            if (!Boolean.TRUE.equals(isNew)) {
+                log.warn("Telegram Mini App login rejected: replay detected, id={}", data.id());
+                return "redirect:/dashboard/login?error=invalid";
+            }
+        } catch (Exception e) {
+            log.warn("Redis nonce check failed, skipping replay protection: {}", e.getMessage());
         }
 
         long id = data.id();

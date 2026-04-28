@@ -21,7 +21,7 @@ FROM eclipse-temurin:21-jre-alpine
 LABEL project=telegram-cleaner
 WORKDIR /app
 RUN apk add --no-cache curl && \
-    addgroup -S app && adduser -S app -G app && \
+    addgroup -S -g 1001 app && adduser -S -u 1001 -G app app && \
     mkdir -p /data/import /data/export /data/stats && chown -R app:app /data
 COPY --from=build --chown=app:app /app/target/telegram-cleaner-*.jar app.jar
 USER app
@@ -31,7 +31,7 @@ HEALTHCHECK --interval=10s --timeout=5s --retries=5 --start-period=30s \
 
 # Явно ограничиваем heap под сервер 3 ГБ (mem_limit контейнера — 768m).
 # -Xmx640m оставляет ~128m для JVM native memory, metaspace и стека потоков.
-ENV JAVA_OPTS="-Xms256m -Xmx640m -XX:+UseG1GC"
+ENV JAVA_OPTS="-Xms256m -Xmx640m -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError"
 
 EXPOSE 8080
 STOPSIGNAL SIGTERM

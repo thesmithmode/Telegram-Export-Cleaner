@@ -15,16 +15,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
 
-/**
- * Сервис управления подписками пользователей на периодический экспорт чатов.
- *
- * <p>Ограничения alpha-теста:
- * <ul>
- *   <li>Не более одной {@link SubscriptionStatus#ACTIVE} подписки на пользователя.</li>
- *   <li>Допустимые периоды: 24, 48, 72, 168 часов.</li>
- *   <li>Две подряд неудачи переводят подписку в {@link SubscriptionStatus#PAUSED}.</li>
- * </ul>
- */
 @Service
 public class SubscriptionService {
 
@@ -39,28 +29,6 @@ public class SubscriptionService {
         this.repository = repository;
     }
 
-    /**
-     * Создаёт новую ACTIVE-подписку для пользователя.
-     *
-     * <p>Порядок валидации:
-     * <ol>
-     *   <li>{@code periodHours} ∈ {24, 48, 72, 168}.</li>
-     *   <li>{@code desiredTimeMsk} != null и соответствует формату "HH:MM".</li>
-     *   <li>{@code sinceDate} != null.</li>
-     *   <li>{@code sinceDate} не в будущем.</li>
-     *   <li>{@code sinceDate} не старше одного периода от текущего момента.</li>
-     *   <li>У пользователя уже нет ACTIVE-подписки.</li>
-     * </ol>
-     *
-     * @param botUserId     идентификатор пользователя бота
-     * @param chatRefId     идентификатор чата
-     * @param periodHours   период экспорта в часах (24 / 48 / 72 / 168)
-     * @param desiredTimeMsk желаемое время запуска по МСК, формат "HH:MM"
-     * @param sinceDate     начало отсчёта периода (не в будущем, не старше periodHours)
-     * @return сохранённая подписка
-     * @throws IllegalArgumentException при нарушении любого ограничения на аргументы
-     * @throws IllegalStateException    если у пользователя уже есть ACTIVE-подписка
-     */
     @Transactional
     public ChatSubscription create(long botUserId, long chatRefId, int periodHours,
                                    String desiredTimeMsk, Instant sinceDate) {
@@ -83,9 +51,14 @@ public class SubscriptionService {
         if (repository.findByBotUserIdAndStatus(botUserId, SubscriptionStatus.ACTIVE).isPresent()) {
             throw new IllegalStateException("user already has an active subscription");
         }
-        if (repository.findByBotUserIdAndStatus(botUserId, SubscriptionStatus.PAUSED).isPresent()) {
-            throw new IllegalStateException("user has a paused subscription — resume or delete it first");
-        }
+        // PAUSED-подписка auto-архивируется при создании новой: пользователь хочет
+        // сменить чат, не удаляя паузу вручную. ACTIVE не архивируем — это деструктивно.
+        repository.findByBotUserIdAndStatus(botUserId, SubscriptionStatus.PAUSED).ifPresent(paused -> {
+            paused.setStatus(SubscriptionStatus.ARCHIVED);
+            paused.setUpdatedAt(Instant.now());
+            repository.save(paused);
+            log.info("Auto-archived paused subscription {} for botUserId={} on new create", paused.getId(), botUserId);
+        });
 
         ChatSubscription subscription = ChatSubscription.builder()
                 .botUserId(botUserId)
@@ -110,13 +83,6 @@ public class SubscriptionService {
         return saved;
     }
 
-    /**
-     * Приостанавливает подписку — переводит статус в {@link SubscriptionStatus#PAUSED}.
-     *
-     * @param id идентификатор подписки
-     * @return обновлённая подписка
-     * @throws NoSuchElementException если подписка не найдена
-     */
     @Transactional
     public ChatSubscription pause(long id) {
         ChatSubscription subscription = findExistingById(id);
@@ -125,18 +91,7 @@ public class SubscriptionService {
         return repository.save(subscription);
     }
 
-    /**
-     * Возобновляет подписку — переводит статус в {@link SubscriptionStatus#ACTIVE}.
-     *
-     * <p>Idempotent: если подписка уже ACTIVE, возвращается без изменений.
-     * Если у того же пользователя уже есть другая ACTIVE-подписка — бросает
-     * {@link IllegalStateException}.
-     *
-     * @param id идентификатор подписки
-     * @return обновлённая (или неизменённая) подписка
-     * @throws NoSuchElementException если подписка не найдена
-     * @throws IllegalStateException  если у пользователя уже есть другая ACTIVE-подписка
-     */
+    // Idempotent: если уже ACTIVE — no-op. ARCHIVED не резюмировать.
     @Transactional
     public ChatSubscription resume(long id) {
         ChatSubscription subscription = findExistingById(id);
@@ -156,25 +111,12 @@ public class SubscriptionService {
         return repository.save(subscription);
     }
 
-    /**
-     * Hard delete подписки по идентификатору.
-     *
-     * @param id идентификатор подписки
-     * @throws NoSuchElementException если подписка не найдена
-     */
     @Transactional
     public void delete(long id) {
         findExistingById(id);
         repository.deleteById(id);
     }
 
-    /**
-     * Архивирует подписку — переводит статус в {@link SubscriptionStatus#ARCHIVED}.
-     *
-     * @param id идентификатор подписки
-     * @return обновлённая подписка
-     * @throws NoSuchElementException если подписка не найдена
-     */
     @Transactional
     public ChatSubscription archive(long id) {
         ChatSubscription subscription = findExistingById(id);
@@ -185,13 +127,6 @@ public class SubscriptionService {
         return saved;
     }
 
-    /**
-     * Фиксирует начало очередного прогона: обновляет {@code lastRunAt} и {@code updatedAt}.
-     *
-     * @param id идентификатор подписки
-     * @return обновлённая подписка
-     * @throws NoSuchElementException если подписка не найдена
-     */
     @Transactional
     public ChatSubscription recordRunStarted(long id) {
         ChatSubscription subscription = findExistingById(id);
@@ -201,20 +136,8 @@ public class SubscriptionService {
         return repository.save(subscription);
     }
 
-    /**
-     * Фиксирует успешный прогон: обновляет {@code lastSuccessAt},
-     * сбрасывает {@code consecutiveFailures} в 0 и обновляет {@code updatedAt}.
-     * Статус не меняется.
-     *
-     * <p>Если подписка не найдена (была удалена между enqueue и завершением экспорта) —
-     * логируется warning и возвращается {@code null}. Метод намеренно не бросает
-     * {@link NoSuchElementException}: вызывается из ingest-пайплайна через
-     * Redis Stream, где любой RuntimeException приводит к rollback outer-транзакции
-     * и infinite-retry события.
-     *
-     * @param id идентификатор подписки
-     * @return обновлённая подписка или {@code null}, если подписка не найдена
-     */
+    // Не бросает NoSuchElementException если подписка удалена между enqueue и завершением —
+    // вызывается из Redis Stream ingestion, где RuntimeException → rollback → infinite-retry.
     @Transactional
     public ChatSubscription recordSuccess(long id) {
         ChatSubscription subscription = repository.findById(id).orElse(null);
@@ -229,21 +152,7 @@ public class SubscriptionService {
         return repository.save(subscription);
     }
 
-    /**
-     * Фиксирует неудачный прогон: инкрементирует {@code consecutiveFailures},
-     * обновляет {@code lastFailureAt} и {@code updatedAt}.
-     * Если {@code consecutiveFailures} достигает 2 и более — переводит подписку в
-     * {@link SubscriptionStatus#PAUSED}.
-     *
-     * <p>Если подписка не найдена (была удалена между enqueue и завершением экспорта) —
-     * логируется warning и возвращается {@code null}. Метод намеренно не бросает
-     * {@link NoSuchElementException}: вызывается из ingest-пайплайна через
-     * Redis Stream, где любой RuntimeException приводит к rollback outer-транзакции
-     * и infinite-retry события.
-     *
-     * @param id идентификатор подписки
-     * @return обновлённая подписка или {@code null}, если подписка не найдена
-     */
+    // Не бросает если подписка удалена — см. recordSuccess.
     @Transactional
     public ChatSubscription recordFailure(long id) {
         ChatSubscription subscription = repository.findById(id).orElse(null);
@@ -263,13 +172,6 @@ public class SubscriptionService {
         return repository.save(subscription);
     }
 
-    /**
-     * Фиксирует отправку confirm-запроса: устанавливает {@code confirmSentAt = now}.
-     *
-     * @param id идентификатор подписки
-     * @return обновлённая подписка
-     * @throws NoSuchElementException если подписка не найдена
-     */
     @Transactional
     public ChatSubscription markConfirmSent(long id) {
         ChatSubscription subscription = findExistingById(id);
@@ -279,14 +181,6 @@ public class SubscriptionService {
         return repository.save(subscription);
     }
 
-    /**
-     * Фиксирует получение подтверждения от пользователя:
-     * устанавливает {@code lastConfirmAt = now} и сбрасывает {@code confirmSentAt = null}.
-     *
-     * @param id идентификатор подписки
-     * @return обновлённая подписка
-     * @throws NoSuchElementException если подписка не найдена
-     */
     @Transactional
     public ChatSubscription confirmReceived(long id) {
         ChatSubscription subscription = findExistingById(id);
@@ -297,39 +191,20 @@ public class SubscriptionService {
         return repository.save(subscription);
     }
 
-    /**
-     * Возвращает все подписки пользователя для отображения на дашборде.
-     *
-     * @param botUserId идентификатор пользователя
-     * @return список подписок (может быть пустым)
-     */
     @Transactional(readOnly = true)
     public List<ChatSubscription> listForUser(long botUserId) {
         return repository.findAllByBotUserId(botUserId);
     }
 
-    /**
-     * Возвращает все подписки (для ADMIN-роли).
-     *
-     * @return список всех подписок
-     */
     @Transactional(readOnly = true)
     public List<ChatSubscription> listAll() {
         return repository.findAll();
     }
 
-    /**
-     * Ищет подписку по идентификатору.
-     *
-     * @param id идентификатор подписки
-     * @return {@link Optional} с подпиской или пустой
-     */
     @Transactional(readOnly = true)
     public Optional<ChatSubscription> findById(long id) {
         return repository.findById(id);
     }
-
-    // ------------------------------------------------------------------ helpers
 
     private ChatSubscription findExistingById(long id) {
         return repository.findById(id)
