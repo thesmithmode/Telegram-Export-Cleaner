@@ -4,9 +4,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -51,6 +53,20 @@ public class DashboardExceptionHandler {
         log.warn("Dashboard bad param: {}", ex.getMessage());
         return ResponseEntity.badRequest().body(error(
                 "Невалидный параметр запроса (ожидался YYYY-MM-DD или число)", "bad_request"));
+    }
+
+    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+    public ResponseEntity<Map<String, String>> handleOptimisticLock(ObjectOptimisticLockingFailureException ex) {
+        log.warn("Optimistic lock conflict: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(error("Запись была изменена другим процессом. Попробуйте снова.", "conflict"));
+    }
+
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<Map<String, String>> handleDataIntegrity(DataIntegrityViolationException ex) {
+        log.warn("Data integrity violation: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(error("Конфликт данных: запись уже существует.", "conflict"));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

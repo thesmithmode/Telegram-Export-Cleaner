@@ -14,11 +14,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 
-/**
- * При старте гарантирует существование ADMIN-записи в dashboard_users,
- * связанной с {@code dashboard.auth.admin.telegram-id}.
- * Пароли не используются — вход через Telegram Login Widget.
- */
 @Component
 @ConditionalOnProperty(name = "dashboard.auth.bootstrap.enabled", havingValue = "true")
 public class EnvUserBootstrap implements CommandLineRunner {

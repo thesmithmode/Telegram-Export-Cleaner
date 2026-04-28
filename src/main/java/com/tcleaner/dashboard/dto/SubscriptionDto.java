@@ -4,11 +4,6 @@ import com.tcleaner.dashboard.domain.ChatSubscription;
 
 import java.time.Instant;
 
-/**
- * DTO подписки для REST API дашборда.
- * Все поля берутся из {@link ChatSubscription} без изменений;
- * статус представлен строкой (имя {@code SubscriptionStatus}).
- */
 public record SubscriptionDto(
         Long id,
         Long botUserId,

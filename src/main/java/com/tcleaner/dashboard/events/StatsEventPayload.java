@@ -13,14 +13,8 @@ import lombok.ToString;
 
 import java.time.Instant;
 
-/**
- * JSON-схема сообщения в Redis-стриме {@code stats:events}.
- * Поля {@code @JsonInclude(NON_NULL)} — чтобы не засорять stream пустыми ключами
- * (bot_user.seen — только user-поля; export.bytes_measured — только taskId + bytes).
- * <p>
- * Python-воркер шлёт тот же JSON через redis-py {@code xadd} —
- * field-name'ы зафиксированы {@code @JsonProperty}-ами ниже.
- */
+// @JsonProperty field-names — контракт с Python-воркером (redis-py xadd). Переименование = breaking change.
+// @JsonInclude(NON_NULL) — не засоряем stream пустыми ключами (bot_user.seen содержит только user-поля).
 @Getter
 @Setter
 @NoArgsConstructor
@@ -86,11 +80,6 @@ public class StatsEventPayload {
     @JsonProperty("source")
     private String source;
 
-    /**
-     * ID подписки ({@link com.tcleaner.dashboard.domain.ChatSubscription}),
-     * инициировавшей экспорт. {@code null} для ручных экспортов.
-     * Передаётся Python-воркером при подписочных запусках.
-     */
     @JsonProperty("subscription_id")
     private Long subscriptionId;
 

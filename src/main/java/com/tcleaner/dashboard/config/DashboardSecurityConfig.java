@@ -11,12 +11,6 @@ import org.springframework.security.web.authentication.LoginUrlAuthenticationEnt
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextRepository;
 
-/**
- * Spring Security для дашборда: stateful сессии, вход через Telegram Mini App.
- * {@code @Order(1)} — обрабатывается раньше API-цепочки (см. {@code SecurityConfig}).
- * Аутентификация через POST /dashboard/login/telegram с initData Mini App
- * (см. TelegramAuthController).
- */
 @Configuration
 @Order(1)
 public class DashboardSecurityConfig {
@@ -32,6 +26,11 @@ public class DashboardSecurityConfig {
         http
             .securityMatcher("/dashboard/**")
             .headers(headers -> headers
+                // X-Frame-Options отключён намеренно: он не поддерживает allowlist — только
+                // DENY или SAMEORIGIN. Framing-политика задаётся через CSP frame-ancestors ниже,
+                // что позволяет разрешить web.telegram.org и 'self' одновременно.
+                // Для браузеров без CSP (IE 11) clickjacking защита отсутствует — приемлемо
+                // для Telegram Mini App (целевая аудитория использует современные браузеры).
                 .frameOptions(frame -> frame.disable())
                 // no-store для HTML дашборда — см. DashboardAccessIsolationIntegrationTest#htmlPagesAreNoStore
                 .cacheControl(Customizer.withDefaults())

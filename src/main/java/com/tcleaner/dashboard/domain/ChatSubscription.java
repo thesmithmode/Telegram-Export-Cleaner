@@ -8,6 +8,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -17,9 +18,6 @@ import lombok.ToString;
 
 import java.time.Instant;
 
-/**
- * Подписка пользователя на периодический автоматический экспорт чата.
- */
 @Entity
 @Table(name = "chat_subscriptions")
 @Getter
@@ -34,6 +32,10 @@ public class ChatSubscription {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     @Column(name = "id", nullable = false, updatable = false)
     private Long id;
+
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version;
 
     @Column(name = "bot_user_id", nullable = false)
     private Long botUserId;

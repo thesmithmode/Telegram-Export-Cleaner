@@ -4,6 +4,7 @@ import json
 import asyncio
 from typing import Optional
 from datetime import datetime, timezone
+from urllib.parse import quote as _urlquote
 
 import redis.asyncio as redis
 
@@ -18,13 +19,11 @@ MAX_PENDING_RETURN = 100  # Max number of pending jobs to deserialize (prevents 
 class QueueConsumer:
 
     def __init__(self):
+        _password = settings.REDIS_PASSWORD
         self.redis_url = (
-            f"redis://:"
-            f"{settings.REDIS_PASSWORD}@"
-            f"{settings.REDIS_HOST}:"
-            f"{settings.REDIS_PORT}/"
-            f"{settings.REDIS_DB}"
-            if settings.REDIS_PASSWORD
+            f"redis://:{_urlquote(_password, safe='')}@"
+            f"{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}"
+            if _password
             else f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}"
         )
         self.queue_name = settings.REDIS_QUEUE_NAME

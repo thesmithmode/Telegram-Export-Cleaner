@@ -56,8 +56,10 @@
             }
         } catch (e) {
             if (tbody) {
-                tbody.innerHTML =
-                    `<tr><td colspan="4" style="color:var(--danger)">Ошибка: ${e.message}</td></tr>`;
+                const ec = document.createElement("td");
+                ec.colSpan = 4; ec.style.color = "var(--danger)"; ec.textContent = `Ошибка: ${e.message}`;
+                tbody.textContent = "";
+                tbody.appendChild(document.createElement("tr")).appendChild(ec);
             }
         }
     }

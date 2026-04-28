@@ -55,6 +55,8 @@ services:
       - "80:80"
       - "443:443"
     volumes:
+      # SECURITY NOTE: docker.sock даёт доступ к labels/env всех контейнеров.
+      # Для продакшена рассмотреть переход на file provider (уже настроен: /config).
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - traefik_acme:/acme
       - ${TRAEFIK_DATA_PATH}/logs:/logs
@@ -76,7 +78,7 @@ services:
   # Порт 8080 НЕ выставляется напрямую — только через Traefik.
   # ===========================================================================
   java-bot:
-    image: ghcr.io/thesmithmode/telegram-export-cleaner:latest
+    image: ghcr.io/thesmithmode/telegram-export-cleaner:${IMAGE_TAG:-latest}
     container_name: telegram-export-java-bot
     labels:
       - "project=telegram-cleaner"
@@ -116,7 +118,7 @@ services:
       # Dashboard SQLite
       - DASHBOARD_DB_PATH=${DASHBOARD_DB_PATH:-/data/stats/dashboard.db}
       # Dashboard auth (Telegram Login Widget)
-      - DASHBOARD_ENABLE_BOOTSTRAP=${DASHBOARD_ENABLE_BOOTSTRAP:-true}
+      - DASHBOARD_ENABLE_BOOTSTRAP=${DASHBOARD_ENABLE_BOOTSTRAP:-false}
       - DASHBOARD_ADMIN_TG_ID=${DASHBOARD_ADMIN_TG_ID}
       # Redis Streams для ingestion статистики
       - STATS_STREAM_KEY=${STATS_STREAM_KEY:-stats:events}
@@ -154,7 +156,7 @@ services:
   # Python Worker
   # ===========================================================================
   python-worker:
-    image: ghcr.io/thesmithmode/telegram-export-python-worker:latest
+    image: ghcr.io/thesmithmode/telegram-export-python-worker:${IMAGE_TAG:-latest}
     container_name: telegram-export-worker
     labels:
       - "project=telegram-cleaner"

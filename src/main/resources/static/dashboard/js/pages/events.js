@@ -52,13 +52,18 @@
         return e[key];
     }
 
+    let _loadAbort = null;
+
     async function load(status) {
+        if (_loadAbort) { _loadAbort.abort(); }
+        _loadAbort = new AbortController();
+        const signal = _loadAbort.signal;
         const tbody = document.getElementById("events-tbody");
         if (!tbody) { return; }
         const params = { limit: 100 };
         if (status) { params.status = status; }
         try {
-            const events = await fetchJson("/dashboard/api/stats/recent", params);
+            const events = await fetchJson("/dashboard/api/stats/recent", params, signal);
             render(tbody, events);
             setCountBadge("events", events.length);
             if (initSortableTable) {
@@ -69,8 +74,11 @@
                 });
             }
         } catch (e) {
-            tbody.innerHTML =
-                `<tr><td colspan="6" style="color:var(--danger)">Ошибка: ${e.message}</td></tr>`;
+            if (e.name === "AbortError") { return; }
+            const ec = document.createElement("td");
+            ec.colSpan = 6; ec.style.color = "var(--danger)"; ec.textContent = `Ошибка: ${e.message}`;
+            tbody.textContent = "";
+            tbody.appendChild(document.createElement("tr")).appendChild(ec);
         }
     }
 

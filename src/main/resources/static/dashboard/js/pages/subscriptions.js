@@ -197,10 +197,24 @@
 
     // ── API calls ──────────────────────────────────────────────────────────────
 
+    let _pollTimer = null;
+
+    function schedulePollingIfNeeded(rows) {
+        clearTimeout(_pollTimer);
+        const hasInProgress = rows.some(sub =>
+            sub.status === "ACTIVE" && computeNextRun(sub) === I18N.inProgress
+        );
+        if (hasInProgress) {
+            _pollTimer = setTimeout(loadSubscriptions, 15000);
+        }
+    }
+
     async function loadSubscriptions() {
         try {
             const data = await fetchJson("/dashboard/api/subscriptions");
-            renderTable(Array.isArray(data) ? data : (data.content || []));
+            const rows = Array.isArray(data) ? data : (data.content || []);
+            renderTable(rows);
+            schedulePollingIfNeeded(rows);
         } catch (e) {
             const tbody = document.getElementById("subscriptions-body");
             if (tbody) {
@@ -214,6 +228,23 @@
                 tbody.appendChild(errRow);
             }
         }
+    }
+
+    function tgConfirm(msg) {
+        const twa = window.Telegram?.WebApp;
+        if (twa?.showConfirm) {
+            return new Promise(resolve => twa.showConfirm(msg, ok => resolve(ok)));
+        }
+        return Promise.resolve(window.confirm(msg));
+    }
+
+    function tgAlert(msg) {
+        const twa = window.Telegram?.WebApp;
+        if (twa?.showAlert) {
+            return new Promise(resolve => twa.showAlert(msg, resolve));
+        }
+        window.alert(msg);
+        return Promise.resolve();
     }
 
     async function mutate(method, url) {
@@ -232,32 +263,32 @@
     }
 
     async function pauseSubscription(id) {
-        if (!confirm(`Приостановить подписку #${id}?`)) { return; }
+        if (!await tgConfirm(`Приостановить подписку #${id}?`)) { return; }
         try {
             await mutate("PATCH", `/dashboard/api/subscriptions/${id}/pause`);
             await loadSubscriptions();
         } catch (e) {
-            alert(`Ошибка: ${e.message}`);
+            await tgAlert(`Ошибка: ${e.message}`);
         }
     }
 
     async function resumeSubscription(id) {
-        if (!confirm(`Возобновить подписку #${id}?`)) { return; }
+        if (!await tgConfirm(`Возобновить подписку #${id}?`)) { return; }
         try {
             await mutate("PATCH", `/dashboard/api/subscriptions/${id}/resume`);
             await loadSubscriptions();
         } catch (e) {
-            alert(`Ошибка: ${e.message}`);
+            await tgAlert(`Ошибка: ${e.message}`);
         }
     }
 
     async function deleteSubscription(id) {
-        if (!confirm(`Удалить подписку #${id}? Это действие нельзя отменить.`)) { return; }
+        if (!await tgConfirm(`Удалить подписку #${id}? Это действие нельзя отменить.`)) { return; }
         try {
             await mutate("DELETE", `/dashboard/api/subscriptions/${id}`);
             await loadSubscriptions();
         } catch (e) {
-            alert(`Ошибка: ${e.message}`);
+            await tgAlert(`Ошибка: ${e.message}`);
         }
     }
 

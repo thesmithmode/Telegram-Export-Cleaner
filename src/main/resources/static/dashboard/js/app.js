@@ -22,14 +22,15 @@
         return url.toString();
     }
 
-    /** GET /dashboard/api/... → JSON. Бросает ошибку при не-2xx. */
-    async function fetchJson(path, params) {
+    /** GET /dashboard/api/... → JSON. Бросает ошибку при не-2xx. Принимает опциональный signal для AbortController. */
+    async function fetchJson(path, params, signal) {
         const headers = { "Accept": "application/json" };
         if (csrfToken && csrfHeader) headers[csrfHeader] = csrfToken;
         const res = await fetch(buildUrl(path, params), {
             method: "GET",
             credentials: "same-origin",
             headers,
+            signal,
         });
         if (res.status === 401 || res.status === 403) {
             window.location.href = "/dashboard/login";

@@ -41,13 +41,6 @@ import static org.springframework.http.HttpStatus.CONFLICT;
 import static org.springframework.http.HttpStatus.NOT_FOUND;
 import static org.springframework.http.HttpStatus.UNAUTHORIZED;
 
-/**
- * REST API управления подписками: {@code /dashboard/api/subscriptions}.
- *
- * <p>RBAC централизован через {@link BotUserAccessPolicy}:
- * USER видит и управляет только своими подписками;
- * ADMIN может читать любые и удалять/приостанавливать, но не создавать.
- */
 @RestController
 @RequestMapping("/dashboard/api/subscriptions")
 public class SubscriptionController {
@@ -70,12 +63,6 @@ public class SubscriptionController {
         this.accessPolicy = accessPolicy;
     }
 
-    /**
-     * {@code GET /dashboard/api/subscriptions[?userId=...]}
-     *
-     * <p>USER: возвращает только свои подписки (параметр {@code userId} игнорируется).
-     * ADMIN: если {@code userId} указан — подписки этого пользователя; иначе все подписки.
-     */
     @GetMapping
     public List<SubscriptionDto> list(
             @AuthenticationPrincipal DashboardUserDetails principal,
@@ -92,11 +79,6 @@ public class SubscriptionController {
         return toDtoList(subs);
     }
 
-    /**
-     * {@code GET /dashboard/api/subscriptions/{id}}
-     *
-     * <p>RBAC: USER может видеть только свои подписки.
-     */
     @GetMapping("/{id}")
     public SubscriptionDto get(
             @AuthenticationPrincipal DashboardUserDetails principal,
@@ -105,7 +87,8 @@ public class SubscriptionController {
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Subscription not found"));
         if (!accessPolicy.canSeeUser(
                 principal.getDashboardRole(), principal.getBotUserId(), sub.getBotUserId())) {
-            throw new AccessDeniedException("Доступ запрещён: нельзя просматривать подписку другого пользователя");
+            // 404 вместо 403 — не раскрываем факт существования чужой подписки (IDOR)
+            throw new ResponseStatusException(NOT_FOUND, "Subscription not found");
         }
         String display = chatRepository.findById(sub.getChatRefId())
                 .map(this::formatChatDisplay)
@@ -113,14 +96,7 @@ public class SubscriptionController {
         return SubscriptionDto.fromEntity(sub, display);
     }
 
-    /**
-     * {@code POST /dashboard/api/subscriptions}
-     *
-     * <p>Только USER с привязанным {@code botUserId}. ADMIN не может создавать подписки.
-     * {@code botUserId} берётся из principal — пользователь не может создать подписку за другого.
-     *
-     * @return 201 CREATED + созданный DTO
-     */
+    // botUserId берётся из principal — USER не может создать подписку за другого; ADMIN не создаёт вообще.
     @PostMapping
     public ResponseEntity<SubscriptionDto> create(
             @AuthenticationPrincipal DashboardUserDetails principal,
@@ -166,11 +142,6 @@ public class SubscriptionController {
                 .body(dto);
     }
 
-    /**
-     * {@code PATCH /dashboard/api/subscriptions/{id}/pause}
-     *
-     * <p>RBAC: USER может паузить только свои подписки; ADMIN — любые.
-     */
     @PatchMapping("/{id}/pause")
     public SubscriptionDto pause(
             @AuthenticationPrincipal DashboardUserDetails principal,
@@ -184,11 +155,6 @@ public class SubscriptionController {
         }
     }
 
-    /**
-     * {@code PATCH /dashboard/api/subscriptions/{id}/resume}
-     *
-     * <p>RBAC: USER может возобновлять только свои подписки; ADMIN — любые.
-     */
     @PatchMapping("/{id}/resume")
     public SubscriptionDto resume(
             @AuthenticationPrincipal DashboardUserDetails principal,
@@ -204,13 +170,6 @@ public class SubscriptionController {
         }
     }
 
-    /**
-     * {@code DELETE /dashboard/api/subscriptions/{id}}
-     *
-     * <p>RBAC: USER может удалять только свои подписки; ADMIN — любые.
-     *
-     * @return 204 No Content
-     */
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(
             @AuthenticationPrincipal DashboardUserDetails principal,
@@ -224,29 +183,17 @@ public class SubscriptionController {
         return ResponseEntity.noContent().build();
     }
 
-    /**
-     * Проверяет существование подписки и право доступа текущего пользователя.
-     *
-     * @param principal текущий пользователь
-     * @param id        идентификатор подписки
-     * @return найденная подписка
-     * @throws ResponseStatusException 404 если не найдена
-     * @throws AccessDeniedException   если USER пытается получить чужую подписку
-     */
     private ChatSubscription requireVisible(DashboardUserDetails principal, Long id) {
         ChatSubscription sub = subscriptionService.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Subscription not found"));
         if (!accessPolicy.canSeeUser(
                 principal.getDashboardRole(), principal.getBotUserId(), sub.getBotUserId())) {
-            throw new AccessDeniedException("Доступ запрещён: нельзя управлять подпиской другого пользователя");
+            // 404 вместо 403 — не раскрываем факт существования чужой подписки (IDOR)
+            throw new ResponseStatusException(NOT_FOUND, "Subscription not found");
         }
         return sub;
     }
 
-    /**
-     * Защита для USER-роли: без привязки к Telegram-пользователю операции невозможны.
-     * ADMIN может быть без botUserId, поэтому проверка пропускается.
-     */
     private void requireBoundUser(DashboardUserDetails principal) {
         if (principal.getDashboardRole() != DashboardRole.ADMIN
                 && principal.getBotUserId() == null) {

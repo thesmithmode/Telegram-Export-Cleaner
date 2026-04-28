@@ -5,6 +5,7 @@ import com.tcleaner.format.MarkdownParser;
 import com.tcleaner.format.StringUtils;
 import com.fasterxml.jackson.databind.JsonNode;
 
+import java.util.Locale;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -105,12 +106,12 @@ public class MessageFilter {
     }
 
     public MessageFilter withKeyword(String keyword) {
-        this.keywords.add(keyword.toLowerCase());
+        this.keywords.add(keyword.toLowerCase(Locale.ROOT));
         return this;
     }
 
     public MessageFilter withExcludeKeyword(String keyword) {
-        this.excludeKeywords.add(keyword.toLowerCase());
+        this.excludeKeywords.add(keyword.toLowerCase(Locale.ROOT));
         return this;
     }
 
@@ -165,7 +166,7 @@ public class MessageFilter {
         }
 
         if (!keywords.isEmpty() || !excludeKeywords.isEmpty()) {
-            String textLower = MarkdownParser.parseText(message.get("text")).toLowerCase();
+            String textLower = MarkdownParser.parseText(message.get("text")).toLowerCase(Locale.ROOT);
             if (!keywords.isEmpty() && !containsAny(textLower, keywords)) {
                 return false;
             }

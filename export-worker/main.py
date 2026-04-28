@@ -317,7 +317,7 @@ class ExportWorker:
             # WARN в логах для SRE, экспорт не блокируется.
             if self.control_redis and canonical_id:
                 try:
-                    pipe = self.control_redis.pipeline()
+                    pipe = self.control_redis.pipeline(transaction=True)
                     pipe.set(RedisKeys.canonical(original_chat_input), str(canonical_id), ex=86400 * 30)
                     chat_username = chat_info.get("username")
                     if chat_username:

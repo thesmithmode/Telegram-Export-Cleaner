@@ -9,10 +9,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 
-/**
- * Upsert {@link DashboardUser} по Telegram ID. Создаёт запись при первом входе,
- * обновляет username/last_login_at при повторном.
- */
 @Service
 public class DashboardUserService {
 
@@ -54,7 +50,9 @@ public class DashboardUserService {
 
     private static String pickDisplayName(String username, String firstName, long telegramId) {
         if (username != null && !username.isBlank()) return username;
-        if (firstName != null && !firstName.isBlank()) return firstName;
+        // Telegram usernames уникальны глобально, но firstName — нет.
+        // Добавляем суффикс telegramId чтобы избежать UNIQUE-коллизии на username-столбце.
+        if (firstName != null && !firstName.isBlank()) return firstName + "_" + telegramId;
         return "tg_" + telegramId;
     }
 }

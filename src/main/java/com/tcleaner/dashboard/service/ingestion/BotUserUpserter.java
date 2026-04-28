@@ -64,10 +64,6 @@ public class BotUserUpserter {
                 .filter(code -> code != null && !code.isBlank());
     }
 
-    /**
-     * Возвращает {@link BotLanguage} пользователя или EN по умолчанию.
-     * Централизованный резолв для всех callers чтобы не дублировать fallback-логику.
-     */
     @Transactional(readOnly = true)
     public BotLanguage resolveLanguage(long botUserId) {
         return getLanguage(botUserId)
@@ -75,11 +71,6 @@ public class BotUserUpserter {
                 .orElse(BotLanguage.EN);
     }
 
-    /**
-     * Синхронно сохраняет выбор языка. Гарантирует существование записи
-     * {@link BotUser} — если её нет, создаёт с минимальным набором полей
-     * (остальные проставит ближайший {@link #upsert}).
-     */
     @Transactional
     public void setLanguage(long botUserId, String code) {
         Instant ts = Instant.now();

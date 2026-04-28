@@ -21,13 +21,13 @@ public class PeriodResolver {
 
         return switch (period == null ? "all" : period.toLowerCase()) {
             case "year" -> new StatsPeriod(
-                    today.minusYears(1), today, StatsPeriod.Granularity.MONTH);
+                    today.minusYears(1).plusDays(1), today, StatsPeriod.Granularity.MONTH);
             case "month" -> new StatsPeriod(
-                    today.minusDays(30), today, StatsPeriod.Granularity.DAY);
+                    today.minusDays(29), today, StatsPeriod.Granularity.DAY);
             case "week" -> new StatsPeriod(
-                    today.minusDays(7), today, StatsPeriod.Granularity.DAY);
+                    today.minusDays(6), today, StatsPeriod.Granularity.DAY);
             case "day" -> new StatsPeriod(
-                    today.minusDays(1), today, StatsPeriod.Granularity.DAY);
+                    today, today, StatsPeriod.Granularity.DAY);
             case "custom" -> resolveCustom(customFrom, customTo, today);
             default -> new StatsPeriod(
                     LocalDate.of(2020, 1, 1), today, StatsPeriod.Granularity.MONTH);

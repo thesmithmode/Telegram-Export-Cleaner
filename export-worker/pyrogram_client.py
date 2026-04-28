@@ -165,7 +165,13 @@ class TelegramClient:
             return False
 
         except Exception as e:
-            logger.error(f"❌ Connection failed: {e}", exc_info=True)
+            # SECURITY: НЕ логируем exc_info — traceback из Pyrogram.Client.start()
+            # может содержать api_hash, session_string, phone_number, MTProto-ключи
+            # в репрах локальных переменных (Auth/Session frames). Логи уходят в
+            # stderr → docker → Loki/Grafana, поэтому утечка = compromise аккаунта.
+            logger.error(
+                f"❌ Connection failed: {type(e).__name__}: {e}"
+            )
             return False
 
     async def disconnect(self) -> None:
@@ -355,7 +361,14 @@ class TelegramClient:
             raise
 
         except Exception as e:
-            logger.error(f"❌ Error fetching history for chat {chat_id}: {e}", exc_info=True)
+            # SECURITY: traceback из Pyrogram.get_chat_history может содержать
+            # peer.access_hash и ссылки на Session в локалках — оба чувствительны
+            # (access_hash = per-account capability token). Логируем только тип
+            # и сообщение исключения; сами они от Pyrogram secrets не содержат.
+            logger.error(
+                f"❌ Error fetching history for chat {chat_id}: "
+                f"{type(e).__name__}: {e}"
+            )
             raise
 
     async def _get_topic_history(
@@ -516,7 +529,12 @@ class TelegramClient:
             raise
 
         except Exception as e:
-            logger.error(f"❌ Error fetching topic {topic_id} history for chat {chat_id}: {e}", exc_info=True)
+            # SECURITY: см. комментарий в get_chat_history — traceback из raw
+            # MTProto invoke() содержит peer.access_hash и Session-references.
+            logger.error(
+                f"❌ Error fetching topic {topic_id} history for chat {chat_id}: "
+                f"{type(e).__name__}: {e}"
+            )
             raise
 
     async def get_chat_messages_count(self, chat_id: Union[int, str]) -> Optional[int]:
@@ -840,8 +858,16 @@ class TelegramClient:
 
 async def create_client() -> TelegramClient:
     client = TelegramClient()
-
-    if not await client.connect():
-        raise RuntimeError("Failed to connect to Telegram API")
-
+    try:
+        if not await client.connect():
+            raise RuntimeError("Failed to connect to Telegram API")
+    except Exception:
+        # connect() может частично запустить Pyrogram (start() успел, get_me() упал).
+        # Pyrogram хранит is_connected независимо от нашего флага — останавливаем напрямую.
+        try:
+            if client.client.is_connected:
+                await client.client.stop()
+        except Exception:
+            pass
+        raise
     return client

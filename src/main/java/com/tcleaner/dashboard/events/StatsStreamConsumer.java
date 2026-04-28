@@ -1,5 +1,6 @@
 package com.tcleaner.dashboard.events;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tcleaner.dashboard.service.ingestion.ExportEventIngestionService;
 import org.slf4j.Logger;
@@ -10,15 +11,9 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.stream.StreamListener;
 import org.springframework.stereotype.Component;
 
-/**
- * Consumer для {@code stats:events}. Десериализует payload в {@link StatsEventPayload}
- * и делегирует обработку {@link ExportEventIngestionService}.
- * <p>
- * Ошибка при обработке одной записи не роняет listener: логируем + XACK
- * (at-least-once на уровне стрима, идемпотентность — на уровне upsert по {@code task_id}).
- * {@code ObjectProvider} — чтобы в тестах, где ingestion bean нет (@DataJpaTest,
- * unit-тесты без Spring-контекста), consumer создавался без NPE.
- */
+// ACK-стратегия: poison (JsonProcessingException, пустой payload) → ACK, иначе PEL блокируется навсегда.
+// Transient (DB/Redis/downstream) → no ACK → at-least-once retry (idempotent по task_id).
+// ObjectProvider: ingestion bean может отсутствовать в unit-тестах без Spring-контекста.
 @Component
 public class StatsStreamConsumer implements StreamListener<String, MapRecord<String, String, String>> {
 
@@ -45,17 +40,27 @@ public class StatsStreamConsumer implements StreamListener<String, MapRecord<Str
     @Override
     public void onMessage(MapRecord<String, String, String> message) {
         String id = message.getId().getValue();
+        boolean ack = false;
         try {
             String json = message.getValue().get(PAYLOAD_FIELD);
             if (json == null || json.isBlank()) {
-                log.warn("Пустой payload в {}: {}", props.key(), id);
+                log.warn("Пустой payload в {}: {} — ACK для выхода из PEL", props.key(), id);
+                ack = true; // poison: повтор не вернёт payload
             } else {
                 StatsEventPayload payload = objectMapper.readValue(json, StatsEventPayload.class);
                 handle(payload);
+                ack = true;
             }
+        } catch (JsonProcessingException ex) {
+            // Poison: парсинг никогда не пройдёт → ACK, иначе событие блокирует PEL навсегда.
+            log.error("Битый JSON в {} id={}: {} — ACK (poison)", props.key(), id, ex.getMessage());
+            ack = true;
         } catch (Exception ex) {
-            log.error("Ошибка обработки события {} в {}: {}", id, props.key(), ex.getMessage());
-        } finally {
+            // Transient (Redis/DB/downstream): не ACK → повтор. Ingestion идемпотентен по task_id.
+            log.error("Ошибка обработки события {} в {}: {} — XACK пропущен, будет retry",
+                    id, props.key(), ex.getMessage());
+        }
+        if (ack) {
             try {
                 redis.opsForStream().acknowledge(props.key(), props.group(), id);
             } catch (Exception ex) {
@@ -64,10 +69,6 @@ public class StatsStreamConsumer implements StreamListener<String, MapRecord<Str
         }
     }
 
-    /**
-     * Делегирует обработку в {@link ExportEventIngestionService}. Если бин ingestion-а
-     * отсутствует (тесты с отключённым stream'ом) — только логируем.
-     */
     void handle(StatsEventPayload payload) {
         ExportEventIngestionService service = ingestionServiceProvider.getIfAvailable();
         if (service != null) {

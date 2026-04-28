@@ -213,7 +213,7 @@ class SubscriptionSchedulerTest {
     }
 
     @Test
-    @DisplayName("runDueSubscriptions: исключение при enqueueSubscription → recordFailure вызван")
+    @DisplayName("runDueSubscriptions: исключение при enqueueSubscription → recordRunStarted уже вызван (anti-duplicate), затем recordFailure")
     void recordsFailureOnException() {
         when(jobProducer.hasActiveProcessingJob()).thenReturn(false);
         when(jobProducer.getQueueLength()).thenReturn(0L);
@@ -230,8 +230,10 @@ class SubscriptionSchedulerTest {
 
         scheduler.runDueSubscriptions();
 
+        // recordRunStarted вызывается ДО enqueue: если процесс упадёт между шагами,
+        // подписка не выстрелит повторно в следующем тике (lastRunAt уже выставлен).
+        verify(subscriptionService).recordRunStarted(4L);
         verify(subscriptionService).recordFailure(4L);
-        verify(subscriptionService, never()).recordRunStarted(anyLong());
     }
 
     @Test
