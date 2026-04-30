@@ -49,7 +49,8 @@ class SubscriptionSchedulerTest {
 
     @BeforeEach
     void init() {
-        scheduler = new SubscriptionScheduler(repository, subscriptionService, jobProducer, chatRepository);
+        scheduler = new SubscriptionScheduler(repository, subscriptionService, jobProducer, chatRepository,
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
     }
 
     // ------------------------------------------------------------------ helpers

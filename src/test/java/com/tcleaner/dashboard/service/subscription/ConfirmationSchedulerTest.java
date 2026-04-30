@@ -7,10 +7,11 @@ import com.tcleaner.core.BotLanguage;
 import com.tcleaner.dashboard.domain.ChatSubscription;
 import com.tcleaner.dashboard.repository.ChatSubscriptionRepository;
 import com.tcleaner.dashboard.service.ingestion.BotUserUpserter;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
@@ -45,8 +46,13 @@ class ConfirmationSchedulerTest {
     @Mock private BotKeyboards keyboards;
     @Mock private BotUserUpserter userUpserter;
 
-    @InjectMocks
     private ConfirmationScheduler scheduler;
+
+    @BeforeEach
+    void initScheduler() {
+        scheduler = new ConfirmationScheduler(repository, subscriptionService, messenger,
+                i18n, keyboards, userUpserter, new SimpleMeterRegistry());
+    }
 
     // ------------------------------------------------------------------ helpers
 

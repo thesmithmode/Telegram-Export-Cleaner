@@ -75,4 +75,32 @@ class TelegramMiniAppAuthVerifierTest {
         assertThatThrownBy(() -> verifier.verify(data))
                 .isInstanceOf(TelegramAuthenticationException.class);
     }
+
+    @Test
+    void malformedHexHashThrows() throws Exception {
+        // Атакующий шлёт hash, но не hex-строку — decodeHexOrNull вернёт null,
+        // verify должен отклонить, не упасть на NPE.
+        Clock clock = Clock.fixed(Instant.ofEpochSecond(1_000_100L), ZoneOffset.UTC);
+        TelegramMiniAppAuthVerifier verifier = new TelegramMiniAppAuthVerifier(BOT_TOKEN, clock);
+        TelegramMiniAppLoginData data = TelegramMiniAppLoginData.parse(
+                "auth_date=1000000&id=111&hash=NOT_A_VALID_HEX_STRING");
+
+        assertThatThrownBy(() -> verifier.verify(data))
+                .isInstanceOf(TelegramAuthenticationException.class)
+                .hasMessageContaining("hash");
+    }
+
+    @Test
+    void wrongBotTokenThrows() throws Exception {
+        // Hash вычислен для одного бота, проверяется другим — провал.
+        // Защищает от ситуации, когда атакующий получил initData из другого бота
+        // и подсовывает её на login.
+        Clock clock = Clock.fixed(Instant.ofEpochSecond(1_000_100L), ZoneOffset.UTC);
+        TelegramMiniAppAuthVerifier verifier = new TelegramMiniAppAuthVerifier(
+                "999999:OTHER_BOT_TOKEN", clock);
+
+        assertThatThrownBy(() -> verifier.verify(validData(1_000_000L)))
+                .isInstanceOf(TelegramAuthenticationException.class)
+                .hasMessageContaining("hash");
+    }
 }

@@ -20,6 +20,8 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeast;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
@@ -96,5 +98,46 @@ class TelegramControllerBytesCountTest {
         mockMvc.perform(asyncDispatch(asyncResult)).andExpect(status().isOk());
 
         verify(statsPublisher, org.mockito.Mockito.never()).publish(any());
+    }
+
+    @Test
+    @DisplayName("POST /api/convert при ошибке стриминга — публикуется EXPORT_FAILED")
+    void publishesFailedOnStreamingError() throws Exception {
+        // Воспроизводим ошибку, которая возникает уже после старта streaming
+        // (response status уже 200, headers отправлены — клиент получит обрезанный output).
+        doThrow(new RuntimeException("simulated streaming failure"))
+                .when(mockExporter).processFileStreaming(any(), any(), any());
+
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "result.json", "application/json",
+                "{\"messages\":[]}".getBytes());
+
+        MvcResult asyncResult = mockMvc.perform(multipart("/api/convert")
+                        .file(file)
+                        .param("taskId", "task-fail")
+                        .param("botUserId", "42"))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+        mockMvc.perform(asyncDispatch(asyncResult));
+
+        ArgumentCaptor<StatsEventPayload> captor = ArgumentCaptor.forClass(StatsEventPayload.class);
+        verify(statsPublisher, atLeastOnce()).publish(captor.capture());
+
+        List<StatsEventPayload> published = captor.getAllValues();
+        StatsEventPayload failed = published.stream()
+                .filter(p -> p.getType() == StatsEventType.EXPORT_FAILED)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError(
+                        "EXPORT_FAILED должен быть опубликован при ошибке стриминга, "
+                                + "получено: " + published.stream().map(StatsEventPayload::getType).toList()));
+
+        assertThat(failed.getTaskId()).isEqualTo("task-fail");
+        assertThat(failed.getBotUserId()).isEqualTo(42L);
+        assertThat(failed.getError()).isNotBlank();
+
+        // EXPORT_COMPLETED НЕ должен публиковаться при failure — иначе аналитика
+        // считала бы экспорт как successful.
+        assertThat(published.stream().map(StatsEventPayload::getType))
+                .doesNotContain(StatsEventType.EXPORT_COMPLETED);
     }
 }

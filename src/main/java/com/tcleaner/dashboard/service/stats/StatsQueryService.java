@@ -25,10 +25,16 @@ import static com.tcleaner.dashboard.config.CacheConfig.PROFILE;
 
 /**
  * Читающая сторона дашборда: агрегации через native SQL (SQLite + strftime-bucket'ы).
- * Все методы read-only — транзакция не открывается; JdbcTemplate использует DataSource
- * бин из {@code DashboardDataSourceConfig}.
+ * Все методы read-only. JdbcTemplate шарит spring.datasource с JPA, поэтому
+ * @Transactional(readOnly=true) корректно открывает транзакцию через
+ * JpaTransactionManager, а JdbcTemplate берёт connection из неё через
+ * DataSourceUtils. ВАЖНО: sqlite-jdbc игнорирует Connection.setReadOnly() —
+ * флаг служит интенцией для читателя и Hibernate FlushMode hint, но физически
+ * write-statement через JdbcTemplate не блокируется. Не добавлять write-методы
+ * в этот класс.
  */
 @Service
+@org.springframework.transaction.annotation.Transactional(readOnly = true)
 public class StatsQueryService {
 
     private final JdbcTemplate jdbc;
@@ -188,15 +194,17 @@ public class StatsQueryService {
         Object[] args = byUser(botUserId)
                 ? new Object[]{from, to, botUserId}
                 : new Object[]{from, to};
-        List<Map<String, Object>> rows = jdbc.queryForList(sql, args);
+        List<StatusBreakdownRow> rows = jdbc.query(sql,
+                (rs, n) -> new StatusBreakdownRow(rs.getString("status"), rs.getLong("cnt")),
+                args);
         Map<String, Long> result = new LinkedHashMap<>();
-        for (Map<String, Object> row : rows) {
-            result.put(
-                    (String) row.get("status"),
-                    ((Number) row.get("cnt")).longValue());
+        for (StatusBreakdownRow row : rows) {
+            result.put(row.status(), row.count());
         }
         return result;
     }
+
+    private record StatusBreakdownRow(String status, long count) {}
 
     @Cacheable(value = HISTORICAL, key = "#period.toString() + '_' + #metric + '_' + #botUserId")
     public List<TimeSeriesPointDto> timeSeries(StatsPeriod period, String metric, Long botUserId) {
@@ -218,9 +226,16 @@ public class StatsQueryService {
         Object[] args = byUser(botUserId)
                 ? new Object[]{from, to, botUserId}
                 : new Object[]{from, to};
-        return jdbc.query(sql,
+        List<TimeSeriesPointDto> raw = jdbc.query(sql,
                 (rs, n) -> new TimeSeriesPointDto(rs.getString("period"), rs.getLong("value")),
                 args);
+
+        Map<String, Long> filled = new LinkedHashMap<>();
+        period.allPeriodKeys().forEach(k -> filled.put(k, 0L));
+        raw.forEach(p -> filled.put(p.period(), p.value()));
+        return filled.entrySet().stream()
+                .map(e -> new TimeSeriesPointDto(e.getKey(), e.getValue()))
+                .toList();
     }
 
     /**
@@ -285,7 +300,10 @@ public class StatsQueryService {
     }
 
     private static Long nullableLong(Object o) {
-        return o == null ? null : ((Number) o).longValue();
+        if (o instanceof Number n) {
+            return n.longValue();
+        }
+        return null;
     }
 
     /** SQLite "YYYY-MM-DD HH:MM:SS.sss" → ISO-8601 "YYYY-MM-DDTHH:MM:SS.sssZ" для JS Date. */

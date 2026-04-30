@@ -216,7 +216,7 @@ class DashboardApiControllerTest {
     // ─── /stats/timeseries ───────────────────────────────────────────────────
 
     @Test
-    @DisplayName("ADMIN: /stats/timeseries?metric=exports — 3 точки")
+    @DisplayName("ADMIN: /stats/timeseries?metric=exports — все 8 дней (пустые = 0)")
     void timeSeriesAdmin() throws Exception {
         mockMvc.perform(get("/dashboard/api/stats/timeseries")
                         .param("period", "custom")
@@ -225,7 +225,7 @@ class DashboardApiControllerTest {
                         .param("metric", "exports")
                         .with(user(ADMIN)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$", org.hamcrest.Matchers.hasSize(3)));
+                .andExpect(jsonPath("$", org.hamcrest.Matchers.hasSize(8)));
     }
 
     @Test

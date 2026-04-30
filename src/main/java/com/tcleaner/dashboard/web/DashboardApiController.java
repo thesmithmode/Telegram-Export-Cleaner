@@ -177,8 +177,9 @@ public class DashboardApiController {
             case "day" -> StatsPeriod.Granularity.DAY;
             case "week" -> StatsPeriod.Granularity.WEEK;
             case "month" -> StatsPeriod.Granularity.MONTH;
-            default -> throw new IllegalArgumentException(
-                    "Невалидная granularity: " + granularity + " (ожидалось day/week/month/auto)");
+            default -> throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST,
+                    "Невалидная granularity (ожидалось day/week/month/auto)");
         };
         return new StatsPeriod(base.from(), base.to(), g);
     }

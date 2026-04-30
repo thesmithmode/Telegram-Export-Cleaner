@@ -1,5 +1,8 @@
 # Деплой на чистый сервер
 
+> **Это инструкция для production VPS** (HTTPS через Traefik+ACME).
+> Для локального запуска на dev-машине см. [`SETUP.md`](SETUP.md).
+
 Пошаговая инструкция для разворачивания Telegram Export Cleaner на VPS
 с доменом `your-domain.example.com`.
 

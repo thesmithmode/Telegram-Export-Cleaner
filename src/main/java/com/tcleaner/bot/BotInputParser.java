@@ -12,7 +12,7 @@ import java.util.regex.Pattern;
 public final class BotInputParser {
 
     private static final Pattern TME_LINK_PATTERN =
-            Pattern.compile("https?://t\\.me/([a-zA-Z][a-zA-Z0-9_]{3,})(?:/(\\d+))?");
+            Pattern.compile("https?://t\\.me/([a-zA-Z][a-zA-Z0-9_]{3,})(?:/(\\d{1,10}))?");
 
     private static final Pattern USERNAME_PATTERN =
             Pattern.compile("^@([a-zA-Z][a-zA-Z0-9_]{3,})$");

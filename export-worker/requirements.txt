@@ -25,5 +25,5 @@ msgpack==1.0.7
 # SQLite async driver (disk-based message cache)
 aiosqlite==0.20.0
 
-# Environment management
-python-dotenv==1.0.0
+# Environment management (1.2.2+ закрывает GHSA-mf9w-mj56-hr94)
+python-dotenv==1.2.2

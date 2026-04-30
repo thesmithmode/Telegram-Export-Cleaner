@@ -45,6 +45,8 @@ public class FeedbackController {
             case RATE_LIMITED -> throw new ResponseStatusException(TOO_MANY_REQUESTS, "Feedback rate limit");
             case SEND_FAILED  -> throw new ResponseStatusException(SERVICE_UNAVAILABLE, "Telegram API unavailable");
             case FORBIDDEN    -> throw new ResponseStatusException(FORBIDDEN, "Admin cannot send feedback to self");
+            // fail-loud если enum расширят без обновления switch (Java 21 emit MatchException → 500).
+            default -> throw new IllegalStateException("Unhandled FeedbackService.Result: " + r);
         };
     }
 }

@@ -43,6 +43,7 @@ class ExportBotTest {
     private BotMessenger messengerMock;
     private BotUserUpserter userUpserterMock;
     private com.tcleaner.dashboard.service.subscription.SubscriptionService subscriptionServiceMock;
+    private BotSecurityGate securityGateMock;
     private BotI18n i18n;
     private ExportBot bot;
 
@@ -52,6 +53,9 @@ class ExportBotTest {
         messengerMock = mock(BotMessenger.class);
         userUpserterMock = mock(BotUserUpserter.class);
         subscriptionServiceMock = mock(com.tcleaner.dashboard.service.subscription.SubscriptionService.class);
+        securityGateMock = mock(BotSecurityGate.class);
+        when(securityGateMock.isBlocked(anyLong())).thenReturn(false);
+        when(securityGateMock.isFlooded(anyLong())).thenReturn(false);
 
         // По умолчанию — юзер уже выбрал русский (существующая проверка текстов в assertions
         // построена под русский; тесты, специфичные для выбора языка, явно перекрывают).
@@ -79,7 +83,9 @@ class ExportBotTest {
         when(noPublisher.getIfAvailable()).thenReturn(null);
         bot = new ExportBot("token", "https://test.example.com/dashboard/mini-app",
                 jobProducerMock, messengerMock, i18n, new BotKeyboards(i18n),
-                new BotSessionRegistry(), userUpserterMock, noPublisher, subscriptionServiceMock);
+                new BotSessionRegistry(), userUpserterMock, noPublisher, subscriptionServiceMock,
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry(),
+                new QueueDisplayBuilder(i18n), securityGateMock);
     }
 
     private static ReloadableResourceBundleMessageSource newTestMessageSource() {
@@ -563,7 +569,9 @@ class ExportBotTest {
             new ExportBot("token", url, jobProducerMock, messengerMock,
                     i18n, new BotKeyboards(i18n), new BotSessionRegistry(),
                     userUpserterMock, emptyPublisher(),
-                    mock(com.tcleaner.dashboard.service.subscription.SubscriptionService.class));
+                    mock(com.tcleaner.dashboard.service.subscription.SubscriptionService.class),
+                    new io.micrometer.core.instrument.simple.SimpleMeterRegistry(),
+                    new QueueDisplayBuilder(i18n), securityGateMock);
         }
 
         @Test
@@ -676,6 +684,65 @@ class ExportBotTest {
         void msgWithArgs() {
             String result = i18n.msg(BotLanguage.RU, "bot.cancel.ok", "task_123");
             assertThat(result).contains("task_123").contains("отменён");
+        }
+    }
+
+    @Nested
+    @DisplayName("Security gate: blacklist и flood protection")
+    class SecurityGate {
+
+        @Test
+        @DisplayName("Заблокированный пользователь — сообщение тихо игнорируется")
+        void blockedUserMessageIgnored() {
+            when(securityGateMock.isBlocked(123L)).thenReturn(true);
+
+            bot.consume(createTextMessageUpdate(123L, "/start"));
+
+            verify(messengerMock, never()).send(anyLong(), any());
+            verify(messengerMock, never()).sendWithKeyboard(anyLong(), any(), any());
+        }
+
+        @Test
+        @DisplayName("Заблокированный пользователь — callback тихо игнорируется")
+        void blockedUserCallbackIgnored() {
+            when(securityGateMock.isBlocked(123L)).thenReturn(true);
+
+            bot.consume(createCallbackUpdate(123L, ExportBot.CB_EXPORT_ALL));
+
+            verify(messengerMock, never()).editMessage(anyLong(), anyInt(), any(), any());
+            verify(messengerMock, never()).answerCallback(any());
+        }
+
+        @Test
+        @DisplayName("Flood: превышение лимита — сообщение тихо игнорируется")
+        void floodedUserMessageIgnored() {
+            when(securityGateMock.isFlooded(123L)).thenReturn(true);
+
+            bot.consume(createTextMessageUpdate(123L, "/start"));
+
+            verify(messengerMock, never()).send(anyLong(), any());
+            verify(messengerMock, never()).sendWithKeyboard(anyLong(), any(), any());
+        }
+
+        @Test
+        @DisplayName("Незаблокированный незафлуженный пользователь обрабатывается нормально")
+        void normalUserProcessed() {
+            when(securityGateMock.isBlocked(123L)).thenReturn(false);
+            when(securityGateMock.isFlooded(123L)).thenReturn(false);
+
+            bot.consume(createTextMessageUpdate(123L, "/start"));
+
+            verify(messengerMock).sendWithKeyboard(eq(123L), any(), any());
+        }
+
+        @Test
+        @DisplayName("isFlooded не вызывается если пользователь уже заблокирован")
+        void floodNotCheckedForBlockedUser() {
+            when(securityGateMock.isBlocked(123L)).thenReturn(true);
+
+            bot.consume(createTextMessageUpdate(123L, "/start"));
+
+            verify(securityGateMock, never()).isFlooded(anyLong());
         }
     }
 }

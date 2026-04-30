@@ -22,7 +22,7 @@ public record OverviewDto(
         Double deltaMessages,
         /** Изменение totalBytes, %. null если нет данных. */
         Double deltaBytes,
-        /** Изменение totalUsers, %. null если нет данных (пока не поддерживается — всегда null). */
+        /** Изменение totalUsers vs предыдущий период той же длины, %. null если нет данных. */
         Double deltaUsers
 ) {
     /** Пустой DTO — для /api/me/overview когда у пользователя ещё нет данных. */

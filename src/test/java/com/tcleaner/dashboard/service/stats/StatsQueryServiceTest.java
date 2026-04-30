@@ -256,36 +256,41 @@ class StatsQueryServiceTest {
     // ─── timeSeries ───────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("timeSeries metric=exports (DAY): 3 точки по разным датам")
+    @DisplayName("timeSeries metric=exports (DAY): все дни периода, пустые = 0")
     void timeSeriesExports() {
         List<TimeSeriesPointDto> pts = svc.timeSeries(PERIOD, "exports", null);
 
-        // 3 события в разные дни: 2026-04-10, 2026-04-12, 2026-04-14
-        assertThat(pts).hasSize(3);
+        // PERIOD = 2026-04-08..2026-04-15 = 8 дней
+        assertThat(pts).hasSize(8);
+        // события только на 10, 12, 14 — остальные 0
+        assertThat(pts).extracting(TimeSeriesPointDto::period)
+                .containsExactly("2026-04-08", "2026-04-09", "2026-04-10",
+                        "2026-04-11", "2026-04-12", "2026-04-13",
+                        "2026-04-14", "2026-04-15");
         assertThat(pts).extracting(TimeSeriesPointDto::value)
-                .containsExactly(1L, 1L, 1L);
-        assertThat(pts.get(0).period()).isEqualTo("2026-04-10");
+                .containsExactly(0L, 0L, 1L, 0L, 1L, 0L, 1L, 0L);
     }
 
     @Test
-    @DisplayName("timeSeries metric=bytes: суммирует bytes_count по бакету")
+    @DisplayName("timeSeries metric=bytes: все дни периода, пустые = 0")
     void timeSeriesBytes() {
         List<TimeSeriesPointDto> pts = svc.timeSeries(PERIOD, "bytes", null);
 
-        assertThat(pts).hasSize(3);
-        // t1: 1000, t2: 2000, t3: 500
+        assertThat(pts).hasSize(8);
+        // t1: 1000 (Apr 10), t2: 2000 (Apr 12), t3: 500 (Apr 14), остальные 0
         assertThat(pts).extracting(TimeSeriesPointDto::value)
-                .containsExactly(1000L, 2000L, 500L);
+                .containsExactly(0L, 0L, 1000L, 0L, 2000L, 0L, 500L, 0L);
     }
 
     @Test
-    @DisplayName("timeSeries metric=messages для botUserId=1: 2 точки")
+    @DisplayName("timeSeries metric=messages для botUserId=1: все дни, пустые = 0")
     void timeSeriesMessagesForUser1() {
         List<TimeSeriesPointDto> pts = svc.timeSeries(PERIOD, "messages", 1L);
 
-        assertThat(pts).hasSize(2);
+        assertThat(pts).hasSize(8);
+        // alice: Apr 10 = 100, Apr 12 = 200, остальные 0
         assertThat(pts).extracting(TimeSeriesPointDto::value)
-                .containsExactly(100L, 200L);
+                .containsExactly(0L, 0L, 100L, 0L, 200L, 0L, 0L, 0L);
     }
 
     // ─── recentEvents ──────────────────────────────────────────────────────────

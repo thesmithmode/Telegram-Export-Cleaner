@@ -1,30 +1,45 @@
-/**
- * chats.js — бар-чарт топ-20 + таблица чатов на /dashboard/chats.
- * Данные: GET /dashboard/api/stats/chats.
- */
 (function () {
     "use strict";
 
-    const { fetchJson, formatNumber, formatBytes, readPeriodFromUrl, escapeHtml,
+    const { fetchJson, formatNumber, formatBytes, readPeriodFromUrl,
             renderBarChart, setCountBadge, initSortableTable, onReady } = window.Dashboard || {};
     if (!fetchJson) { return; }
 
+    function el(tag, props, ...children) {
+        const node = document.createElement(tag);
+        if (props) {
+            for (const [k, v] of Object.entries(props)) {
+                if (k === "style") { node.style.cssText = v; }
+                else if (k === "text") { node.textContent = v; }
+                else if (k === "colSpan") { node.colSpan = v; }
+                else { node.setAttribute(k, v); }
+            }
+        }
+        for (const c of children) {
+            if (c == null || c === false) continue;
+            node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+        }
+        return node;
+    }
+
     function row(c) {
-        const name = c.chatTitle
-            ? escapeHtml(c.chatTitle)
-            : `<code>${escapeHtml(String(c.canonicalChatId))}</code>`;
-        return `<tr>
-          <td>${name}</td>
-          <td>${formatNumber(c.exportCount)}</td>
-          <td>${formatNumber(c.totalMessages)}</td>
-          <td>${formatBytes(c.totalBytes)}</td>
-        </tr>`;
+        const nameNode = c.chatTitle
+            ? document.createTextNode(c.chatTitle)
+            : el("code", { text: String(c.canonicalChatId) });
+        return el("tr", null,
+            el("td", null, nameNode),
+            el("td", { text: formatNumber(c.exportCount) }),
+            el("td", { text: formatNumber(c.totalMessages) }),
+            el("td", { text: formatBytes(c.totalBytes) }));
+    }
+
+    function emptyRow(text) {
+        return el("tr", null,
+            el("td", { colSpan: 4, style: "text-align:center;color:var(--muted)", text }));
     }
 
     function render(tbody, rows) {
-        tbody.innerHTML = rows.length
-            ? rows.map(row).join("")
-            : `<tr><td colspan="4" style="text-align:center;color:var(--muted)">Нет данных</td></tr>`;
+        tbody.replaceChildren(...(rows.length ? rows.map(row) : [emptyRow("Нет данных")]));
     }
 
     function sortValue(c, key) {
@@ -56,10 +71,8 @@
             }
         } catch (e) {
             if (tbody) {
-                const ec = document.createElement("td");
-                ec.colSpan = 4; ec.style.color = "var(--danger)"; ec.textContent = `Ошибка: ${e.message}`;
-                tbody.textContent = "";
-                tbody.appendChild(document.createElement("tr")).appendChild(ec);
+                tbody.replaceChildren(el("tr", null,
+                    el("td", { colSpan: 4, style: "color:var(--danger)", text: `Ошибка: ${e.message}` })));
             }
         }
     }

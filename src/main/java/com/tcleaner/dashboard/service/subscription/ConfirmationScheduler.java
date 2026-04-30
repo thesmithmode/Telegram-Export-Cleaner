@@ -7,8 +7,11 @@ import com.tcleaner.core.BotLanguage;
 import com.tcleaner.dashboard.domain.ChatSubscription;
 import com.tcleaner.dashboard.repository.ChatSubscriptionRepository;
 import com.tcleaner.dashboard.service.ingestion.BotUserUpserter;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -17,6 +20,7 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMa
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Планировщик confirmation-flow для подписок.
@@ -51,19 +55,24 @@ public class ConfirmationScheduler {
     private final BotI18n i18n;
     private final BotKeyboards keyboards;
     private final BotUserUpserter userUpserter;
+    private final Counter cyclesCounter;
+    private final Counter errorsCounter;
 
     public ConfirmationScheduler(ChatSubscriptionRepository repository,
                                  SubscriptionService subscriptionService,
                                  BotMessenger messenger,
                                  BotI18n i18n,
                                  BotKeyboards keyboards,
-                                 BotUserUpserter userUpserter) {
+                                 BotUserUpserter userUpserter,
+                                 MeterRegistry meterRegistry) {
         this.repository = repository;
         this.subscriptionService = subscriptionService;
         this.messenger = messenger;
         this.i18n = i18n;
         this.keyboards = keyboards;
         this.userUpserter = userUpserter;
+        this.cyclesCounter = Counter.builder("subscription.confirmation.cycles").register(meterRegistry);
+        this.errorsCounter = Counter.builder("subscription.confirmation.errors").register(meterRegistry);
     }
 
     /**
@@ -73,12 +82,19 @@ public class ConfirmationScheduler {
      */
     @Scheduled(cron = "${subscription.confirmation.cron:0 0 7 * * *}")
     public void tick() {
+        MDC.put("cycle_id", UUID.randomUUID().toString());
+        MDC.put("scheduler", "confirmation");
+        cyclesCounter.increment();
         try {
             Instant now = Instant.now();
             sendConfirmationPrompts(now);
             archiveUnconfirmed(now);
         } catch (Exception e) {
+            errorsCounter.increment();
             log.error("Critical error in ConfirmationScheduler: {}", e.getMessage(), e);
+        } finally {
+            MDC.remove("cycle_id");
+            MDC.remove("scheduler");
         }
     }
 
@@ -104,6 +120,7 @@ public class ConfirmationScheduler {
             try {
                 subscriptionService.markConfirmSent(sub.getId());
             } catch (Exception e) {
+                errorsCounter.increment();
                 log.error("Failed to markConfirmSent for subscription {}: {}", sub.getId(), e.getMessage(), e);
                 continue;
             }
@@ -114,6 +131,7 @@ public class ConfirmationScheduler {
                         i18n.msg(lang, "bot.sub.confirm.request"), kb);
                 log.info("Confirmation prompt sent for subscription {}", sub.getId());
             } catch (Exception e) {
+                errorsCounter.increment();
                 log.error("Failed to send confirmation for subscription {}: {}", sub.getId(), e.getMessage(), e);
             }
         }
@@ -141,6 +159,7 @@ public class ConfirmationScheduler {
                 messenger.trySend(sub.getBotUserId(), i18n.msg(lang, "bot.sub.archived"));
                 log.info("Subscription {} archived after 48h without confirmation", sub.getId());
             } catch (Exception e) {
+                errorsCounter.increment();
                 log.error("Failed to archive subscription {}: {}", sub.getId(), e.getMessage(), e);
             }
         }

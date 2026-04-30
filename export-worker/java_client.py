@@ -25,21 +25,23 @@ class JavaBotClient:
         self.max_retries = max_retries
         self.bot_token = settings.TELEGRAM_BOT_TOKEN
         
-        # Senior Configuration: 
-        # - read=None: Wait indefinitely for Java to process the massive file.
-        # - write=None: Don't timeout while streaming gigabytes to Java.
+        # /api/convert: write фаза — multi-GB upload (write=300s между чанками,
+        # не суммарно). read=None — Java может долго парсить и стримить cleaned-text
+        # обратно; точечного нижнего предела на read нет, suggested timeout
+        # покрывается общим timeout=self.timeout.
         custom_timeout = httpx.Timeout(
             timeout=float(self.timeout),
             read=None,
             write=300.0,
             connect=30.0
         )
-        # X-API-Key проставляется на все запросы через default headers —
-        # java-bot ApiKeyFilter блокирует /api/** без него (кроме /api/health).
         default_headers = {}
         if settings.JAVA_API_KEY:
             default_headers["X-API-Key"] = settings.JAVA_API_KEY
         self._http_client = httpx.AsyncClient(timeout=custom_timeout, headers=default_headers)
+        # Отдельный клиент для Telegram Bot API: ограниченное чтение, чтобы зависший
+        # сетевой запрос не повисал бесконечно (read=None из основного клиента не подходит).
+        self._tg_timeout = httpx.Timeout(timeout=300.0, read=300.0, write=300.0, connect=30.0)
         logger.info(f"Java API Client initialized (O(1) Memory, Timeout: {self.timeout}s)")
 
     async def send_response(self, payload: SendResponsePayload) -> bool:
@@ -210,7 +212,6 @@ class JavaBotClient:
         retry_count = 0
         while retry_count <= self.max_retries:
             try:
-                # 'with open' as a file handle allows httpx to stream from disk
                 with open(file_path, "rb") as f:
                     files = {"file": ("result.json", f, "application/json")}
                     response = await self._http_client.post(
@@ -221,18 +222,23 @@ class JavaBotClient:
 
                 if response.status_code == 200:
                     return response.text
-                
+
                 logger.error(f"Java API error {response.status_code}: {response.text[:200]}")
                 if response.status_code == 400:
                     return None
-                    
+
+            except (FileNotFoundError, PermissionError) as fs_err:
+                # Файл пропал или /tmp read-only — ретрай бесполезен.
+                logger.error(f"Export file unavailable {file_path}: {fs_err}")
+                return None
             except Exception as e:
+                # Прочие OSError (disk full, transient FS issue) и сетевые ошибки → retry.
                 logger.error(f"Upload to Java failed (attempt {retry_count + 1}): {e}")
-            
+
             retry_count += 1
             if retry_count <= self.max_retries:
                 await asyncio.sleep(settings.RETRY_BASE_DELAY * retry_count)
-        
+
         return None
 
     @staticmethod
@@ -286,6 +292,7 @@ class JavaBotClient:
                 url,
                 data={"chat_id": chat_id, "caption": caption},
                 files={"document": (filename, file_bytes, "text/plain")},
+                timeout=self._tg_timeout,
             )
             return response.status_code == 200
         except Exception as e:
@@ -308,14 +315,17 @@ class JavaBotClient:
         try:
             resp = await self._http_client.get(f"{self.base_url}/api/health")
             return resp.status_code == 200
-        except Exception:
+        except Exception as e:
+            logger.debug("Java API connectivity check failed: %s", e)
             return False
 
     async def notify_user_failure(self, chat_id, task_id, error):
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
         text = f"❌ Export failed (task {task_id})\n\nReason: {error}"
         try:
-            await self._http_client.post(url, data={"chat_id": chat_id, "text": text})
+            await self._http_client.post(
+                url, data={"chat_id": chat_id, "text": text}, timeout=self._tg_timeout
+            )
         except Exception as e:
             logger.warning(f"Failed to notify user {chat_id} about failure: {e}")
 
@@ -331,7 +341,9 @@ class JavaBotClient:
             f"Новых сообщений в окне {from_str} → {to_str} нет."
         )
         try:
-            response = await self._http_client.post(url, data={"chat_id": chat_id, "text": text})
+            response = await self._http_client.post(
+                url, data={"chat_id": chat_id, "text": text}, timeout=self._tg_timeout
+            )
             if response.status_code != 200:
                 logger.warning(
                     f"Bot API rejected subscription notification for {chat_id}: "
@@ -369,7 +381,9 @@ class JavaBotClient:
                 "Возможно, стоит выбрать другой чат."
             )
         try:
-            await self._http_client.post(url, data={"chat_id": chat_id, "text": text})
+            await self._http_client.post(
+                url, data={"chat_id": chat_id, "text": text}, timeout=self._tg_timeout
+            )
         except Exception as e:
             logger.warning(f"Failed to notify user {chat_id} about empty export: {e}")
 
@@ -414,6 +428,7 @@ class JavaBotClient:
                     "message_id": msg_id,
                     "text": text,
                 },
+                timeout=self._tg_timeout,
             )
         except Exception as e:
             logger.debug("Failed to update queue position: %s", e)
@@ -466,6 +481,7 @@ class JavaBotClient:
                         "message_id": progress_message_id,
                         "text": text,
                     },
+                    timeout=self._tg_timeout,
                 )
                 return progress_message_id if resp.status_code == 200 else None
             else:
@@ -473,11 +489,13 @@ class JavaBotClient:
                 resp = await self._http_client.post(
                     url,
                     data={"chat_id": user_chat_id, "text": text},
+                    timeout=self._tg_timeout,
                 )
                 if resp.status_code == 200:
                     return resp.json().get("result", {}).get("message_id")
                 return None
-        except Exception:
+        except Exception as e:
+            logger.warning("Telegram progress edit/send failed: %s", e)
             return None
 
 # Progress-tracker tuning constants

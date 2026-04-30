@@ -1,12 +1,7 @@
-/**
- * events.js — raw-таблица последних экспортов на /dashboard/events.
- * Данные: GET /dashboard/api/stats/events.
- * Поддерживает фильтр по статусу без перезагрузки страницы.
- */
 (function () {
     "use strict";
 
-    const { fetchJson, formatNumber, formatBytes, formatDate, escapeHtml,
+    const { fetchJson, formatNumber, formatBytes, formatDate,
             setCountBadge, initSortableTable, onReady } = window.Dashboard || {};
     if (!fetchJson) { return; }
 
@@ -18,32 +13,58 @@
         cancelled: "status-chip--cancelled",
     };
 
+    function el(tag, props, ...children) {
+        const node = document.createElement(tag);
+        if (props) {
+            for (const [k, v] of Object.entries(props)) {
+                if (k === "style") { node.style.cssText = v; }
+                else if (k === "text") { node.textContent = v; }
+                else if (k === "class") { node.className = v; }
+                else if (k === "colSpan") { node.colSpan = v; }
+                else { node.setAttribute(k, v); }
+            }
+        }
+        for (const c of children) {
+            if (c == null || c === false) continue;
+            node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+        }
+        return node;
+    }
+
     function chip(status) {
         const cls = STATUS_CLASS[status] || "";
-        return `<span class="status-chip ${cls}">${escapeHtml(String(status ?? ""))}</span>`;
+        return el("span", { class: `status-chip ${cls}`, text: String(status ?? "") });
+    }
+
+    function userCell(e) {
+        if (e.username) return el("td", null, el("code", { text: "@" + e.username }));
+        if (e.botUserId) return el("td", null, el("code", { text: String(e.botUserId) }));
+        return el("td", { text: "—" });
+    }
+
+    function chatCell(e) {
+        if (e.chatTitle) return el("td", { text: e.chatTitle });
+        if (e.canonicalChatId) return el("td", null, el("code", { text: String(e.canonicalChatId) }));
+        return el("td", { text: "—" });
     }
 
     function row(e) {
-        const user = e.username
-            ? `<code>@${escapeHtml(e.username)}</code>`
-            : (e.botUserId ? `<code>${escapeHtml(String(e.botUserId))}</code>` : "—");
-        const chat = e.chatTitle
-            ? escapeHtml(e.chatTitle)
-            : (e.canonicalChatId ? `<code>${escapeHtml(String(e.canonicalChatId))}</code>` : "—");
-        return `<tr>
-          <td>${user}</td>
-          <td>${chat}</td>
-          <td>${chip(e.status)}</td>
-          <td>${formatNumber(e.messagesCount)}</td>
-          <td>${formatBytes(e.bytesCount)}</td>
-          <td>${formatDate(e.startedAt)}</td>
-        </tr>`;
+        return el("tr", null,
+            userCell(e),
+            chatCell(e),
+            el("td", null, chip(e.status)),
+            el("td", { text: formatNumber(e.messagesCount) }),
+            el("td", { text: formatBytes(e.bytesCount) }),
+            el("td", { text: formatDate(e.startedAt) }));
+    }
+
+    function emptyRow(text) {
+        return el("tr", null,
+            el("td", { colSpan: 6, style: "text-align:center;color:var(--muted)", text }));
     }
 
     function render(tbody, rows) {
-        tbody.innerHTML = rows.length
-            ? rows.map(row).join("")
-            : `<tr><td colspan="6" style="text-align:center;color:var(--muted)">Нет данных</td></tr>`;
+        tbody.replaceChildren(...(rows.length ? rows.map(row) : [emptyRow("Нет данных")]));
     }
 
     function sortValue(e, key) {
@@ -75,10 +96,8 @@
             }
         } catch (e) {
             if (e.name === "AbortError") { return; }
-            const ec = document.createElement("td");
-            ec.colSpan = 6; ec.style.color = "var(--danger)"; ec.textContent = `Ошибка: ${e.message}`;
-            tbody.textContent = "";
-            tbody.appendChild(document.createElement("tr")).appendChild(ec);
+            tbody.replaceChildren(el("tr", null,
+                el("td", { colSpan: 6, style: "color:var(--danger)", text: `Ошибка: ${e.message}` })));
         }
     }
 

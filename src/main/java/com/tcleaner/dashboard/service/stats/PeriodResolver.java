@@ -39,11 +39,16 @@ public class PeriodResolver {
         return resolve(period, customFrom, customTo, ZoneId.of("UTC"));
     }
 
+    private static final long MAX_CUSTOM_DAYS = 3 * 365L;
+
     private StatsPeriod resolveCustom(LocalDate from, LocalDate to, LocalDate today) {
         LocalDate f = from != null ? from : today.minusDays(30);
         LocalDate t = to != null ? to : today;
         if (t.isBefore(f)) {
             t = f;
+        }
+        if (java.time.temporal.ChronoUnit.DAYS.between(f, t) > MAX_CUSTOM_DAYS) {
+            f = t.minusDays(MAX_CUSTOM_DAYS);
         }
         long days = java.time.temporal.ChronoUnit.DAYS.between(f, t);
         StatsPeriod.Granularity granularity = days <= 31

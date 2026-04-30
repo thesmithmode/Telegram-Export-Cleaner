@@ -5,6 +5,8 @@ import com.tcleaner.core.TelegramExporter;
 import com.tcleaner.dashboard.events.StatsEventPayload;
 import com.tcleaner.dashboard.events.StatsEventType;
 import com.tcleaner.dashboard.events.StatsStreamPublisher;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
@@ -45,13 +47,16 @@ public class TelegramController {
     private static final Logger log = LoggerFactory.getLogger(TelegramController.class);
     private final TelegramExporter exporter;
     private final ObjectProvider<StatsStreamPublisher> statsPublisherProvider;
+    private final Counter publishErrorsCounter;
 
     public TelegramController(
             TelegramExporter exporter,
-            ObjectProvider<StatsStreamPublisher> statsPublisherProvider
+            ObjectProvider<StatsStreamPublisher> statsPublisherProvider,
+            MeterRegistry meterRegistry
     ) {
         this.exporter = exporter;
         this.statsPublisherProvider = statsPublisherProvider;
+        this.publishErrorsCounter = Counter.builder("stats.publish.errors").register(meterRegistry);
     }
 
     @PostMapping("/convert")
@@ -91,16 +96,27 @@ public class TelegramController {
         StreamingResponseBody responseBody = outputStream -> {
             CountingOutputStream counting = new CountingOutputStream(outputStream);
             boolean[] succeeded = {false};
+            String[] failureReason = {null};
             try (BufferedWriter writer = new BufferedWriter(
                     new OutputStreamWriter(counting, StandardCharsets.UTF_8))) {
                 exporter.processFileStreaming(tempFile, filter, writer);
                 writer.flush();
                 succeeded[0] = true;
             } catch (Exception e) {
+                // 200 + headers уже отправлены — клиент получает truncated output;
+                // publishFailed обязателен, иначе ExportEvent застрянет в STARTED.
                 log.error("ASYNCHRONOUS ERROR in streaming response", e);
+                failureReason[0] = e.getClass().getSimpleName()
+                        + (e.getMessage() != null ? ": " + e.getMessage() : "");
             } finally {
                 long bytesWritten = counting.getByteCount();
-                publishBytesAndCompleted(capturedTaskId, capturedBotUserId, capturedMessages, bytesWritten, capturedSubscriptionId, succeeded[0]);
+                if (succeeded[0]) {
+                    publishBytesAndCompleted(capturedTaskId, capturedBotUserId,
+                            capturedMessages, bytesWritten, capturedSubscriptionId);
+                } else {
+                    publishFailed(capturedTaskId, capturedBotUserId,
+                            capturedSubscriptionId, failureReason[0]);
+                }
                 try {
                     Files.deleteIfExists(tempFile);
                 } catch (IOException ex) {
@@ -117,11 +133,8 @@ public class TelegramController {
 
     private void publishBytesAndCompleted(String taskId, Long botUserId,
                                           Long messagesCount, long bytesWritten,
-                                          Long subscriptionId, boolean succeeded) {
+                                          Long subscriptionId) {
         if (taskId == null || taskId.isBlank()) {
-            return;
-        }
-        if (!succeeded) {
             return;
         }
         StatsStreamPublisher publisher = statsPublisherProvider.getIfAvailable();
@@ -137,7 +150,8 @@ public class TelegramController {
                     .ts(now)
                     .build());
         } catch (Exception ex) {
-            log.warn("bytes_measured не опубликовано: {}", ex.getMessage());
+            publishErrorsCounter.increment();
+            log.error("bytes_measured не опубликовано taskId={}: {}", taskId, ex.getMessage(), ex);
         }
         try {
             publisher.publish(StatsEventPayload.builder()
@@ -152,7 +166,33 @@ public class TelegramController {
                     .ts(now)
                     .build());
         } catch (Exception ex) {
-            log.warn("export.completed не опубликовано: {}", ex.getMessage());
+            publishErrorsCounter.increment();
+            log.error("export.completed не опубликовано taskId={}: {}", taskId, ex.getMessage(), ex);
+        }
+    }
+
+    private void publishFailed(String taskId, Long botUserId, Long subscriptionId, String reason) {
+        if (taskId == null || taskId.isBlank()) {
+            return;
+        }
+        StatsStreamPublisher publisher = statsPublisherProvider.getIfAvailable();
+        if (publisher == null) {
+            return;
+        }
+        try {
+            publisher.publish(StatsEventPayload.builder()
+                    .type(StatsEventType.EXPORT_FAILED)
+                    .taskId(taskId)
+                    .botUserId(botUserId)
+                    .subscriptionId(subscriptionId)
+                    .status("failed")
+                    .source("bot")
+                    .error(reason != null ? reason : "unknown_streaming_error")
+                    .ts(Instant.now())
+                    .build());
+        } catch (Exception ex) {
+            publishErrorsCounter.increment();
+            log.error("export.failed не опубликовано taskId={}: {}", taskId, ex.getMessage(), ex);
         }
     }
 

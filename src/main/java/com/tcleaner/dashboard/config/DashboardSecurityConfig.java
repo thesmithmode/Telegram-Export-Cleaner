@@ -83,6 +83,12 @@ public class DashboardSecurityConfig {
             .exceptionHandling(ex -> ex
                 .authenticationEntryPoint(new LoginUrlAuthenticationEntryPoint("/dashboard/login"))
                 .accessDeniedHandler(accessDeniedHandler))
+            // CSRF: отключён ТОЛЬКО для /dashboard/login/telegram.
+            // Mini App POST приходит из iframe Telegram WebView, нет Referer/Origin,
+            // CSRF token из cookie невозможен. Защита от подделки запроса —
+            // HMAC-SHA256 проверка initData (TelegramMiniAppAuthVerifier):
+            // подделать может только владелец bot_token. Эквивалент CSRF token.
+            // Все остальные mutating endpoints под /dashboard/** остаются с CSRF.
             .csrf(csrf -> csrf
                 .ignoringRequestMatchers("/dashboard/login/telegram"))
             .logout(logout -> logout

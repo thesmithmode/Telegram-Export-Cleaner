@@ -26,6 +26,16 @@ public class TelegramMiniAppAuthVerifier {
         this.clock = clock;
     }
 
+    /**
+     * Проверка initData по протоколу Telegram Mini App:
+     * <ol>
+     *   <li>HMAC-SHA256 hash совпадает (защита от подделки полей).</li>
+     *   <li>auth_date в окне ±MAX_AGE от текущего времени —
+     *       симметричная проверка покрывает и старые initData (replay вне окна)
+     *       и подозрительно «будущие» (clock skew атакующего).</li>
+     * </ol>
+     * Replay в пределах окна закрывается отдельно nonce'ом в {@code TelegramAuthController}.
+     */
     public void verify(TelegramMiniAppLoginData data) {
         if (data.hash() == null || data.hash().isBlank()) {
             throw new TelegramAuthenticationException("Отсутствует hash");

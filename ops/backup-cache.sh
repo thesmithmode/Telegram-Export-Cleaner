@@ -17,13 +17,18 @@
 
 set -uo pipefail
 
+# Бэкапы содержат сообщения и dashboard.db с ID пользователей — режим 700/600,
+# чтобы посторонние локальные пользователи на хосте их не читали.
+umask 077
+
 BASE="${TELEGRAM_CLEANER_BASE:-/var/lib/telegram-cleaner}"
 BACKUPS="$BASE/backups"
 STAMP="$(date -u +%Y%m%d)"
 LOCKFILE="${BACKUP_LOCKFILE:-/var/run/telegram-cleaner-backup.lock}"
 KEEP="${BACKUP_KEEP:-3}"
 
-mkdir -p "$BACKUPS"
+mkdir -p "$BACKUPS" || { echo "[$(date -u +%FT%TZ)] FATAL: mkdir $BACKUPS failed" >&2; exit 1; }
+chmod 700 "$BACKUPS" || { echo "[$(date -u +%FT%TZ)] FATAL: chmod 700 $BACKUPS failed" >&2; exit 1; }
 
 exec 9> "$LOCKFILE"
 if ! flock -n 9; then
@@ -63,11 +68,22 @@ backup_db() {
     size=$(du -h "$out" | cut -f1)
     echo "[$(date -u +%FT%TZ)] OK: $name -> $out ($size, ${elapsed}s)"
 
-    # shellcheck disable=SC2012
-    ls -1t "$BACKUPS/${name}-"*.db.gz 2>/dev/null | tail -n +$((KEEP + 1)) | while read -r old; do
-        rm -f -- "$old"
-        echo "[$(date -u +%FT%TZ)] rotated out: $old"
-    done
+    # NULL-safe rotation: ls/parsing рушится на пробелах/newline в имени.
+    # find -printf '%T@ %p\0' разделяет nul-байтом, sort/cut/head операют над
+    # этим разделителем; имена остаются нетронутыми.
+    local total
+    total=$(find "$BACKUPS" -maxdepth 1 -type f -name "${name}-*.db.gz" -printf '.' | wc -c)
+    if [[ "$total" -gt "$KEEP" ]]; then
+        local to_delete=$((total - KEEP))
+        find "$BACKUPS" -maxdepth 1 -type f -name "${name}-*.db.gz" -printf '%T@\t%p\0' \
+            | sort -z -n \
+            | head -z -n "$to_delete" \
+            | cut -z -f2 \
+            | while IFS= read -r -d '' old; do
+                rm -f -- "$old"
+                echo "[$(date -u +%FT%TZ)] rotated out: $old"
+            done
+    fi
 }
 
 backup_db "$BASE/cache/messages.db"      "messages" || had_error=1

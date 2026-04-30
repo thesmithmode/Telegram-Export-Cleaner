@@ -58,36 +58,40 @@ public class TelegramAuthController {
     public String callback(@RequestParam("initData") String initData,
                            HttpServletRequest request,
                            HttpServletResponse response) {
+        String ip = clientIp(request);
         TelegramMiniAppLoginData data;
         try {
             data = TelegramMiniAppLoginData.parse(initData);
         } catch (IllegalArgumentException e) {
-            log.warn("Telegram Mini App login: ошибка парсинга initData: {}", e.getMessage());
+            log.warn("Telegram Mini App login: ошибка парсинга initData ip={}: {}", ip, e.getMessage());
             return "redirect:/dashboard/login?error=invalid";
         }
 
         try {
             verifier.verify(data);
         } catch (TelegramAuthenticationException e) {
-            log.warn("Telegram Mini App login rejected: id={} reason={}", data.id(), e.getMessage());
+            log.warn("Telegram Mini App login rejected: id={} ip={} reason={}", data.id(), ip, e.getMessage());
             return "redirect:/dashboard/login?error=invalid";
         }
 
         // Replay protection: одноразовый nonce по hash, TTL = MAX_AGE окна initData.
+        // Fail-closed: при недоступности Redis отказываем в логине, иначе replay-окно
+        // открыто на всё время outage (initData можно использовать повторно до auth_date+MAX_AGE).
         try {
             Boolean isNew = redis.opsForValue().setIfAbsent(
                     NONCE_PREFIX + data.hash(), "1", TelegramMiniAppAuthVerifier.MAX_AGE);
             if (!Boolean.TRUE.equals(isNew)) {
-                log.warn("Telegram Mini App login rejected: replay detected, id={}", data.id());
+                log.warn("Telegram Mini App login rejected: replay detected, id={} ip={}", data.id(), ip);
                 return "redirect:/dashboard/login?error=invalid";
             }
         } catch (Exception e) {
-            log.warn("Redis nonce check failed, skipping replay protection: {}", e.getMessage());
+            log.error("Redis nonce check failed ip={}: {}", ip, e.getMessage(), e);
+            return "redirect:/dashboard/login?error=infra";
         }
 
         long id = data.id();
         if (id <= 0) {
-            log.warn("Telegram Mini App login rejected: отсутствует user.id в initData");
+            log.warn("Telegram Mini App login rejected: отсутствует user.id в initData ip={}", ip);
             return "redirect:/dashboard/login?error=invalid";
         }
 
@@ -108,8 +112,8 @@ public class TelegramAuthController {
                     && sc.getAuthentication().getPrincipal() instanceof DashboardUserDetails prev) {
                 Long prevBotUserId = prev.getBotUserId();
                 if (prevBotUserId != null && !prevBotUserId.equals(id)) {
-                    log.warn("Mini-App: смена principal в сессии prevBotUserId={} → newTgId={} (cross-user session reuse)",
-                            prevBotUserId, id);
+                    log.warn("Mini-App: смена principal в сессии prevBotUserId={} → newTgId={} ip={} (cross-user session reuse)",
+                            prevBotUserId, id, ip);
                 }
             }
             oldSession.invalidate();
@@ -125,17 +129,37 @@ public class TelegramAuthController {
 
         writeTgUidCookie(response, id, request.isSecure());
 
-        log.info("Telegram Mini App login: tgId={} role={} user='{}'", id, role, user.getUsername());
+        log.info("Telegram Mini App login: tgId={} role={} user='{}' ip={}", id, role, user.getUsername(), ip);
         return role == DashboardRole.ADMIN
                 ? "redirect:/dashboard/overview"
                 : "redirect:/dashboard/me";
     }
 
-    // Клиентский identity-guard читает это значение JS-ом и сравнивает
-    // с Telegram.WebApp.initDataUnsafe.user.id. Mismatch → принудительный
-    // re-login через POST /dashboard/login/telegram. Закрывает дыру
-    // переиспользования WebView в Telegram attachment menu, когда
-    // JSESSIONID старого юзера прилетает в сессию нового.
+    /**
+     * server.forward-headers-strategy=NATIVE включает Tomcat RemoteIpValve —
+     * она парсит X-Forwarded-For, стрипает internal-proxy hops и кладёт реальный
+     * IP клиента в req.getRemoteAddr(). Сырой XFF подделывается клиентом,
+     * RemoteIpValve обработанный — нет.
+     */
+    private static String clientIp(HttpServletRequest req) {
+        return req.getRemoteAddr();
+    }
+
+    /**
+     * Cookie tg_uid — намеренный набор атрибутов:
+     * <ul>
+     *   <li><b>HttpOnly=false</b>: client-side JS (tg-identity-guard.js) читает значение
+     *       и сравнивает с {@code Telegram.WebApp.initDataUnsafe.user.id}.
+     *       Mismatch → форс re-login. Закрывает переиспользование WebView Telegram
+     *       attachment menu (JSESSIONID старого user'а попадает в сессию нового).</li>
+     *   <li><b>SameSite=Lax</b>: нужно для отправки cookie при top-level navigation
+     *       из Telegram iframe. Strict ломает first-load. Безопасность держится
+     *       на том, что все state-changing endpoints — POST + CSRF (см. DashboardSecurityConfig).
+     *       Если введёте GET, изменяющий состояние — Lax недостаточно.</li>
+     *   <li><b>Path=/dashboard</b>: cookie не нужен на /api/**.</li>
+     *   <li><b>Secure</b>: HTTPS-only в проде (за Traefik request.isSecure()=true).</li>
+     * </ul>
+     */
     private static void writeTgUidCookie(HttpServletResponse response, long tgUserId, boolean secure) {
         Cookie cookie = new Cookie("tg_uid", Long.toString(tgUserId));
         cookie.setPath("/dashboard");

@@ -185,7 +185,7 @@ class DashboardMeApiControllerTest {
     // ─── /timeseries ────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("USER → /timeseries только свои точки")
+    @DisplayName("USER → /timeseries только свои точки, пустые дни = 0")
     void timeseriesScoped() throws Exception {
         mockMvc.perform(get("/dashboard/api/me/timeseries")
                         .param("period", "custom")
@@ -194,7 +194,7 @@ class DashboardMeApiControllerTest {
                         .param("metric", "exports")
                         .with(user(USER_42)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$", org.hamcrest.Matchers.hasSize(2)));
+                .andExpect(jsonPath("$", org.hamcrest.Matchers.hasSize(8)));
     }
 
     // ─── /status-breakdown ──────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 
-from typing import Any, List, Literal, Optional, Union
+from typing import AsyncIterator, List, Literal, Optional, Union
 from datetime import datetime
 from enum import Enum
 from typing_extensions import TypedDict
@@ -28,7 +28,11 @@ class ErrorCode(str, Enum):
 
 class ExportRequest(BaseModel):
 
+    # frozen=True — после десериализации из Redis объект immutable.
+    # Без этого retry/cleanup-пути могли мутировать chat_id или task_id и
+    # ломать idempotency очереди (тот же task_id с другими параметрами).
     model_config = ConfigDict(
+        frozen=True,
         json_schema_extra={
             "example": {
                 "task_id": "export_12345",
@@ -42,17 +46,17 @@ class ExportRequest(BaseModel):
         }
     )
 
-    task_id: str = Field(..., description="Unique task ID from Java")
+    task_id: str = Field(..., min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$", description="Unique task ID from Java")
     user_id: int = Field(..., description="Telegram user ID requesting export")
     user_chat_id: Optional[int] = Field(None, description="Telegram chat ID to send result back (bot sends here)")
     chat_id: Union[int, str] = Field(..., description="Telegram chat ID or username to export")
     topic_id: Optional[int] = Field(None, gt=0, description="Forum topic ID (message_thread_id) for topic-specific export")
-    limit: int = Field(default=0, description="Max messages (0=all)")
+    limit: int = Field(default=0, ge=0, le=1_000_000, description="Max messages (0=all)")
     offset_id: int = Field(default=0, description="Start from message ID")
     from_date: Optional[str] = Field(None, description="ISO date filter (YYYY-MM-DD, YYYY-MM-DDTHH:MM or YYYY-MM-DDTHH:MM:SS)")
     to_date: Optional[str] = Field(None, description="ISO date filter (YYYY-MM-DD, YYYY-MM-DDTHH:MM or YYYY-MM-DDTHH:MM:SS)")
-    keywords: Optional[str] = Field(None, description="Comma-separated keywords to include")
-    exclude_keywords: Optional[str] = Field(None, description="Comma-separated keywords to exclude")
+    keywords: Optional[str] = Field(None, max_length=4096, description="Comma-separated keywords to include")
+    exclude_keywords: Optional[str] = Field(None, max_length=4096, description="Comma-separated keywords to exclude")
     source: Optional[Literal["bot", "api", "subscription"]] = Field(
         default="bot", description="Request source: bot/api/subscription"
     )
@@ -71,6 +75,14 @@ class ExportRequest(BaseModel):
                 return int(stripped)
             except ValueError:
                 return stripped  # username — keep as string
+        return v
+
+    @field_validator("chat_id", mode="after")
+    @classmethod
+    def validate_chat_id_username(cls, v):
+        import re
+        if isinstance(v, str) and not re.match(r"^@?[a-zA-Z][a-zA-Z0-9_]{3,}$", v):
+            raise ValueError(f"Невалидный username chat_id: '{v}'")
         return v
 
     @field_validator("from_date", "to_date", mode="before")
@@ -173,17 +185,20 @@ class ExportedMessage(BaseModel):
 
 class SendResponsePayload(BaseModel):
 
+    # arbitrary_types_allowed=True требуется потому что messages-поле объявлено
+    # как Union[List[ExportedMessage], AsyncIterator[ExportedMessage]]: pydantic
+    # 2.x не умеет сгенерировать схему для AsyncIterator. Валидация поля и так
+    # не нужна — сериализация идёт через _stream_to_temp_json напрямую.
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     task_id: str = Field(..., description="Unique task ID")
     status: str = Field(
         ...,
         description="completed or failed",
         pattern="^(completed|failed)$"
     )
-    # Runtime-полиморфно: List[ExportedMessage] из in-memory путей или
-    # AsyncIterator/AsyncGenerator из cache-aware экспорта. Pydantic не валидирует
-    # async-итераторы — оставляем Any, валидация поля не нужна (сериализуется не
-    # через Pydantic, а напрямую в _stream_to_temp_json).
-    messages: Union[List[ExportedMessage], Any] = Field(
+    # AsyncIterator валидируется не Pydantic'ом — сериализация идёт через _stream_to_temp_json.
+    messages: Union[List[ExportedMessage], AsyncIterator[ExportedMessage]] = Field(
         ...,
         description="Exported messages (list or AsyncIterator)"
     )

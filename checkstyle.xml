@@ -156,6 +156,8 @@
             <property name="exceptionVariableName" value="expected"/>
         </module>
 
+        <module name="MissingOverride"/>
+
         <module name="CommentsIndentation"/>
     </module>
 </module>

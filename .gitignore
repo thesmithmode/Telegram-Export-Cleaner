@@ -111,6 +111,8 @@ env/
 # Credentials
 .env
 *.env
+.env.*
+!.env.example
 # Pyrogram session files
 export-worker/session/
 *.session

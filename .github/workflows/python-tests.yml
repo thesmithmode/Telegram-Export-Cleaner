@@ -40,8 +40,7 @@ jobs:
       - name: Install dependencies
         run: |
           cd export-worker
-          pip install -r requirements.txt
-          pip install pytest==8.3.5 pytest-asyncio==0.23.8 pytest-cov==5.0.0 ruff
+          pip install -r requirements-dev.txt
 
       - name: Lint Python (ruff)
         run: |
@@ -106,8 +105,7 @@ jobs:
       - name: Install dependencies
         run: |
           cd export-worker
-          pip install -r requirements.txt
-          pip install pytest==8.3.5 pytest-asyncio==0.23.8 pytest-cov==5.0.0
+          pip install -r requirements-dev.txt
 
       - name: Run integration tests
         run: |
@@ -154,13 +152,34 @@ jobs:
       - name: Install dependencies
         run: |
           cd export-worker
-          pip install -r requirements.txt
-          pip install pytest==8.3.5 pytest-asyncio==0.23.8 pytest-cov==5.0.0
+          pip install -r requirements-dev.txt
 
       - name: Run E2E tests
         run: |
           cd export-worker
           pytest tests/test_end_to_end.py -v --tb=short
+
+  security-audit:
+    name: Python Security Audit (pip-audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Audit запускается параллельно с тестами; красный — блокирует merge.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install pip-audit
+        run: pip install pip-audit==2.7.3
+
+      - name: Run pip-audit (runtime deps)
+        run: |
+          cd export-worker
+          pip-audit -r requirements.txt --strict --vulnerability-service osv
 
   performance:
     name: Python Performance Tests
@@ -192,8 +211,7 @@ jobs:
       - name: Install dependencies
         run: |
           cd export-worker
-          pip install -r requirements.txt
-          pip install pytest==8.3.5 pytest-asyncio==0.23.8 pytest-cov==5.0.0
+          pip install -r requirements-dev.txt
 
       - name: Run performance tests
         run: |

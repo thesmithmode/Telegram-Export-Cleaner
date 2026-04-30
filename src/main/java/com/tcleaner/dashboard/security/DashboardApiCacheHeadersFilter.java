@@ -28,7 +28,9 @@ public class DashboardApiCacheHeadersFilter extends OncePerRequestFilter {
             throws ServletException, IOException {
 
         if (request.getRequestURI().startsWith(API_PREFIX)) {
-            response.setHeader("Cache-Control", "private, no-store, no-cache, must-revalidate, max-age=0");
+            // no-store покрывает no-cache + must-revalidate + max-age=0 для современных
+            // клиентов. Pragma/Expires оставлены ради древних HTTP/1.0 прокси.
+            response.setHeader("Cache-Control", "no-store");
             response.setHeader("Pragma", "no-cache");
             response.setHeader("Expires", "0");
         }
