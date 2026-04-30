@@ -158,6 +158,7 @@ jobs:
               echo "HOST_DATA_PATH=${{ secrets.HOST_DATA_PATH }}"
               echo "TELEGRAM_BOT_USERNAME=${{ secrets.TELEGRAM_BOT_USERNAME }}"
               echo "JAVA_API_KEY=${{ secrets.JAVA_API_KEY }}"
+              echo "REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}"
               echo "DONATE_TON=${{ secrets.DONATE_TON }}"
               echo "IMAGE_TAG=$(echo '${{ github.sha }}' | cut -c1-7)"
             } > .env
