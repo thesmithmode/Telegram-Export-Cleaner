@@ -46,17 +46,17 @@ class ExportRequest(BaseModel):
         }
     )
 
-    task_id: str = Field(..., description="Unique task ID from Java")
+    task_id: str = Field(..., min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$", description="Unique task ID from Java")
     user_id: int = Field(..., description="Telegram user ID requesting export")
     user_chat_id: Optional[int] = Field(None, description="Telegram chat ID to send result back (bot sends here)")
     chat_id: Union[int, str] = Field(..., description="Telegram chat ID or username to export")
     topic_id: Optional[int] = Field(None, gt=0, description="Forum topic ID (message_thread_id) for topic-specific export")
-    limit: int = Field(default=0, description="Max messages (0=all)")
+    limit: int = Field(default=0, ge=0, le=1_000_000, description="Max messages (0=all)")
     offset_id: int = Field(default=0, description="Start from message ID")
     from_date: Optional[str] = Field(None, description="ISO date filter (YYYY-MM-DD, YYYY-MM-DDTHH:MM or YYYY-MM-DDTHH:MM:SS)")
     to_date: Optional[str] = Field(None, description="ISO date filter (YYYY-MM-DD, YYYY-MM-DDTHH:MM or YYYY-MM-DDTHH:MM:SS)")
-    keywords: Optional[str] = Field(None, description="Comma-separated keywords to include")
-    exclude_keywords: Optional[str] = Field(None, description="Comma-separated keywords to exclude")
+    keywords: Optional[str] = Field(None, max_length=4096, description="Comma-separated keywords to include")
+    exclude_keywords: Optional[str] = Field(None, max_length=4096, description="Comma-separated keywords to exclude")
     source: Optional[Literal["bot", "api", "subscription"]] = Field(
         default="bot", description="Request source: bot/api/subscription"
     )
@@ -75,6 +75,14 @@ class ExportRequest(BaseModel):
                 return int(stripped)
             except ValueError:
                 return stripped  # username — keep as string
+        return v
+
+    @field_validator("chat_id", mode="after")
+    @classmethod
+    def validate_chat_id_username(cls, v):
+        import re
+        if isinstance(v, str) and not re.match(r"^@?[a-zA-Z][a-zA-Z0-9_]{3,}$", v):
+            raise ValueError(f"Невалидный username chat_id: '{v}'")
         return v
 
     @field_validator("from_date", "to_date", mode="before")
