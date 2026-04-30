@@ -72,6 +72,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     private final String miniAppUrl;
     private final Counter consumeErrorsCounter;
     private final QueueDisplayBuilder queueDisplayBuilder;
+    private final BotSecurityGate securityGate;
 
     private static final java.util.Set<String> BANNED_MINIAPP_HOSTS = java.util.Set.of(
             "localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"
@@ -89,7 +90,8 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
             ObjectProvider<StatsStreamPublisher> statsPublisherProvider,
             SubscriptionService subscriptionService,
             MeterRegistry meterRegistry,
-            QueueDisplayBuilder queueDisplayBuilder
+            QueueDisplayBuilder queueDisplayBuilder,
+            BotSecurityGate securityGate
     ) {
         java.net.URI parsed;
         try {
@@ -119,6 +121,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         this.subscriptionService = subscriptionService;
         this.consumeErrorsCounter = Counter.builder("bot.consume.errors").register(meterRegistry);
         this.queueDisplayBuilder = queueDisplayBuilder;
+        this.securityGate = securityGate;
         log.info("Telegram-бот инициализирован");
     }
 
@@ -155,12 +158,26 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
 
     @Override
     public void consume(Update update) {
+        long userId = extractUserId(update);
+        if (userId > 0 && (securityGate.isBlocked(userId) || securityGate.isFlooded(userId))) {
+            return;
+        }
         try {
             processUpdate(update);
         } catch (Exception e) {
             consumeErrorsCounter.increment();
             log.error("Update processing fail: {}", e.getMessage(), e);
         }
+    }
+
+    private static long extractUserId(Update update) {
+        if (update.hasCallbackQuery() && update.getCallbackQuery().getFrom() != null) {
+            return update.getCallbackQuery().getFrom().getId();
+        }
+        if (update.hasMessage() && update.getMessage().getFrom() != null) {
+            return update.getMessage().getFrom().getId();
+        }
+        return 0L;
     }
 
     private void processUpdate(Update update) {
