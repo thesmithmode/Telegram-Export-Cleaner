@@ -226,9 +226,16 @@ public class StatsQueryService {
         Object[] args = byUser(botUserId)
                 ? new Object[]{from, to, botUserId}
                 : new Object[]{from, to};
-        return jdbc.query(sql,
+        List<TimeSeriesPointDto> raw = jdbc.query(sql,
                 (rs, n) -> new TimeSeriesPointDto(rs.getString("period"), rs.getLong("value")),
                 args);
+
+        Map<String, Long> filled = new LinkedHashMap<>();
+        period.allPeriodKeys().forEach(k -> filled.put(k, 0L));
+        raw.forEach(p -> filled.put(p.period(), p.value()));
+        return filled.entrySet().stream()
+                .map(e -> new TimeSeriesPointDto(e.getKey(), e.getValue()))
+                .toList();
     }
 
     /**
