@@ -68,8 +68,9 @@ QWEN.md
 .gemini/
 GEMINI.md
 # Claude Code
-.claude/
-CLAUDE.md
+.claude/*
+!.claude/settings.json
+!.claude/settings.local.json
 Index.md
 # Serena MCP
 .serena/
