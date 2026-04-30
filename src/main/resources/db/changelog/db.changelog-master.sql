@@ -161,6 +161,7 @@ DELETE FROM dashboard_users WHERE telegram_id IS NULL;
 
 --changeset app:004-bot-users-language splitStatements:true endDelimiter:;
 --validCheckSum 9:ba87f4f4aa953e11bdfac671240bca8f
+--validCheckSum 9:4a951b40919dab7379b5963623990923
 
 ALTER TABLE bot_users ADD COLUMN language VARCHAR(5);
 
@@ -323,6 +324,7 @@ CREATE UNIQUE INDEX idx_dashboard_users_telegram_id
 -- =============================================================================
 
 --changeset app:009-chat-subscriptions-version splitStatements:true endDelimiter:;
+--validCheckSum 9:4b50467039b548167b5134657cde2869
 
 ALTER TABLE chat_subscriptions ADD COLUMN version BIGINT NOT NULL DEFAULT 0;
 
