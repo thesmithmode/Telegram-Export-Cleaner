@@ -1,0 +1,27 @@
+# Pre-commit hooks для Telegram-Export-Cleaner.
+# Установка: pip install pre-commit && pre-commit install
+# Запуск вручную: pre-commit run --all-files
+#
+# Что закрываем:
+# - gitleaks: детекция случайно закоммиченных Telegram bot tokens, API hashes,
+#   session strings, JAVA_API_KEY и других секретов. Репо публичный — однажды
+#   попавший токен → utility-toggle на @BotFather + ротация всех env.
+# - trailing-whitespace, end-of-file-fixer: косметика, чтобы дрейф diff'ов
+#   не маскировал реальные изменения.
+
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '\.md$'
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: detect-private-key

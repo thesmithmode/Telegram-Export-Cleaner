@@ -5,8 +5,11 @@ import com.tcleaner.dashboard.domain.Chat;
 import com.tcleaner.dashboard.domain.ChatSubscription;
 import com.tcleaner.dashboard.repository.ChatRepository;
 import com.tcleaner.dashboard.repository.ChatSubscriptionRepository;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -21,6 +24,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Service
@@ -36,19 +40,28 @@ public class SubscriptionScheduler {
     private final SubscriptionService subscriptionService;
     private final ExportJobProducer jobProducer;
     private final ChatRepository chatRepository;
+    private final Counter cyclesCounter;
+    private final Counter errorsCounter;
 
     public SubscriptionScheduler(ChatSubscriptionRepository repository,
                                   SubscriptionService subscriptionService,
                                   ExportJobProducer jobProducer,
-                                  ChatRepository chatRepository) {
+                                  ChatRepository chatRepository,
+                                  MeterRegistry meterRegistry) {
         this.repository = repository;
         this.subscriptionService = subscriptionService;
         this.jobProducer = jobProducer;
         this.chatRepository = chatRepository;
+        this.cyclesCounter = Counter.builder("subscription.scheduler.cycles").register(meterRegistry);
+        this.errorsCounter = Counter.builder("subscription.scheduler.errors").register(meterRegistry);
     }
 
     @Scheduled(cron = "${subscription.scheduler.cron:0 */5 * * * *}")
     public void runDueSubscriptions() {
+        String cycleId = UUID.randomUUID().toString();
+        MDC.put("cycle_id", cycleId);
+        MDC.put("scheduler", "subscription");
+        cyclesCounter.increment();
         try {
             if (jobProducer.hasActiveProcessingJob() || jobProducer.getQueueLength() > 0) {
                 log.debug("Worker busy — subscription scheduler skipped");
@@ -64,12 +77,13 @@ public class SubscriptionScheduler {
             Set<Long> chatRefIds = candidates.stream()
                     .map(ChatSubscription::getChatRefId)
                     .collect(Collectors.toSet());
-            
+
             Map<Long, Chat> chatsById;
             try {
                 chatsById = chatRepository.findAllById(chatRefIds).stream()
                         .collect(Collectors.toMap(Chat::getId, c -> c));
             } catch (Exception e) {
+                errorsCounter.increment();
                 log.error("Failed to fetch chats for subscriptions: {}", e.getMessage());
                 return;
             }
@@ -78,11 +92,16 @@ public class SubscriptionScheduler {
                 processCandidate(sub, chatsById.get(sub.getChatRefId()), now);
             }
         } catch (Exception e) {
+            errorsCounter.increment();
             log.error("Critical error in SubscriptionScheduler: {}", e.getMessage(), e);
+        } finally {
+            MDC.remove("cycle_id");
+            MDC.remove("scheduler");
         }
     }
 
     private void processCandidate(ChatSubscription sub, Chat chat, Instant now) {
+        MDC.put("subscription_id", String.valueOf(sub.getId()));
         try {
             if (!isInDesiredWindow(sub, now)) {
                 return;
@@ -90,20 +109,24 @@ public class SubscriptionScheduler {
             if (!isPeriodElapsed(sub, now)) {
                 return;
             }
-            
+
             if (chat == null) {
+                errorsCounter.increment();
                 log.error("Chat not found for sub {}: chatRefId={}", sub.getId(), sub.getChatRefId());
                 subscriptionService.recordFailure(sub.getId());
                 return;
             }
             enqueueOne(sub, chat, now);
         } catch (Exception e) {
+            errorsCounter.increment();
             log.error("Subscription {} processing failed: {}", sub.getId(), e.getMessage());
             try {
                 subscriptionService.recordFailure(sub.getId());
             } catch (Exception ex) {
                 log.error("Failed to record failure for sub {}: {}", sub.getId(), ex.getMessage());
             }
+        } finally {
+            MDC.remove("subscription_id");
         }
     }
 

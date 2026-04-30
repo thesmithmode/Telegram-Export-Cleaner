@@ -78,7 +78,7 @@ services:
   # Порт 8080 НЕ выставляется напрямую — только через Traefik.
   # ===========================================================================
   java-bot:
-    image: ghcr.io/thesmithmode/telegram-export-cleaner:${IMAGE_TAG:-latest}
+    image: ghcr.io/thesmithmode/telegram-export-cleaner:${IMAGE_TAG:?IMAGE_TAG обязателен — задайте SHA образа}
     container_name: telegram-export-java-bot
     labels:
       - "project=telegram-cleaner"
@@ -139,7 +139,7 @@ services:
       - internal
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/health || exit 1"]
+      test: ["CMD-SHELL", "wget -q -T 3 -O- http://localhost:8080/api/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -156,7 +156,7 @@ services:
   # Python Worker
   # ===========================================================================
   python-worker:
-    image: ghcr.io/thesmithmode/telegram-export-python-worker:${IMAGE_TAG:-latest}
+    image: ghcr.io/thesmithmode/telegram-export-python-worker:${IMAGE_TAG:?IMAGE_TAG обязателен — задайте SHA образа}
     container_name: telegram-export-worker
     labels:
       - "project=telegram-cleaner"

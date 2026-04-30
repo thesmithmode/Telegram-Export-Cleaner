@@ -13,9 +13,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -80,32 +78,21 @@ public class ExportJobProducer {
                            String fromDate, String toDate, String keywords, String excludeKeywords) {
         String taskId = "export_" + UUID.randomUUID().toString().replace("-", "").substring(0, TASK_ID_LENGTH);
 
-        Map<String, Object> job = new HashMap<>();
-        job.put("task_id", taskId);
-        job.put("user_id", userId);
-        job.put("user_chat_id", userChatId);
-        job.put("chat_id", chatId);
-        if (topicId != null) {
-            job.put("topic_id", topicId);
-        }
-        job.put("limit", 0);
-        job.put("offset_id", 0);
-        if (fromDate != null) {
-            job.put("from_date", fromDate);
-        }
-        if (toDate != null) {
-            job.put("to_date", toDate);
-        }
-        if (keywords != null) {
-            job.put("keywords", keywords);
-        }
-        if (excludeKeywords != null) {
-            job.put("exclude_keywords", excludeKeywords);
-        }
+        ExportJobPayload payload = ExportJobPayload.builder()
+                .taskId(taskId)
+                .userId(userId)
+                .userChatId(userChatId)
+                .chatId(chatId)
+                .topicId(topicId)
+                .fromDate(fromDate)
+                .toDate(toDate)
+                .keywords(keywords)
+                .excludeKeywords(excludeKeywords)
+                .build();
 
         String json;
         try {
-            json = objectMapper.writeValueAsString(job);
+            json = objectMapper.writeValueAsString(payload);
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             throw new RuntimeException("Ошибка сериализации задачи", e);
         }
@@ -187,20 +174,24 @@ public class ExportJobProducer {
             return null;
         }
 
-        // Проверяем статус задачи одним pipeline-запросом (3 RTT → 1 RTT)
+        // Проверяем статус задачи + размеры очередей одним pipeline (5 RTT → 1)
         @SuppressWarnings("unchecked")
-        List<Object> statusResults = redis.executePipelined(new SessionCallback<Object>() {
+        List<Object> results = redis.executePipelined(new SessionCallback<Object>() {
             @Override
             public Object execute(RedisOperations ops) {
                 ops.hasKey("job:processing:" + taskId);
                 ops.hasKey("job:completed:" + taskId);
                 ops.hasKey("job:failed:" + taskId);
+                ops.opsForList().size(queueName);
+                ops.opsForList().size(queueName + EXPRESS_QUEUE_SUFFIX);
                 return null;
             }
         });
-        boolean isProcessing = Boolean.TRUE.equals(statusResults.get(0));
-        boolean isCompleted = Boolean.TRUE.equals(statusResults.get(1));
-        boolean isFailed = Boolean.TRUE.equals(statusResults.get(2));
+        boolean isProcessing = Boolean.TRUE.equals(results.get(0));
+        boolean isCompleted = Boolean.TRUE.equals(results.get(1));
+        boolean isFailed = Boolean.TRUE.equals(results.get(2));
+        long queueSize = results.get(3) instanceof Number n3 ? n3.longValue() : 0L;
+        long expressSize = results.get(4) instanceof Number n4 ? n4.longValue() : 0L;
 
         if (isCompleted || isFailed) {
             // Задача завершена, но ключ не был очищен — чистим
@@ -214,11 +205,7 @@ public class ExportJobProducer {
             return taskId;
         }
 
-        // Задача не в processing, не completed, не failed — проверяем обе очереди
-        Long queueSize = redis.opsForList().size(queueName);
-        Long expressSize = redis.opsForList().size(queueName + EXPRESS_QUEUE_SUFFIX);
-        long totalSize = (queueSize != null ? queueSize : 0L) + (expressSize != null ? expressSize : 0L);
-        if (totalSize > 0) {
+        if (queueSize + expressSize > 0) {
             // В очереди есть задачи — возможно наша ждёт
             return taskId;
         }
@@ -293,21 +280,20 @@ public class ExportJobProducer {
                                       String fromDate, String toDate, long subscriptionId) {
         String taskId = "sub_" + UUID.randomUUID().toString().replace("-", "").substring(0, TASK_ID_LENGTH);
 
-        Map<String, Object> job = new HashMap<>();
-        job.put("task_id", taskId);
-        job.put("user_id", userId);
-        job.put("user_chat_id", userChatId);
-        job.put("chat_id", chatIdentifier);
-        job.put("limit", 0);
-        job.put("offset_id", 0);
-        job.put("from_date", fromDate);
-        job.put("to_date", toDate);
-        job.put("source", ExportSource.SUBSCRIPTION.name().toLowerCase());
-        job.put("subscription_id", subscriptionId);
+        ExportJobPayload payload = ExportJobPayload.builder()
+                .taskId(taskId)
+                .userId(userId)
+                .userChatId(userChatId)
+                .chatId(chatIdentifier)
+                .fromDate(fromDate)
+                .toDate(toDate)
+                .source(ExportSource.SUBSCRIPTION.name().toLowerCase())
+                .subscriptionId(subscriptionId)
+                .build();
 
         String json;
         try {
-            json = objectMapper.writeValueAsString(job);
+            json = objectMapper.writeValueAsString(payload);
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             throw new RuntimeException("Ошибка сериализации subscription-задачи", e);
         }

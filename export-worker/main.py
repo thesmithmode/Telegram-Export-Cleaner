@@ -8,7 +8,7 @@ import sys
 import time
 import psutil
 from datetime import date as date_cls, datetime, timedelta, timezone
-from typing import AsyncGenerator, Callable, Literal, Optional
+from typing import AsyncGenerator, AsyncIterator, Callable, Literal, Optional
 
 StageType = Literal["start", "fetch", "convert"]
 
@@ -93,7 +93,7 @@ class ExportWorker:
     async def _run_batch_loop(
         self,
         job: ExportRequest,
-        message_iter,
+        message_iter: AsyncIterator[ExportedMessage],
         tracker: Optional[ProgressTracker],
         initial_count: int = 0,
         on_each_msg: Optional[Callable[[ExportedMessage], None]] = None,
@@ -152,6 +152,14 @@ class ExportWorker:
             val = await self.control_redis.get(f"cancel_export:{task_id}")
             return val is not None
         except Exception:
+            # Молчаливый return False скрывал dead Redis — пользователь видел
+            # выполняющийся cancel'нутый job. Логируем со stacktrace, но не
+            # падаем: shutdown control_redis ≠ shutdown пользовательского job.
+            logger.error(
+                "is_cancelled: Redis check failed task_id=%s — assuming NOT cancelled",
+                task_id,
+                exc_info=True,
+            )
             return False
 
     async def _bail_if_cancelled_after_counting(self, job: ExportRequest) -> bool:
@@ -212,13 +220,24 @@ class ExportWorker:
             )
         return None
 
+    # psutil-снимок имеет TTL: log_memory_usage вызывается 4× за job
+    # (START/DONE/FAILED/ERROR), а psutil.virtual_memory() + cpu_percent — sync
+    # syscalls в event loop. Кэш сглаживает burst при коротких jobs.
+    _PSUTIL_CACHE_TTL_SECONDS: float = 5.0
+
     def log_memory_usage(self, stage: str) -> None:
         try:
-            mem = psutil.virtual_memory()
-            cpu_percent = psutil.cpu_percent(interval=None)
+            cache = getattr(self, "_psutil_snapshot", None)
+            now = time.monotonic()
+            if cache is None or now - cache[0] >= self._PSUTIL_CACHE_TTL_SECONDS:
+                mem = psutil.virtual_memory()
+                cpu_percent = psutil.cpu_percent(interval=None)
+                cache = (now, mem.percent, mem.available / 1024 / 1024, cpu_percent)
+                self._psutil_snapshot = cache
+            _, mem_percent, mem_avail_mb, cpu_percent = cache
             logger.info(
                 f"📊 Resource usage [{stage}]: "
-                f"Memory {mem.percent}% ({mem.available/1024/1024:.0f}MB free), "
+                f"Memory {mem_percent}% ({mem_avail_mb:.0f}MB free), "
                 f"CPU {cpu_percent}%"
             )
         except Exception as e:
@@ -341,7 +360,7 @@ class ExportWorker:
 
     async def _run_cache_aware_export(
         self, job: ExportRequest, topic_name: Optional[str]
-    ) -> Optional[tuple[int, object]]:
+    ) -> Optional[tuple[int, AsyncGenerator]]:
         """Cache-route + fallback. Cancel-проверки между стадиями.
 
         Returns:
@@ -1079,7 +1098,7 @@ class ExportWorker:
                 async with semaphore:
                     await self._notify_queue_position(task_id, position, total)
 
-            await asyncio.gather(
+            results = await asyncio.gather(
                 _notify_bounded(current_task_id, 0),
                 *[
                     _notify_bounded(job.task_id, i + 1)
@@ -1087,6 +1106,13 @@ class ExportWorker:
                 ],
                 return_exceptions=True,
             )
+            failed = sum(1 for r in results if isinstance(r, Exception))
+            if failed > 0:
+                logger.warning(
+                    "Queue-position notify: %d/%d failed; first error: %r",
+                    failed, len(results),
+                    next((r for r in results if isinstance(r, Exception)), None),
+                )
         except Exception as e:
             logger.warning(f"Could not update queue positions: {e}")
 
@@ -1112,6 +1138,7 @@ class ExportWorker:
 
     async def run(self):
         if not await self.initialize():
+            await self.cleanup()
             sys.exit(1)
 
         self.running = True
@@ -1119,6 +1146,9 @@ class ExportWorker:
 
         if self.message_cache and self.message_cache.enabled and self.control_redis:
             self._cache_stats_task = asyncio.create_task(self._cache_stats_loop())
+
+        consecutive_errors = 0
+        max_consecutive_errors = int(getattr(settings, "MAIN_LOOP_MAX_CONSECUTIVE_ERRORS", 10))
 
         try:
             while self.running:
@@ -1132,6 +1162,7 @@ class ExportWorker:
                     else:
                         # No job - should not happen with BLPOP timeout=0
                         await asyncio.sleep(1)
+                    consecutive_errors = 0
 
                 except asyncio.CancelledError:
                     logger.info("Worker cancelled")
@@ -1142,8 +1173,20 @@ class ExportWorker:
                     break
 
                 except Exception as e:
-                    logger.error(f"Error in main loop: {e}", exc_info=True)
-                    await asyncio.sleep(5)
+                    consecutive_errors += 1
+                    logger.error(
+                        f"Error in main loop ({consecutive_errors}/{max_consecutive_errors}): {e}",
+                        exc_info=True,
+                    )
+                    if consecutive_errors >= max_consecutive_errors:
+                        logger.critical(
+                            "main loop: %d consecutive errors → hard exit, "
+                            "supervisor (Docker restart policy) перезапустит контейнер",
+                            consecutive_errors,
+                        )
+                        sys.exit(1)
+                    backoff = min(60.0, 2.0 ** consecutive_errors)
+                    await asyncio.sleep(backoff)
 
         finally:
             await self.cleanup()
@@ -1176,19 +1219,33 @@ class ExportWorker:
                 await self._cache_stats_task
             except asyncio.CancelledError:
                 pass
+            except Exception as e:
+                logger.warning(f"_cache_stats_task await failed during cleanup: {e}")
             self._cache_stats_task = None
 
         if self.telegram_client:
-            await self.telegram_client.disconnect()
+            try:
+                await self.telegram_client.disconnect()
+            except Exception as e:
+                logger.warning(f"telegram_client.disconnect failed: {e}")
 
         if self.queue_consumer:
-            await self.queue_consumer.disconnect()
+            try:
+                await self.queue_consumer.disconnect()
+            except Exception as e:
+                logger.warning(f"queue_consumer.disconnect failed: {e}")
 
         if self.java_client:
-            await self.java_client.aclose()
+            try:
+                await self.java_client.aclose()
+            except Exception as e:
+                logger.warning(f"java_client.aclose failed: {e}")
 
         if self.message_cache:
-            await self.message_cache.close()
+            try:
+                await self.message_cache.close()
+            except Exception as e:
+                logger.warning(f"message_cache.close failed: {e}")
 
         # control_redis держит собственный connection pool; без явного close
         # SIGTERM висит до hard-kill timeout Docker → ломает graceful shutdown.

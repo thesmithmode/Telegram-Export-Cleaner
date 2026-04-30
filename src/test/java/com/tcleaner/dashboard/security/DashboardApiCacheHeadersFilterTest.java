@@ -36,7 +36,7 @@ class DashboardApiCacheHeadersFilterTest {
 
         filter.doFilterInternal(request, response, chain);
 
-        verify(response).setHeader("Cache-Control", "private, no-store, no-cache, must-revalidate, max-age=0");
+        verify(response).setHeader("Cache-Control", "no-store");
         verify(response).setHeader("Pragma", "no-cache");
         verify(response).setHeader("Expires", "0");
         verify(chain).doFilter(request, response);
@@ -48,7 +48,7 @@ class DashboardApiCacheHeadersFilterTest {
 
         filter.doFilterInternal(request, response, chain);
 
-        verify(response).setHeader("Cache-Control", "private, no-store, no-cache, must-revalidate, max-age=0");
+        verify(response).setHeader("Cache-Control", "no-store");
     }
 
     @Test
@@ -57,7 +57,7 @@ class DashboardApiCacheHeadersFilterTest {
 
         filter.doFilterInternal(request, response, chain);
 
-        verify(response).setHeader("Cache-Control", "private, no-store, no-cache, must-revalidate, max-age=0");
+        verify(response).setHeader("Cache-Control", "no-store");
     }
 
     @Test

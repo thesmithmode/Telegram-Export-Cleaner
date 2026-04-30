@@ -6,11 +6,15 @@ import com.tcleaner.dashboard.events.StatsEventType;
 import com.tcleaner.dashboard.events.StatsStreamPublisher;
 import com.tcleaner.dashboard.service.ingestion.BotUserUpserter;
 import com.tcleaner.dashboard.service.subscription.SubscriptionService;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.longpolling.interfaces.LongPollingUpdateConsumer;
 import org.telegram.telegrambots.longpolling.starter.SpringLongPollingBot;
@@ -24,7 +28,6 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMa
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardRow;
 
-import jakarta.annotation.PostConstruct;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -67,6 +70,12 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     private final ObjectProvider<StatsStreamPublisher> statsPublisherProvider;
     private final SubscriptionService subscriptionService;
     private final String miniAppUrl;
+    private final Counter consumeErrorsCounter;
+    private final QueueDisplayBuilder queueDisplayBuilder;
+
+    private static final java.util.Set<String> BANNED_MINIAPP_HOSTS = java.util.Set.of(
+            "localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"
+    );
 
     public ExportBot(
             @Value("${telegram.bot.token}") String botToken,
@@ -78,12 +87,21 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
             BotSessionRegistry sessionRegistry,
             BotUserUpserter userUpserter,
             ObjectProvider<StatsStreamPublisher> statsPublisherProvider,
-            SubscriptionService subscriptionService
+            SubscriptionService subscriptionService,
+            MeterRegistry meterRegistry,
+            QueueDisplayBuilder queueDisplayBuilder
     ) {
-        String normalized = miniAppUrl.toLowerCase();
-        if (!normalized.startsWith("https://")
-                || normalized.contains("localhost")
-                || normalized.contains("127.0.0.1")) {
+        java.net.URI parsed;
+        try {
+            parsed = java.net.URI.create(miniAppUrl);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException(
+                    "dashboard.mini-app.url некорректен: " + miniAppUrl
+                    + " (не парсится как URI). Установите TRAEFIK_DASHBOARD_DOMAIN.", e);
+        }
+        String scheme = parsed.getScheme() == null ? "" : parsed.getScheme().toLowerCase();
+        String host = parsed.getHost() == null ? "" : parsed.getHost().toLowerCase();
+        if (!"https".equals(scheme) || host.isEmpty() || BANNED_MINIAPP_HOSTS.contains(host)) {
             throw new IllegalStateException(
                     "dashboard.mini-app.url некорректен: " + miniAppUrl
                     + ". Требуется публичный HTTPS-URL (Telegram Mini App не принимает http/localhost)."
@@ -99,13 +117,16 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         this.userUpserter = userUpserter;
         this.statsPublisherProvider = statsPublisherProvider;
         this.subscriptionService = subscriptionService;
+        this.consumeErrorsCounter = Counter.builder("bot.consume.errors").register(meterRegistry);
+        this.queueDisplayBuilder = queueDisplayBuilder;
         log.info("Telegram-бот инициализирован");
     }
 
-    @PostConstruct
+    // ApplicationReadyEvent (а не @PostConstruct): setMyCommands × 11 + setChatMenuButton —
+    // блокирующие HTTPS-вызовы Telegram API. На медленной сети bean-инициализация
+    // застревала минутами и упирала readiness-probe.
+    @EventListener(ApplicationReadyEvent.class)
     void registerBotCommands() {
-        // Default-scope — используется клиентом, если для его locale нет специального
-        // набора. Далее регистрируем локализованный набор на каждый поддерживаемый язык.
         List<BotCommand> defaultCommands = buildCommands(BotLanguage.EN);
         messenger.setMyCommands(defaultCommands, null);
         for (BotLanguage lang : BotLanguage.allActive()) {
@@ -137,6 +158,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
         try {
             processUpdate(update);
         } catch (Exception e) {
+            consumeErrorsCounter.increment();
             log.error("Update processing fail: {}", e.getMessage(), e);
         }
     }
@@ -557,16 +579,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     }
 
     private String buildQueueInfoText(BotLanguage lang, boolean fromCache, long pendingInQueue, boolean hasActiveJob) {
-        if (fromCache) {
-            return i18n.msg(lang, "bot.queue.cached");
-        }
-        // pendingInQueue includes this job; aheadCount excludes it
-        long aheadCount = (pendingInQueue - 1) + (hasActiveJob ? 1 : 0);
-        long myPosition = pendingInQueue + (hasActiveJob ? 1 : 0);
-        if (aheadCount <= 0) {
-            return i18n.msg(lang, "bot.queue.starting");
-        }
-        return i18n.msg(lang, "bot.queue.position", myPosition, aheadCount);
+        return queueDisplayBuilder.build(lang, fromCache, pendingInQueue, hasActiveJob);
     }
 
     private String buildDateInfoText(BotLanguage lang, UserSession session) {
@@ -603,7 +616,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
                     .ts(Instant.now())
                     .build());
         } catch (Exception ex) {
-            log.debug("bot_user.seen не опубликовано: {}", ex.getMessage());
+            log.warn("bot_user.seen не опубликовано (stats analytics loss): {}", ex.getMessage());
         }
     }
 

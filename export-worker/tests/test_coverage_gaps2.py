@@ -117,9 +117,10 @@ class TestExportWorkerRunLoop:
              patch.object(w, "cleanup", AsyncMock()), \
              patch("main.asyncio.sleep", AsyncMock()) as sleep_mock:
             await w.run()
-            # После исключения был вызван asyncio.sleep(5)
+            # После исключения вызывается экспоненциальный backoff (TD-002):
+            # 1-я ошибка → 2.0s, далее 4/8/16/32s, cap 60s.
             sleeps = [c.args[0] for c in sleep_mock.call_args_list]
-            assert 5 in sleeps
+            assert 2.0 in sleeps
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -791,6 +792,11 @@ def _make_java_client():
     client.bot_token = "fake:token"
     client._http_client = AsyncMock()
     client.max_retries = 1
+    # _tg_timeout добавлен в e01180f к notify_*/update_queue_position;
+    # без него AttributeError маскируется silent-except и тест ассертит
+    # вызов post, которого не было.
+    import httpx as _httpx
+    client._tg_timeout = _httpx.Timeout(timeout=5.0)
     return client
 
 

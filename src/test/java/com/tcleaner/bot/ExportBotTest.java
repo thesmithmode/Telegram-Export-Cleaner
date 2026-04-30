@@ -79,7 +79,9 @@ class ExportBotTest {
         when(noPublisher.getIfAvailable()).thenReturn(null);
         bot = new ExportBot("token", "https://test.example.com/dashboard/mini-app",
                 jobProducerMock, messengerMock, i18n, new BotKeyboards(i18n),
-                new BotSessionRegistry(), userUpserterMock, noPublisher, subscriptionServiceMock);
+                new BotSessionRegistry(), userUpserterMock, noPublisher, subscriptionServiceMock,
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry(),
+                new QueueDisplayBuilder(i18n));
     }
 
     private static ReloadableResourceBundleMessageSource newTestMessageSource() {
@@ -563,7 +565,9 @@ class ExportBotTest {
             new ExportBot("token", url, jobProducerMock, messengerMock,
                     i18n, new BotKeyboards(i18n), new BotSessionRegistry(),
                     userUpserterMock, emptyPublisher(),
-                    mock(com.tcleaner.dashboard.service.subscription.SubscriptionService.class));
+                    mock(com.tcleaner.dashboard.service.subscription.SubscriptionService.class),
+                    new io.micrometer.core.instrument.simple.SimpleMeterRegistry(),
+                    new QueueDisplayBuilder(i18n));
         }
 
         @Test

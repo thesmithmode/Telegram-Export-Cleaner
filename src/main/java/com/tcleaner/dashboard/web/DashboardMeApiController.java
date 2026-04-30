@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 /**
  * Личное API пользователя. Скоуп ВСЕГДА = {@code principal.botUserId}.
@@ -47,11 +48,9 @@ public class DashboardMeApiController {
                                 @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
                                 @RequestParam(required = false)
                                 @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
-        Long my = p.getBotUserId();
-        if (my == null) {
-            return OverviewDto.empty();
-        }
-        return stats.overviewWithDelta(periods.resolve(period, from, to), my);
+        return scoped(p,
+                my -> stats.overviewWithDelta(periods.resolve(period, from, to), my),
+                OverviewDto.empty());
     }
 
     @GetMapping("/chats")
@@ -62,11 +61,9 @@ public class DashboardMeApiController {
                                     @RequestParam(required = false)
                                     @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
                                     @RequestParam(defaultValue = "20") int limit) {
-        Long my = p.getBotUserId();
-        if (my == null) {
-            return List.of();
-        }
-        return stats.topChats(periods.resolve(period, from, to), my, PaginationUtils.clamp(limit, 200));
+        return scoped(p,
+                my -> stats.topChats(periods.resolve(period, from, to), my, PaginationUtils.clamp(limit, 200)),
+                List.of());
     }
 
     @GetMapping("/events")
@@ -74,11 +71,9 @@ public class DashboardMeApiController {
                                     @RequestParam(required = false) Long chatId,
                                     @RequestParam(required = false) String status,
                                     @RequestParam(defaultValue = "100") int limit) {
-        Long my = p.getBotUserId();
-        if (my == null) {
-            return List.of();
-        }
-        return stats.recentEvents(my, chatId, status, PaginationUtils.clamp(limit, 500));
+        return scoped(p,
+                my -> stats.recentEvents(my, chatId, status, PaginationUtils.clamp(limit, 500)),
+                List.of());
     }
 
     @GetMapping("/timeseries")
@@ -89,11 +84,9 @@ public class DashboardMeApiController {
                                                @RequestParam(required = false)
                                                @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
                                                @RequestParam(defaultValue = "exports") String metric) {
-        Long my = p.getBotUserId();
-        if (my == null) {
-            return List.of();
-        }
-        return stats.timeSeries(periods.resolve(period, from, to), metric, my);
+        return scoped(p,
+                my -> stats.timeSeries(periods.resolve(period, from, to), metric, my),
+                List.of());
     }
 
     @GetMapping("/status-breakdown")
@@ -103,10 +96,13 @@ public class DashboardMeApiController {
                                              @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
                                              @RequestParam(required = false)
                                              @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        return scoped(p,
+                my -> stats.statusBreakdown(periods.resolve(period, from, to), my),
+                Map.of());
+    }
+
+    private static <T> T scoped(DashboardUserDetails p, Function<Long, T> action, T empty) {
         Long my = p.getBotUserId();
-        if (my == null) {
-            return Map.of();
-        }
-        return stats.statusBreakdown(periods.resolve(period, from, to), my);
+        return my == null ? empty : action.apply(my);
     }
 }

@@ -14,8 +14,9 @@ from pyrogram_client import ensure_utc
 
 logger = logging.getLogger(__name__)
 
-_FETCH_CHUNK = 1_000   # rows per fetchmany — O(1000) RAM peak
-_STORE_BATCH = 1_000   # rows per executemany INSERT
+from config import settings
+
+
 class MessageCache:
 
     def __init__(
@@ -157,11 +158,12 @@ class MessageCache:
 
         try:
             # INSERT OR REPLACE: newest import always wins
-            for i in range(0, len(rows), _STORE_BATCH):
+            store_batch = settings.CACHE_STORE_BATCH_SIZE
+            for i in range(0, len(rows), store_batch):
                 await self._db.executemany(
                     "INSERT OR REPLACE INTO messages(chat_id, topic_id, msg_id, msg_ts, data)"
                     " VALUES (?,?,?,?,?)",
-                    rows[i : i + _STORE_BATCH],
+                    rows[i : i + store_batch],
                 )
 
             # Merge ID ranges (без commit внутри — см. докстринг helper'ов)
@@ -204,7 +206,13 @@ class MessageCache:
             try:
                 await self._db.rollback()
             except Exception as rb_exc:
-                logger.warning(f"rollback failed during store_messages: {rb_exc}")
+                # rollback fail = SQLite в неопределённом состоянии; warning
+                # маскирует проблему, поэтому логируем как error со stacktrace.
+                logger.error(
+                    "rollback failed during store_messages — cache may be inconsistent: %s",
+                    rb_exc,
+                    exc_info=True,
+                )
             raise
 
         logger.debug(
@@ -235,7 +243,7 @@ class MessageCache:
             (chat_id_int, topic_id, low_id, high_id),
         ) as cursor:
             while True:
-                rows = await cursor.fetchmany(_FETCH_CHUNK)
+                rows = await cursor.fetchmany(settings.CACHE_FETCH_CHUNK_SIZE)
                 if not rows:
                     break
                 for row in rows:
@@ -339,7 +347,7 @@ class MessageCache:
             (chat_id_int, topic_id, ts_from, ts_to),
         ) as cursor:
             while True:
-                rows = await cursor.fetchmany(_FETCH_CHUNK)
+                rows = await cursor.fetchmany(settings.CACHE_FETCH_CHUNK_SIZE)
                 if not rows:
                     break
                 for row in rows:
@@ -433,6 +441,11 @@ class MessageCache:
     # ------------------------------------------------------------------ #
 
     async def _add_range(self, chat_id: int, topic_id: int, new_min: int, new_max: int):
+        # Единственный caller — store_messages (владеет outer-транзакцией, commit
+        # на верхнем уровне). aiosqlite isolation_level="" открывает deferred tx на
+        # первом DML — manual BEGIN IMMEDIATE здесь = nested transaction error.
+        # Single-writer гарантирует, что reader не увидит окно "no ranges":
+        # execute() сериализованы в одном connection.
         cached = await self.get_cached_ranges(chat_id, topic_id=topic_id)
         merged = self._merge_intervals(cached + [[new_min, new_max]])
         await self._db.execute(
@@ -458,6 +471,13 @@ class MessageCache:
         return merged
 
     async def _add_date_range(self, chat_id: int, topic_id: int, new_from: str, new_to: str):
+        # Два caller-path:
+        #   (a) store_messages — владеет outer-транзакцией, commit на верхнем уровне
+        #   (b) mark_date_range_checked — standalone, явный self._db.commit() сразу после
+        # В обоих случаях aiosqlite (isolation_level="") сам открывает deferred tx на
+        # первом DML — manual BEGIN IMMEDIATE = nested error. SIGKILL между DELETE
+        # и commit() в path (b) → date-range запись пропадёт, повторный fetch
+        # из Telegram (degraded, не corrupted).
         cached = await self.get_cached_date_ranges(chat_id, topic_id=topic_id)
         merged = self._merge_date_intervals(cached + [[new_from, new_to]])
         await self._db.execute(

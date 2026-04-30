@@ -27,7 +27,7 @@ COPY --from=build --chown=app:app /app/target/telegram-cleaner-*.jar app.jar
 USER app
 
 HEALTHCHECK --interval=10s --timeout=5s --retries=5 --start-period=30s \
-    CMD curl -sf http://localhost:8080/api/health || exit 1
+    CMD curl -sf --max-time 3 http://localhost:8080/api/health || exit 1
 
 # Явно ограничиваем heap под сервер 3 ГБ (mem_limit контейнера — 768m).
 # -Xmx640m оставляет ~128m для JVM native memory, metaspace и стека потоков.

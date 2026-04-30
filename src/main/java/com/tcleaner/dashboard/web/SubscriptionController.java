@@ -14,6 +14,11 @@ import com.tcleaner.dashboard.security.BotUserAccessPolicy;
 import com.tcleaner.dashboard.service.ingestion.ChatUpserter;
 import com.tcleaner.dashboard.service.subscription.SubscriptionService;
 import jakarta.validation.Valid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -45,6 +50,10 @@ import static org.springframework.http.HttpStatus.UNAUTHORIZED;
 @RequestMapping("/dashboard/api/subscriptions")
 public class SubscriptionController {
 
+    private static final Logger log = LoggerFactory.getLogger(SubscriptionController.class);
+
+    private static final int ADMIN_LIST_PAGE_SIZE = 500;
+
     private final SubscriptionService subscriptionService;
     private final ChatUpserter chatUpserter;
     private final ChatRepository chatRepository;
@@ -69,9 +78,17 @@ public class SubscriptionController {
             @RequestParam(required = false) Long userId) {
         List<ChatSubscription> subs;
         if (principal.getDashboardRole() == DashboardRole.ADMIN) {
-            subs = (userId != null)
-                    ? subscriptionService.listForUser(userId)
-                    : subscriptionService.listAll();
+            if (userId != null) {
+                subs = subscriptionService.listForUser(userId);
+            } else {
+                Page<ChatSubscription> page = subscriptionService.listAll(
+                        PageRequest.of(0, ADMIN_LIST_PAGE_SIZE, Sort.by(Sort.Direction.DESC, "id")));
+                if (!page.isLast()) {
+                    log.warn("ADMIN /api/subscriptions truncated: {}/{} rows shown — UI ещё не пагинирует",
+                            page.getNumberOfElements(), page.getTotalElements());
+                }
+                subs = page.getContent();
+            }
         } else {
             requireBoundUser(principal);
             subs = subscriptionService.listForUser(principal.getBotUserId());
@@ -121,13 +138,12 @@ public class SubscriptionController {
 
         ChatSubscription created;
         try {
-            Instant sinceDate = request.sinceDate() != null ? request.sinceDate() : Instant.now();
             created = subscriptionService.create(
                     principal.getBotUserId(),
                     chat.getId(),
                     request.periodHours(),
                     request.desiredTimeMsk(),
-                    sinceDate);
+                    request.sinceDate());
         } catch (IllegalArgumentException e) {
             throw new ResponseStatusException(BAD_REQUEST, e.getMessage());
         } catch (IllegalStateException e) {

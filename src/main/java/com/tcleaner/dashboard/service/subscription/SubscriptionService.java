@@ -5,6 +5,9 @@ import com.tcleaner.dashboard.domain.SubscriptionStatus;
 import com.tcleaner.dashboard.repository.ChatSubscriptionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -38,10 +41,10 @@ public class SubscriptionService {
         if (desiredTimeMsk == null || !TIME_PATTERN.matcher(desiredTimeMsk).matches()) {
             throw new IllegalArgumentException("desired_time_msk must be HH:MM");
         }
-        if (sinceDate == null) {
-            throw new IllegalArgumentException("since_date must not be null");
-        }
         Instant now = Instant.now();
+        if (sinceDate == null) {
+            sinceDate = now;
+        }
         if (sinceDate.isAfter(now)) {
             throw new IllegalArgumentException("since_date must not be in the future");
         }
@@ -196,9 +199,20 @@ public class SubscriptionService {
         return repository.findAllByBotUserId(botUserId);
     }
 
+    /**
+     * @deprecated Прежний admin-endpoint грузил всю таблицу в память.
+     * Новый код должен использовать {@link #listAll(Pageable)}.
+     * Текущая реализация ограничена 1000 строк во избежание OOM.
+     */
+    @Deprecated
     @Transactional(readOnly = true)
     public List<ChatSubscription> listAll() {
-        return repository.findAll();
+        return repository.findAll(PageRequest.of(0, 1000)).getContent();
+    }
+
+    @Transactional(readOnly = true)
+    public Page<ChatSubscription> listAll(Pageable pageable) {
+        return repository.findAll(pageable);
     }
 
     @Transactional(readOnly = true)

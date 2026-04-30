@@ -685,6 +685,11 @@ class TelegramClient:
             "description": getattr(chat, "description", "") or "",
         }
 
+    # Пауза между fallback'ами resolve: каскад get_dialogs → raw MTProto →
+    # canonical hit плотно дёргает Telegram API. Без backoff большой job
+    # может уйти в FloodWait после первого же fallback'а.
+    _RESOLVE_FALLBACK_DELAY_SECONDS: float = 0.2
+
     async def _resolve_numeric_chat_id(
         self, chat_id: int
     ) -> tuple[bool, Optional[dict], Optional[str]]:
@@ -708,8 +713,13 @@ class TelegramClient:
                     logger.warning(f"Failed to save canonical mapping: {redis_err}")
             return (True, chat_info, None)
 
+        except FloodWait as fw:
+            logger.warning(f"FloodWait {fw.value}s during fallback 1 (get_dialogs) chat={chat_id}")
+            await asyncio.sleep(fw.value + 1)
         except Exception as retry_error:
             logger.error(f"Cache sync retry failed for chat {chat_id}: {retry_error}")
+
+        await asyncio.sleep(self._RESOLVE_FALLBACK_DELAY_SECONDS)
 
         # Fallback 2: raw MTProto с access_hash=0 для публичных каналов.
         # Используем ответ GetChannels напрямую (username из ответа) вместо
@@ -753,10 +763,15 @@ class TelegramClient:
             except ChannelPrivate:
                 logger.error(f"❌ Channel {chat_id} is private (raw MTProto)")
                 # Не возвращаем сразу — попробуем fallback 3
+            except FloodWait as fw:
+                logger.warning(f"FloodWait {fw.value}s during fallback 2 (GetChannels) chat={chat_id}")
+                await asyncio.sleep(fw.value + 1)
             except Exception as raw_error:
                 logger.error(
                     f"Raw MTProto fallback failed for channel {chat_id}: {raw_error}"
                 )
+
+        await asyncio.sleep(self._RESOLVE_FALLBACK_DELAY_SECONDS)
 
         # Fallback 3: Redis canonical reverse mapping (username → numeric_id)
         result = await self._resolve_via_canonical_mapping(chat_id)
@@ -867,7 +882,7 @@ async def create_client() -> TelegramClient:
         try:
             if client.client.is_connected:
                 await client.client.stop()
-        except Exception:
-            pass
+        except Exception as stop_err:
+            logger.debug("Pyrogram stop() during cleanup failed: %s", stop_err)
         raise
     return client

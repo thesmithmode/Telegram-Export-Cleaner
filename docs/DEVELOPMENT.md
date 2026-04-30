@@ -75,3 +75,37 @@ python -m py_compile export-worker/*.py  # Python синтаксис
 - `REFACTOR:`
 - `TEST:`
 - `CHORE:`
+
+---
+
+## Pinning policy для зависимостей
+
+- **Java/Maven**: версии каркасных артефактов наследуются из Spring Boot BOM,
+  но любые версии, влияющие на runtime-поведение или security (Caffeine,
+  Liquibase, sqlite-jdbc, telegrambots), **зафиксированы явно в `pom.xml`**.
+  Без этого `mvn dependency:tree` после bump'а Spring Boot мог бы тихо
+  поменять major-версии. Изменение пина — отдельный PR с обоснованием.
+- **Python/pip**: `requirements.txt` использует `==X.Y.Z` (без `~=`/`>=`).
+  Каждая версия закрепляется на тестируемом релизе; bump = правка строки
+  + прогон CI. `pip-audit` запускается в CI на каждый push.
+- **GitHub Actions**: third-party actions (`appleboy/scp-action`,
+  `appleboy/ssh-action`) запинены **на SHA**, не на тег — supply-chain
+  риск (тег можно перенести). Bump через `gh api repos/.../git/refs/tags/<TAG>`.
+- **Docker base images**: `eclipse-temurin:21-jre-alpine`, `python:3.11-slim`,
+  `redis:7-alpine` — major+minor зафиксированы. Digest-pin (`@sha256:...`)
+  опционально, по риск-аппетиту проекта.
+
+---
+
+## Pre-commit hooks
+
+`.pre-commit-config.yaml` в корне настраивает gitleaks + базовые file-санитайзеры.
+
+```bash
+pip install pre-commit
+pre-commit install              # ставит hook в .git/hooks/pre-commit
+pre-commit run --all-files      # прогон руками по всему репо
+```
+
+Зачем: репо публичный → случайно закоммиченный Telegram bot token / API hash
+требует ротации всех env (отзыв через `@BotFather` + redeploy CI).

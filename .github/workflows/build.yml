@@ -108,9 +108,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Copy docker-compose.prod.yml to server
-        # SECURITY: pin to SHA to prevent supply-chain attack (tag can be moved).
-        # To update: gh api repos/appleboy/scp-action/git/refs/tags/v0.1.7 --jq '.object.sha'
-        uses: appleboy/scp-action@v0.1.7
+        # SECURITY: pinned to SHA to prevent supply-chain attack (tag can be moved).
+        # SHA = appleboy/scp-action@v0.1.7
+        # To bump: gh api repos/appleboy/scp-action/git/refs/tags/<TAG> --jq '.object.sha'
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634 # v0.1.7
         with:
           host: ${{ secrets.SERVER_HOST }}
           port: ${{ secrets.SERVER_PORT }}
@@ -121,9 +122,10 @@ jobs:
           strip_components: 0
 
       - name: SSH Deploy
-        # SECURITY: pin to SHA to prevent supply-chain attack (tag can be moved).
-        # To update: gh api repos/appleboy/ssh-action/git/refs/tags/v1.0.3 --jq '.object.sha'
-        uses: appleboy/ssh-action@v1.0.3
+        # SECURITY: pinned to SHA to prevent supply-chain attack (tag can be moved).
+        # SHA = appleboy/ssh-action@v1.0.3
+        # To bump: gh api repos/appleboy/ssh-action/git/refs/tags/<TAG> --jq '.object.sha'
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262 # v1.0.3
         with:
           host: ${{ secrets.SERVER_HOST }}
           port: ${{ secrets.SERVER_PORT }}

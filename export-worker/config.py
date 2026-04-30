@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     MAX_WORKERS: int = 1
     JOB_TIMEOUT: int = 1800  # 30 minutes (optimized for weak server)
 
+    # Main loop circuit breaker: после стольких подряд неудачных итераций
+    # ExportWorker.run() делает sys.exit(1), супервизор контейнера перезапускает.
+    # Без этого Redis/SQLite outage превращается в тихий бесконечный sleep-loop
+    # с heartbeat'ом, выглядящим живым.
+    MAIN_LOOP_MAX_CONSECUTIVE_ERRORS: int = 10
+
     # Retry policy
     MAX_RETRIES: int = 3
     RETRY_BASE_DELAY: float = 1.0  # seconds
@@ -55,6 +61,20 @@ class Settings(BaseSettings):
     CACHE_MAX_MESSAGES_PER_CHAT: int = 100_000
     CACHE_STATS_INTERVAL_SECONDS: int = 60         # admin dashboard snapshot period
     CACHE_STATS_TOP_N: int = 50                    # chats per snapshot
+    CACHE_FETCH_CHUNK_SIZE: int = 1_000           # rows per cursor.fetchmany
+    CACHE_STORE_BATCH_SIZE: int = 1_000           # rows per executemany INSERT
+
+    # Единая политика таймаутов: heartbeat-loop в worker, job-execution,
+    # сетевые операции к Java, BLPOP socket. Хотя сейчас разнесены по
+    # отдельным полям выше — собранный mapping для introspect/доков.
+    @property
+    def TIMEOUTS(self) -> dict:
+        return {
+            "heartbeat_ttl": 120,
+            "job_execution": self.JOB_TIMEOUT,
+            "java_upload": 3600,
+            "redis_socket": 10,
+        }
 
     # Logging
     LOG_LEVEL: str = "INFO"

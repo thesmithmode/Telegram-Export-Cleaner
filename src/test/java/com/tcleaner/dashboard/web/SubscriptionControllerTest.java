@@ -16,6 +16,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -114,11 +117,12 @@ class SubscriptionControllerTest {
     }
 
     @Test
-    @DisplayName("list: ADMIN без userId — listAll()")
+    @DisplayName("list: ADMIN без userId — listAll(Pageable)")
     void listAdmin_noUserId_callsListAll() throws Exception {
         ChatSubscription sub1 = stubSubscription(10L, 1L);
         ChatSubscription sub2 = stubSubscription(20L, 2L);
-        when(subscriptionService.listAll()).thenReturn(List.of(sub1, sub2));
+        Page<ChatSubscription> page = new PageImpl<>(List.of(sub1, sub2));
+        when(subscriptionService.listAll(any(Pageable.class))).thenReturn(page);
         when(chatRepository.findAllById(any())).thenReturn(List.of(stubChat(100L)));
 
         mockMvc.perform(get("/dashboard/api/subscriptions")
@@ -126,7 +130,7 @@ class SubscriptionControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(2));
 
-        verify(subscriptionService).listAll();
+        verify(subscriptionService).listAll(any(Pageable.class));
     }
 
     @Test

@@ -52,14 +52,17 @@ public class FeedbackService {
     public Result submit(long botUserId, String rawMessage) {
         Objects.requireNonNull(rawMessage, "rawMessage");
         if (messenger == null) {
+            log.warn("Feedback rejected (messenger unavailable, bot token missing) botUserId={}", botUserId);
             return Result.SEND_FAILED;
         }
         if (botUserId == adminTelegramId) {
+            log.info("Feedback FORBIDDEN: admin self-feedback blocked botUserId={}", botUserId);
             return Result.FORBIDDEN;
         }
 
         // putIfAbsent — атомарный CAS claim слота, без гонки check-then-act.
         if (rateLimit.putIfAbsent(botUserId, Boolean.TRUE) != null) {
+            log.info("Feedback RATE_LIMITED botUserId={}", botUserId);
             return Result.RATE_LIMITED;
         }
 
@@ -71,11 +74,11 @@ public class FeedbackService {
         if (!messenger.trySend(adminTelegramId, text)) {
             // Освобождаем слот: юзер должен иметь возможность повторить без 60-секундной кары.
             rateLimit.evict(botUserId);
-            log.warn("Feedback: TG API failure для botUserId={}", botUserId);
+            log.warn("Feedback SEND_FAILED: TG API failure для botUserId={}", botUserId);
             return Result.SEND_FAILED;
         }
 
-        log.info("Feedback отправлен админу: botUserId={} chars={}", botUserId, text.length());
+        log.info("Feedback SENT админу: botUserId={} chars={}", botUserId, text.length());
         return Result.SENT;
     }
 

@@ -1,18 +1,22 @@
-# Development & Testing Dependencies
-# Install: pip install -r requirements-dev.txt
+# Dev/test dependencies. Install: pip install -r requirements-dev.txt
+# Single source для CI и локальной разработки. CI вызывает этот файл
+# в каждом job'е python-tests.yml — версии должны совпадать с CI baseline.
 
 -r requirements.txt
 
-# Testing
-pytest==7.4.4
-pytest-asyncio==0.23.3
-pytest-cov==4.1.0
+# Test runner — версии прибиты под CI (без drift'а между unit/integration/e2e/perf)
+pytest==8.3.5
+pytest-asyncio==0.23.8
+pytest-cov==5.0.0
 pytest-mock==3.12.0
 
-# Redis mock
+# Redis mock (для локальных integration без docker-compose)
 fakeredis[aioredis]==2.21.1
 
-# Code quality
+# Linter (CI: ruff check --select F,E9,W605)
+ruff
+
+# Опциональные локальные tools (CI ими не пользуется)
 black==24.1.1
 isort==5.13.2
 flake8==7.0.0

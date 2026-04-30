@@ -49,10 +49,12 @@ curl http://localhost:8080/api/health
 
 ## REST API
 
-Конвертация экспорта Telegram Desktop (`result.json`) без бота:
+Конвертация экспорта Telegram Desktop (`result.json`) без бота. Все запросы
+к `/api/**` (кроме `/api/health`) требуют заголовок `X-API-Key: $JAVA_API_KEY`:
 
 ```bash
 curl -X POST http://localhost:8080/api/convert \
+  -H "X-API-Key: $JAVA_API_KEY" \
   -F "file=@result.json" \
   -F "startDate=2024-01-01" \
   -F "endDate=2024-12-31" \
@@ -60,6 +62,8 @@ curl -X POST http://localhost:8080/api/convert \
 ```
 
 Параметры: `startDate`, `endDate` (YYYY-MM-DD), `keywords`, `excludeKeywords` (CSV).
+По умолчанию `/api/**` опубликован только во внутреннюю Docker-сеть; чтобы
+обращаться снаружи — настроить Traefik route с auth (см. `docs/SETUP.md`).
 
 ---
 
@@ -108,7 +112,8 @@ Java API (POST /api/convert)
 | `TELEGRAM_SESSION_STRING` | Pyrogram session для стабильной авторизации |
 | `CACHE_MAX_DISK_GB` | Лимит SQLite-кэша (по умолчанию 25 GB) |
 
-Полный список: [docs/SETUP.md](docs/SETUP.md)
+Полный список переменных и значения по умолчанию — [`.env.example`](.env.example).
+Описание установки и настройки — [docs/SETUP.md](docs/SETUP.md).
 
 ---
 

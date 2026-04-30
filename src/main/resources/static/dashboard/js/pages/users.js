@@ -1,30 +1,48 @@
-/**
- * users.js — наполняет таблицу топ-пользователей на /dashboard/users (ADMIN only).
- * Данные: GET /dashboard/api/stats/users.
- */
 (function () {
     "use strict";
 
-    const { fetchJson, formatNumber, formatBytes, formatDate, escapeHtml,
+    const { fetchJson, formatNumber, formatBytes, formatDate,
             setCountBadge, initSortableTable, onReady } = window.Dashboard || {};
     if (!fetchJson) { return; }
 
+    function el(tag, props, ...children) {
+        const node = document.createElement(tag);
+        if (props) {
+            for (const [k, v] of Object.entries(props)) {
+                if (k === "style") { node.style.cssText = v; }
+                else if (k === "text") { node.textContent = v; }
+                else if (k === "href") { node.href = v; }
+                else if (k === "colSpan") { node.colSpan = v; }
+                else { node.setAttribute(k, v); }
+            }
+        }
+        for (const c of children) {
+            if (c == null || c === false) continue;
+            node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+        }
+        return node;
+    }
+
     function row(u) {
-        const name = escapeHtml(u.displayName || u.username || `id ${u.botUserId}`);
-        const link = `/dashboard/user/${encodeURIComponent(u.botUserId)}`;
-        return `<tr>
-          <td><a href="${link}">${name}</a> <small style="color:var(--muted)"><code>@${escapeHtml(u.username || "")}</code></small></td>
-          <td>${formatNumber(u.totalExports)}</td>
-          <td>${formatNumber(u.totalMessages)}</td>
-          <td>${formatBytes(u.totalBytes)}</td>
-          <td>${formatDate(u.lastSeen)}</td>
-        </tr>`;
+        const link = el("a", { href: `/dashboard/user/${encodeURIComponent(u.botUserId)}`,
+                               text: u.displayName || u.username || `id ${u.botUserId}` });
+        const small = u.username
+            ? el("small", { style: "color:var(--muted)" }, " ", el("code", { text: "@" + u.username }))
+            : null;
+        return el("tr", null,
+            el("td", null, link, small),
+            el("td", { text: formatNumber(u.totalExports) }),
+            el("td", { text: formatNumber(u.totalMessages) }),
+            el("td", { text: formatBytes(u.totalBytes) }),
+            el("td", { text: formatDate(u.lastSeen) }));
+    }
+
+    function emptyRow(colspan, text) {
+        return el("tr", null, el("td", { colSpan: colspan, style: "text-align:center;color:var(--muted)", text }));
     }
 
     function render(tbody, rows) {
-        tbody.innerHTML = rows.length
-            ? rows.map(row).join("")
-            : `<tr><td colspan="5" style="text-align:center;color:var(--muted)">Нет данных</td></tr>`;
+        tbody.replaceChildren(...(rows.length ? rows.map(row) : [emptyRow(5, "Нет данных")]));
     }
 
     function sortValue(u, key) {
@@ -53,10 +71,8 @@
                 });
             }
         } catch (e) {
-            const ec = document.createElement("td");
-            ec.colSpan = 5; ec.style.color = "var(--danger)"; ec.textContent = `Ошибка загрузки: ${e.message}`;
-            tbody.textContent = "";
-            tbody.appendChild(document.createElement("tr")).appendChild(ec);
+            tbody.replaceChildren(el("tr", null,
+                el("td", { colSpan: 5, style: "color:var(--danger)", text: `Ошибка загрузки: ${e.message}` })));
         }
     }
 

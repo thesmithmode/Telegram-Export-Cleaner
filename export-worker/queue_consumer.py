@@ -248,6 +248,14 @@ class QueueConsumer:
             return False
 
     async def mark_job_processing(self, task_id: str) -> bool:
+        """
+        Stale-cleanup policy: TTL = settings.JOB_TIMEOUT — единственный
+        watcher. Если worker упал между mark_job_processing и
+        mark_job_completed/failed, ключ job:processing:{task_id} уйдёт сам
+        через TTL. Дополнительный sweeper не нужен пока worker ровно один;
+        при multi-worker scale-up — health-route сканирует stale-keys и
+        re-queues их в LPUSH (отдельная задача).
+        """
         if not self.redis_client:
             return False
 

@@ -3,11 +3,15 @@ package com.tcleaner;
 import com.tcleaner.api.ApiExceptionHandler;
 import com.tcleaner.api.TelegramController;
 import com.tcleaner.core.TelegramExporter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.mock.web.MockMultipartFile;
@@ -26,9 +30,20 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @WebMvcTest(TelegramController.class)
 @AutoConfigureMockMvc(addFilters = false)
-@Import({SecurityConfig.class, ApiExceptionHandler.class, WebConfig.class})
+@Import({SecurityConfig.class, ApiExceptionHandler.class, WebConfig.class,
+         TelegramControllerTest.MeterRegistryTestConfig.class})
 @DisplayName("TelegramController")
 class TelegramControllerTest {
+
+    @TestConfiguration
+    static class MeterRegistryTestConfig {
+        // @WebMvcTest не подгружает Actuator autoconfig → MeterRegistry bean
+        // отсутствует. SimpleMeterRegistry — in-memory replacement без зависимостей.
+        @Bean
+        MeterRegistry meterRegistry() {
+            return new SimpleMeterRegistry();
+        }
+    }
 
     @MockitoBean
     private TelegramExporter mockExporter;

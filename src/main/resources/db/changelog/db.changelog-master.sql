@@ -187,6 +187,10 @@ ALTER TABLE bot_users ADD COLUMN language VARCHAR(5);
 -- confirm_sent_at, если last_confirm_at не обновился.
 -- =============================================================================
 
+-- FROZEN — НЕ ПРАВИТЬ. Любые правки SQL ниже = checksum mismatch на всех prod-инстансах.
+-- Будущие изменения схемы chat_subscriptions — отдельным changeset'ом 011+.
+-- 3 хэша = история итераций фичи (e53cf99 initial → 0e487e9 rollback →
+-- 18affd3 re-apply → f8655b0 stable). HOTFIX зафиксирован в 70227bc.
 --changeset app:005-chat-subscriptions splitStatements:true endDelimiter:;
 --validCheckSum 9:5698e3138e2d4ba8c68c44e470fda569
 --validCheckSum 9:f065391456d8bb485ed15f958ed307d0
@@ -229,6 +233,8 @@ CREATE INDEX idx_subscriptions_user
 -- 006: Поле subscription_id в export_events для аудита итераций подписки.
 -- =============================================================================
 
+-- FROZEN — НЕ ПРАВИТЬ. См. примечание над changeset 005.
+-- Будущие изменения export_events — отдельным changeset'ом 011+.
 --changeset app:006-export-events-subscription-id splitStatements:true endDelimiter:;
 --validCheckSum 9:a4c2e5698e3138e2d4ba8c68c44e470f
 --validCheckSum 9:05243c9c30c22ab0e2ff307374f3e0d5
@@ -259,6 +265,13 @@ CREATE UNIQUE INDEX uk_subscriptions_one_active_per_user
 -- =============================================================================
 -- 008: FK dashboard_users.bot_user_id → bot_users(bot_user_id) ON DELETE SET NULL.
 -- SQLite не поддерживает ADD CONSTRAINT, поэтому пересоздаём таблицу.
+--
+-- WARNING: на больших таблицах rebuild = downtime. dashboard_users маленькая
+-- (≤десятки записей), но при росте >10k нужен offline-deploy или blue/green.
+-- При этом DROP TABLE + INSERT — атомарны (single transaction Liquibase).
+--
+-- Rollback declarations ниже корректны для последовательного применения,
+-- но требуют rollback в обратном порядке без шагов между ними.
 -- =============================================================================
 
 --changeset app:008-fk-dashboard-users-bot-user-id splitStatements:true endDelimiter:;
@@ -313,6 +326,8 @@ CREATE UNIQUE INDEX idx_dashboard_users_telegram_id
 
 ALTER TABLE chat_subscriptions ADD COLUMN version BIGINT NOT NULL DEFAULT 0;
 
+-- DROP COLUMN требует SQLite >= 3.35; sqlite-jdbc 3.46.1.3 в pom.xml бандлит 3.46.1.
+-- На старых версиях rollback падает с syntax error — но прод заперт на bundled jdbc.
 --rollback ALTER TABLE chat_subscriptions DROP COLUMN version;
 
 -- =============================================================================

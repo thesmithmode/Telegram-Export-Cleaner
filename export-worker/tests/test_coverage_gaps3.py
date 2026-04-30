@@ -1221,6 +1221,11 @@ class TestJavaSendProgressUpdate:
         c.bot_token = "fake:token"
         c._http_client = AsyncMock()
         c.max_retries = 3
+        # send_progress_update использует self._tg_timeout (init'ится только в
+        # __init__). Без атрибута AttributeError маскируется silent-except в
+        # production коде → test ассертит msg_id который не возвращается.
+        import httpx as _httpx
+        c._tg_timeout = _httpx.Timeout(timeout=5.0)
         return c
 
     @pytest.mark.asyncio

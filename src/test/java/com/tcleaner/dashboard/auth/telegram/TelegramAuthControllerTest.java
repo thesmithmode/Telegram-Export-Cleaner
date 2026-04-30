@@ -14,6 +14,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -26,6 +28,10 @@ import java.time.ZoneOffset;
 import jakarta.servlet.http.Cookie;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.cookie;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
@@ -69,10 +75,22 @@ class TelegramAuthControllerTest {
     @MockitoBean
     TelegramExporter exporter;
 
+    // Redis в CI не запущен (см. application-test.properties — RedisAutoConfiguration
+    // отключена для !testcontainers). Без mock'а реальный setIfAbsent бросает
+    // RedisConnectionFailureException → fail-closed nonce-check (TD-001) отдаёт
+    // редирект на ?error=infra и happy-path тесты падают. До фикса TD-001
+    // silent-except маскировал эту проблему.
+    @MockitoBean
+    StringRedisTemplate redis;
+    @SuppressWarnings("unchecked")
+    ValueOperations<String, String> redisOps = org.mockito.Mockito.mock(ValueOperations.class);
+
     @BeforeEach
     void cleanDb() {
         dashboardUsers.deleteAll();
         botUsers.deleteAll();
+        when(redis.opsForValue()).thenReturn(redisOps);
+        when(redisOps.setIfAbsent(anyString(), eq("1"), any())).thenReturn(true);
     }
 
     private String buildInitData(long id, String firstName, String username, long authDate) throws Exception {

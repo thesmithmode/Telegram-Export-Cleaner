@@ -1,5 +1,8 @@
 # Setup
 
+> **Это инструкция для локальной разработки.** Для деплоя на VPS с
+> доменом / TLS / Traefik см. [`SERVER_SETUP.md`](SERVER_SETUP.md).
+
 ## 1) Требования
 
 - Docker + Docker Compose
@@ -110,3 +113,20 @@ docker compose logs -f redis
 
 ### `/cancel` говорит, что активного экспорта нет
 - Проверьте TTL ключа `active_export:{userId}` и текущий статус job в Redis.
+
+---
+
+## Ротация JAVA_API_KEY
+
+`JAVA_API_KEY` — shared secret между java-bot и export-worker. Хранится в
+GitHub Secrets, инжектится в `.env` на сервере при CI deploy. Ротация:
+
+1. Сгенерировать новый: `openssl rand -hex 32`.
+2. Обновить GitHub Secret `JAVA_API_KEY` (Settings → Secrets and variables → Actions).
+3. Дождаться следующего push в `main` ИЛИ вручную retrigger workflow.
+4. Проверить, что оба контейнера (java-bot + python-worker) перезапустились
+   и `docker compose logs java-bot` не содержит `401 Invalid API Key`.
+
+Деплой атомарный (rollback при health-fail), поэтому пауза в окне обновления
+не нужна — старый ключ работает до момента up'а нового image. После — оба
+контейнера читают новый из `.env`.

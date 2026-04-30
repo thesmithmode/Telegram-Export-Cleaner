@@ -1,5 +1,5 @@
 
-from typing import Any, List, Literal, Optional, Union
+from typing import AsyncIterator, List, Literal, Optional, Union
 from datetime import datetime
 from enum import Enum
 from typing_extensions import TypedDict
@@ -28,7 +28,11 @@ class ErrorCode(str, Enum):
 
 class ExportRequest(BaseModel):
 
+    # frozen=True — после десериализации из Redis объект immutable.
+    # Без этого retry/cleanup-пути могли мутировать chat_id или task_id и
+    # ломать idempotency очереди (тот же task_id с другими параметрами).
     model_config = ConfigDict(
+        frozen=True,
         json_schema_extra={
             "example": {
                 "task_id": "export_12345",
@@ -173,17 +177,20 @@ class ExportedMessage(BaseModel):
 
 class SendResponsePayload(BaseModel):
 
+    # arbitrary_types_allowed=True требуется потому что messages-поле объявлено
+    # как Union[List[ExportedMessage], AsyncIterator[ExportedMessage]]: pydantic
+    # 2.x не умеет сгенерировать схему для AsyncIterator. Валидация поля и так
+    # не нужна — сериализация идёт через _stream_to_temp_json напрямую.
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     task_id: str = Field(..., description="Unique task ID")
     status: str = Field(
         ...,
         description="completed or failed",
         pattern="^(completed|failed)$"
     )
-    # Runtime-полиморфно: List[ExportedMessage] из in-memory путей или
-    # AsyncIterator/AsyncGenerator из cache-aware экспорта. Pydantic не валидирует
-    # async-итераторы — оставляем Any, валидация поля не нужна (сериализуется не
-    # через Pydantic, а напрямую в _stream_to_temp_json).
-    messages: Union[List[ExportedMessage], Any] = Field(
+    # AsyncIterator валидируется не Pydantic'ом — сериализация идёт через _stream_to_temp_json.
+    messages: Union[List[ExportedMessage], AsyncIterator[ExportedMessage]] = Field(
         ...,
         description="Exported messages (list or AsyncIterator)"
     )

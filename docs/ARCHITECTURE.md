@@ -2,12 +2,18 @@
 
 ## Компоненты
 
+**Traefik v3 (prod)** — TLS termination (Let's Encrypt ACME), router
+для `/dashboard/**` (Mini App auth) и `/api/**` (X-API-Key) с docker-label
+маршрутизацией. `/api/**` опубликован только во внутреннюю сеть Docker
+(см. `docker-compose.prod.yml`); снаружи — Mini App Dashboard.
+
 **java-bot (Spring Boot :8080)**
 - Telegram long-polling bot (`ExportBot`)
 - Управление сессией и диалогом (`UserSession`)
 - Постановка задач в Redis (`ExportJobProducer`)
 - REST: `POST /api/convert`, `GET /api/health`
 - Web Dashboard `/dashboard/**` (Thymeleaf + JSON API, SQLite)
+- Stats ingestion из Redis Streams (`stats:events`) → SQLite dashboard.db
 
 **export-worker (Python)**
 - `QueueConsumer` — получение задач из Redis
