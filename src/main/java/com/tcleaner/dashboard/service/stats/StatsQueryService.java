@@ -137,19 +137,44 @@ public class StatsQueryService {
     public List<UserStatsRow> topUsersByPeriod(StatsPeriod period, int limit, Long botUserId) {
         String from = period.fromSql();
         String to = period.toSql();
-        String sql = "SELECT e.bot_user_id, u.username, u.display_name, "
+        // Step 1: aggregate-only query — no JOIN, fully covered by idx_events_overview_covering
+        String aggSql = "SELECT e.bot_user_id, "
                 + "COUNT(*) AS total_exports, "
                 + "COALESCE(SUM(e.messages_count), 0) AS total_messages, "
                 + "COALESCE(SUM(e.bytes_count), 0) AS total_bytes, "
                 + "MAX(e.started_at) AS last_seen "
-                + "FROM export_events e LEFT JOIN bot_users u ON e.bot_user_id = u.bot_user_id "
+                + "FROM export_events e "
                 + "WHERE e.started_at >= ? AND e.started_at <= ? "
                 + (byUser(botUserId) ? "AND e.bot_user_id = ? " : "")
                 + "GROUP BY e.bot_user_id ORDER BY total_exports DESC LIMIT ?";
-        Object[] args = byUser(botUserId)
+        Object[] aggArgs = byUser(botUserId)
                 ? new Object[]{from, to, botUserId, PaginationUtils.clamp(limit, 500)}
                 : new Object[]{from, to, PaginationUtils.clamp(limit, 500)};
-        return jdbc.query(sql, userStatsMapper(), args);
+
+        record AggRow(long userId, int exports, long messages, long bytes, String lastSeen) {}
+        List<AggRow> agg = jdbc.query(aggSql,
+                (rs, n) -> new AggRow(rs.getLong("bot_user_id"), rs.getInt("total_exports"),
+                        rs.getLong("total_messages"), rs.getLong("total_bytes"),
+                        rs.getString("last_seen")),
+                aggArgs);
+        if (agg.isEmpty()) return List.of();
+
+        // Step 2: batch lookup usernames by PK — O(1) per user vs JOIN on every event row
+        String placeholders = "?,".repeat(agg.size());
+        placeholders = placeholders.substring(0, placeholders.length() - 1);
+        Map<Long, String[]> userMeta = new java.util.HashMap<>();
+        jdbc.query("SELECT bot_user_id, username, display_name FROM bot_users WHERE bot_user_id IN (" + placeholders + ")",
+                (rs, n) -> {
+                    userMeta.put(rs.getLong("bot_user_id"),
+                            new String[]{rs.getString("username"), rs.getString("display_name")});
+                    return null;
+                },
+                agg.stream().map(AggRow::userId).toArray());
+
+        return agg.stream().map(r -> {
+            String[] meta = userMeta.getOrDefault(r.userId(), new String[]{null, null});
+            return new UserStatsRow(r.userId(), meta[0], meta[1], r.exports(), r.messages(), r.bytes(), r.lastSeen());
+        }).toList();
     }
 
     private static org.springframework.jdbc.core.RowMapper<UserStatsRow> userStatsMapper() {
@@ -164,23 +189,42 @@ public class StatsQueryService {
     public List<ChatStatsRow> topChats(StatsPeriod period, Long botUserId, int limit) {
         String from = period.fromSql();
         String to = period.toSql();
-        String sql = "SELECT e.chat_ref_id, c.canonical_chat_id, c.chat_title, "
+        // Step 1: aggregate-only — covered by idx_events_topchats_covering, no JOIN
+        String aggSql = "SELECT e.chat_ref_id, "
                 + "COUNT(*) AS export_count, "
                 + "COALESCE(SUM(e.messages_count), 0) AS total_messages, "
                 + "COALESCE(SUM(e.bytes_count), 0) AS total_bytes "
-                + "FROM export_events e LEFT JOIN chats c ON e.chat_ref_id = c.id "
+                + "FROM export_events e "
                 + "WHERE e.started_at >= ? AND e.started_at <= ? "
                 + (byUser(botUserId) ? "AND e.bot_user_id = ? " : "")
                 + "GROUP BY e.chat_ref_id ORDER BY total_bytes DESC LIMIT ?";
-        Object[] args = byUser(botUserId)
+        Object[] aggArgs = byUser(botUserId)
                 ? new Object[]{from, to, botUserId, limit}
                 : new Object[]{from, to, limit};
-        return jdbc.query(sql,
-                (rs, n) -> new ChatStatsRow(
-                        rs.getLong("chat_ref_id"), rs.getString("canonical_chat_id"),
-                        rs.getString("chat_title"), rs.getLong("export_count"),
+
+        record AggRow(long chatRefId, long exports, long messages, long bytes) {}
+        List<AggRow> agg = jdbc.query(aggSql,
+                (rs, n) -> new AggRow(rs.getLong("chat_ref_id"), rs.getLong("export_count"),
                         rs.getLong("total_messages"), rs.getLong("total_bytes")),
-                args);
+                aggArgs);
+        if (agg.isEmpty()) return List.of();
+
+        // Step 2: batch lookup chat meta by PK
+        String placeholders = "?,".repeat(agg.size());
+        placeholders = placeholders.substring(0, placeholders.length() - 1);
+        Map<Long, String[]> chatMeta = new java.util.HashMap<>();
+        jdbc.query("SELECT id, canonical_chat_id, chat_title FROM chats WHERE id IN (" + placeholders + ")",
+                (rs, n) -> {
+                    chatMeta.put(rs.getLong("id"),
+                            new String[]{rs.getString("canonical_chat_id"), rs.getString("chat_title")});
+                    return null;
+                },
+                agg.stream().map(AggRow::chatRefId).toArray());
+
+        return agg.stream().map(r -> {
+            String[] meta = chatMeta.getOrDefault(r.chatRefId(), new String[]{null, null});
+            return new ChatStatsRow(r.chatRefId(), meta[0], meta[1], r.exports(), r.messages(), r.bytes());
+        }).toList();
     }
 
     @Cacheable(value = HISTORICAL, key = "#period.toString() + '_' + #botUserId")

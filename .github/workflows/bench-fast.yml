@@ -1,0 +1,49 @@
+name: bench-fast
+
+on:
+  push:
+    branches: [fast]
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: export-worker
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: export-worker/requirements.txt
+
+      - name: Install deps
+        run: |
+          pip install -r requirements.txt
+          pip install psutil fakeredis
+
+      - name: bench_cache (N=1, baseline single-thread)
+        timeout-minutes: 2
+        run: python ../.claude/autoresearch/bench_cache.py 1 | tee ../.claude/autoresearch/run_cache_n1.log
+
+      - name: bench_cache (N=4, concurrent contention)
+        timeout-minutes: 2
+        run: python ../.claude/autoresearch/bench_cache.py 4 | tee ../.claude/autoresearch/run_cache_n4.log
+
+      - name: bench_idle (50k pending jobs)
+        timeout-minutes: 3
+        run: python ../.claude/autoresearch/bench_idle.py | tee ../.claude/autoresearch/run_idle.log
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## bench results" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          for f in ../.claude/autoresearch/run_*.log; do
+            echo "=== $f ===" >> $GITHUB_STEP_SUMMARY
+            grep -E "^[a-z_]+:" "$f" >> $GITHUB_STEP_SUMMARY || true
+          done
+          echo '```' >> $GITHUB_STEP_SUMMARY
