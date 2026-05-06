@@ -14,6 +14,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Читает снапшот статистики кэша Python-worker'а из Redis и обогащает топ-чаты
@@ -65,21 +67,61 @@ public class CacheMetricsService {
         List<CacheMetricsDto.ChatCacheEntry> enrichedTop = new ArrayList<>();
         Map<String, CacheMetricsDto.ChatTypeSegment> segmentation = new HashMap<>();
 
-        if (s.top_chats != null) {
-            for (RawChat rc : s.top_chats) {
-                ChatMeta meta = resolveChatMeta(rc.chat_id, rc.topic_id);
+        if (s.top_chats != null && !s.top_chats.isEmpty()) {
+            // batch DB lookup: one query for all chatIds
+            List<String> chatIdStrs = s.top_chats.stream()
+                    .map(rc -> String.valueOf(rc.chat_id))
+                    .distinct()
+                    .collect(Collectors.toList());
+            Map<String, Chat> dbChatMap = chatRepository.findAllByCanonicalChatIdIn(chatIdStrs)
+                    .stream()
+                    .collect(Collectors.toMap(
+                            c -> c.getCanonicalChatId() + ":" + c.getTopicId(),
+                            c -> c,
+                            (a, b) -> a));
+
+            // batch Redis mget: canonical:<id> and canonical:<id>:type for each chat
+            List<String> redisKeys = s.top_chats.stream()
+                    .flatMap(rc -> Stream.of("canonical:" + rc.chat_id, "canonical:" + rc.chat_id + ":type"))
+                    .collect(Collectors.toList());
+            List<String> redisVals;
+            try {
+                redisVals = redis.opsForValue().multiGet(redisKeys);
+            } catch (Exception e) {
+                log.debug("Redis multiGet failed: {}", e.getMessage());
+                redisVals = null;
+            }
+            // Lettuce/Jedis возвращают list с size == request (null для missing key); но
+            // при partial response / mock-defaults размер может расходиться — degrade
+            // в "redis недоступен" вместо IOOBE.
+            boolean redisOk = redisVals != null && redisVals.size() == redisKeys.size();
+
+            for (int i = 0; i < s.top_chats.size(); i++) {
+                RawChat rc = s.top_chats.get(i);
+                Integer tid = (rc.topic_id == 0) ? null : rc.topic_id;
+                Chat dbChat = dbChatMap.get(rc.chat_id + ":" + tid);
+
+                String username = redisOk ? redisVals.get(i * 2) : null;
+                if (username != null && (username.startsWith("-") || username.chars().allMatch(Character::isDigit))) {
+                    username = null;
+                }
+                String redisType = redisOk ? redisVals.get(i * 2 + 1) : null;
+                String dbType = dbChat != null ? dbChat.getChatType() : null;
+                String finalType = (redisType != null && !redisType.isBlank()) ? redisType : dbType;
+                String title = dbChat != null ? dbChat.getChatTitle() : null;
+
                 enrichedTop.add(new CacheMetricsDto.ChatCacheEntry(
                         rc.chat_id,
-                        rc.topic_id == 0 ? null : rc.topic_id,
-                        meta.title(),
-                        meta.username(),
-                        meta.chatType(),
+                        tid,
+                        title,
+                        username,
+                        finalType,
                         rc.msg_count,
                         rc.size_bytes,
                         rc.pct,
                         rc.last_accessed));
 
-                String segKey = meta.chatType() != null ? meta.chatType() : "unknown";
+                String segKey = finalType != null ? finalType : "unknown";
                 segmentation.merge(segKey,
                         new CacheMetricsDto.ChatTypeSegment(1, rc.size_bytes, rc.msg_count),
                         (existing, newVal) -> new CacheMetricsDto.ChatTypeSegment(
@@ -110,37 +152,6 @@ public class CacheMetricsService {
                 segmentation);
     }
 
-    private ChatMeta resolveChatMeta(long chatId, Integer topicId) {
-        Integer tid = (topicId == null || topicId == 0) ? null : topicId;
-        Chat dbChat = chatRepository
-                .findByCanonicalChatIdAndTopicId(String.valueOf(chatId), tid)
-                .orElse(null);
-        String dbTitle = dbChat != null ? dbChat.getChatTitle() : null;
-        String dbType = dbChat != null ? dbChat.getChatType() : null;
-
-        // canonical:<id> может хранить numeric-id (fallback input→canonical) — отсекаем.
-        String username = readRedisKey("canonical:" + chatId);
-        if (username != null && (username.startsWith("-") || username.chars().allMatch(Character::isDigit))) {
-            username = null;
-        }
-        String redisType = readRedisKey("canonical:" + chatId + ":type");
-        String finalType = (redisType != null && !redisType.isBlank()) ? redisType : dbType;
-        return new ChatMeta(dbTitle, finalType, username);
-    }
-
-    private String readRedisKey(String key) {
-        try {
-            String v = redis.opsForValue().get(key);
-            return (v != null && !v.isBlank()) ? v : null;
-        } catch (Exception e) {
-            // DEBUG, а не WARN: вызывается в цикле по каждому чату — падение Redis
-            // даст тысячи WARN. Недоступность Redis уже логируется один раз в get().
-            log.debug("Redis read failed for key={}: {}", key, e.getMessage());
-            return null;
-        }
-    }
-
-    private record ChatMeta(String title, String chatType, String username) {}
 
     // ── wire-level records (snake_case, matches Python payload) ──────────────
 

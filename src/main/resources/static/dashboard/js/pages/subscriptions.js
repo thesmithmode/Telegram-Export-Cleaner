@@ -204,10 +204,18 @@
         const hasInProgress = rows.some(sub =>
             sub.status === "ACTIVE" && computeNextRun(sub) === I18N.inProgress
         );
-        if (hasInProgress) {
-            _pollTimer = setTimeout(loadSubscriptions, 15000);
+        if (hasInProgress && !document.hidden) {
+            _pollTimer = setTimeout(loadSubscriptions, 30000);
         }
     }
+
+    document.addEventListener("visibilitychange", function () {
+        if (!document.hidden) {
+            loadSubscriptions();
+        } else {
+            clearTimeout(_pollTimer);
+        }
+    });
 
     async function loadSubscriptions() {
         try {

@@ -10,11 +10,11 @@ import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
-import java.util.Optional;
+import java.util.Arrays;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -94,12 +94,13 @@ class CacheMetricsServiceTest {
                 }
                 """;
         when(ops.get(CacheMetricsService.SNAPSHOT_KEY)).thenReturn(json);
-        when(chatRepo.findByCanonicalChatIdAndTopicId(eq("-1001"), any()))
-                .thenReturn(Optional.of(Chat.builder()
-                        .chatTitle("Group A").chatType("supergroup").build()));
-        when(chatRepo.findByCanonicalChatIdAndTopicId(eq("-1002"), any()))
-                .thenReturn(Optional.of(Chat.builder()
+        when(chatRepo.findAllByCanonicalChatIdIn(anyCollection())).thenReturn(List.of(
+                Chat.builder().canonicalChatId("-1001").topicId(null)
+                        .chatTitle("Group A").chatType("supergroup").build(),
+                Chat.builder().canonicalChatId("-1002").topicId(null)
                         .chatTitle("Channel B").chatType("channel").build()));
+        // 2 chats × 2 keys (canonical + canonical:type) = 4 nulls (Redis unset)
+        when(ops.multiGet(anyCollection())).thenReturn(Arrays.asList(null, null, null, null));
 
         CacheMetricsDto dto = service.get();
 
@@ -131,8 +132,8 @@ class CacheMetricsServiceTest {
                 }
                 """;
         when(ops.get(CacheMetricsService.SNAPSHOT_KEY)).thenReturn(json);
-        when(chatRepo.findByCanonicalChatIdAndTopicId(any(), any()))
-                .thenReturn(Optional.empty());
+        when(chatRepo.findAllByCanonicalChatIdIn(anyCollection())).thenReturn(List.of());
+        when(ops.multiGet(anyCollection())).thenReturn(Arrays.asList(null, null));
 
         CacheMetricsDto dto = service.get();
 
@@ -156,10 +157,10 @@ class CacheMetricsServiceTest {
                 }
                 """;
         when(ops.get(CacheMetricsService.SNAPSHOT_KEY)).thenReturn(json);
-        when(ops.get("canonical:-1001")).thenReturn("groupa");
-        when(ops.get("canonical:-1001:type")).thenReturn("channel");
-        when(chatRepo.findByCanonicalChatIdAndTopicId(eq("-1001"), any()))
-                .thenReturn(Optional.of(Chat.builder()
+        // batch multiGet: [canonical:-1001, canonical:-1001:type] → ["groupa", "channel"]
+        when(ops.multiGet(anyCollection())).thenReturn(Arrays.asList("groupa", "channel"));
+        when(chatRepo.findAllByCanonicalChatIdIn(anyCollection())).thenReturn(List.of(
+                Chat.builder().canonicalChatId("-1001").topicId(null)
                         .chatTitle("Group A").chatType("supergroup").build()));
 
         CacheMetricsDto dto = service.get();
@@ -185,9 +186,9 @@ class CacheMetricsServiceTest {
                 }
                 """;
         when(ops.get(CacheMetricsService.SNAPSHOT_KEY)).thenReturn(json);
-        when(ops.get("canonical:-1001")).thenReturn("-1001");
-        when(chatRepo.findByCanonicalChatIdAndTopicId(any(), any()))
-                .thenReturn(Optional.empty());
+        // canonical:-1001 = "-1001" → numeric-id, должно фильтроваться → username=null
+        when(ops.multiGet(anyCollection())).thenReturn(Arrays.asList("-1001", null));
+        when(chatRepo.findAllByCanonicalChatIdIn(anyCollection())).thenReturn(List.of());
 
         CacheMetricsDto dto = service.get();
         assertThat(dto.topChats().get(0).username()).isNull();
@@ -203,8 +204,8 @@ class CacheMetricsServiceTest {
                                "last_accessed":0,"pct":0}],
                  "heatmap":{}}""";
         when(ops.get(CacheMetricsService.SNAPSHOT_KEY)).thenReturn(json);
-        when(chatRepo.findByCanonicalChatIdAndTopicId(any(), any()))
-                .thenReturn(Optional.empty());
+        when(ops.multiGet(anyCollection())).thenReturn(Arrays.asList(null, null));
+        when(chatRepo.findAllByCanonicalChatIdIn(anyCollection())).thenReturn(List.of());
 
         CacheMetricsDto dto = service.get();
         assertThat(dto.topChats().get(0).topicId()).isNull();

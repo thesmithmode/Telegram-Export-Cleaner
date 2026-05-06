@@ -6,6 +6,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -26,4 +28,6 @@ public interface ChatRepository extends JpaRepository<Chat, Long> {
     Optional<Chat> findByCanonicalChatIdAndTopicId(
             @Param("canonicalChatId") String canonicalChatId,
             @Param("topicId") Integer topicId);
+
+    List<Chat> findAllByCanonicalChatIdIn(Collection<String> canonicalChatIds);
 }

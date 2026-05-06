@@ -352,3 +352,41 @@ SET total_exports = (
 
 --rollback -- Recompute идемпотентен: rollback пересчитывает по старому правилу (включая CANCELLED).
 --rollback UPDATE bot_users SET total_exports = (SELECT COUNT(*) FROM export_events WHERE export_events.bot_user_id = bot_users.bot_user_id AND export_events.status IN ('COMPLETED', 'FAILED', 'CANCELLED'));
+
+-- 011: Composite indexes для ускорения dashboard queries при 50k пользователях.
+-- statusBreakdown(): status + started_at — composite быстрее двух отдельных при range+group.
+-- overview (periodTotals): covering index — started_at + счётчики, избегает table lookup.
+-- topChats: covering index — chat_ref_id + started_at + счётчики, GROUP BY без table scan.
+--changeset app:011-perf-composite-indexes splitStatements:true endDelimiter:;
+
+CREATE INDEX idx_events_status_started
+    ON export_events (status, started_at DESC);
+
+CREATE INDEX idx_events_overview_covering
+    ON export_events (started_at DESC, bot_user_id, messages_count, bytes_count);
+
+CREATE INDEX idx_events_topchats_covering
+    ON export_events (chat_ref_id, started_at DESC, messages_count, bytes_count);
+
+--rollback DROP INDEX IF EXISTS idx_events_topchats_covering;
+--rollback DROP INDEX IF EXISTS idx_events_overview_covering;
+--rollback DROP INDEX IF EXISTS idx_events_status_started;
+
+-- 012: Исправить порядок колонок в covering indexes (011 использовал chat_ref_id/status как leading column,
+-- но запросы фильтруют по started_at → плохой план → регрессия +27%).
+-- Правильно: leading column = started_at (колонка фильтра WHERE).
+--changeset app:012-fix-covering-index-column-order splitStatements:true endDelimiter:;
+
+DROP INDEX IF EXISTS idx_events_status_started;
+DROP INDEX IF EXISTS idx_events_topchats_covering;
+
+CREATE INDEX idx_events_topchats_covering
+    ON export_events (started_at DESC, chat_ref_id, messages_count, bytes_count);
+
+CREATE INDEX idx_events_status_covering
+    ON export_events (started_at DESC, status);
+
+--rollback DROP INDEX IF EXISTS idx_events_status_covering;
+--rollback DROP INDEX IF EXISTS idx_events_topchats_covering;
+--rollback CREATE INDEX idx_events_topchats_covering ON export_events (chat_ref_id, started_at DESC, messages_count, bytes_count);
+--rollback CREATE INDEX idx_events_status_started ON export_events (status, started_at DESC);

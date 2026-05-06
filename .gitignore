@@ -71,6 +71,7 @@ GEMINI.md
 .claude/*
 !.claude/settings.json
 !.claude/settings.local.json
+!.claude/autoresearch/
 Index.md
 # Serena MCP
 .serena/
