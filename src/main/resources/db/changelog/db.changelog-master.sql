@@ -341,6 +341,7 @@ ALTER TABLE chat_subscriptions ADD COLUMN version BIGINT NOT NULL DEFAULT 0;
 -- =============================================================================
 
 --changeset app:010-recompute-total-exports splitStatements:true endDelimiter:;
+--validCheckSum 9:4106ba37c2b2989bcf257be00cbed768
 
 UPDATE bot_users
 SET total_exports = (

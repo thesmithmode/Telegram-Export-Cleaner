@@ -1,0 +1,8 @@
+commit	bench_name	primary_metric	value	peak_rss_mb	status	description
+2618c77	bench_dashboard	p99_overview_ms	22.48	34.2	baseline	baseline: p99_topchats=51.70 p99_status=37.71 p99_n1=0.12 p99_batch=0.05
+24049f8	bench_dashboard	p99_overview_ms	5.53	43.2	mixed	P2+P3 indexes: overview -75% WIN, topchats +27% REGRESS, status +27% REGRESS. overview_covering helps range scans; topchats/status covering indexes hurt (planner ignores or index maintenance cost in bench seeding)
+0e2624a	bench_dashboard	p99_overview_ms	5.45	43.2	win	P2+P3 column order fix: overview -75.8% WIN, topchats -32.8% WIN, status -39.0% WIN. All regressions resolved. peak_rss +26% (index overhead). p99_topchats=34.72 p99_status=22.98 p99_n1=0.13 p99_batch=0.06
+ce94dbb	bench_dashboard	p99_top_users_ms	58.85	43.2	baseline2	new metrics baseline: p99_active_users=13.48 p99_timeseries=37.59 p99_top_users=58.85 (слепые пятна, новый primary target)
+16c9707	bench_dashboard	p99_top_users_ms	31.12	43.0	win	topUsersByPeriod split: aggregate без JOIN + batch lookup. -47% WIN. p99_topchats=35.63 p99_timeseries=37.92
+b6e0641	bench_dashboard	p99_topchats_ms	25.40	43.1	win	topChats split: aggregate без JOIN + batch lookup. -29b6e0641	bench_dashboard	p99_topchats_ms	25.40	43.1	win	topChats split: no JOIN + batch lookup. -29% WIN
+43d17f4	bench_dashboard	p99_overview_ms	25.35	43.3	discard	REGR: COUNT(DISTINCT)+SUM breaks covering index in SQLite. REVERTED

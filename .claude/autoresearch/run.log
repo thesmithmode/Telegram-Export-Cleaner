@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "C:\Soft\Projects\Telegram-export-clean\.claude\autoresearch\bench.py", line 24, in <module>
+    from message_cache import MessageCache
+  File "C:\Soft\Projects\Telegram-export-clean\export-worker\message_cache.py", line 9, in <module>
+    import aiosqlite
+ModuleNotFoundError: No module named 'aiosqlite'
