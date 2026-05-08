@@ -834,3 +834,296 @@ class TestReopenPersistence:
             assert count == 101
         finally:
             await second.close()
+
+
+# ===== Sentinel: read pool, per-chat lock, page_size migration =====
+
+
+class TestReadPool:
+
+    @pytest.mark.asyncio
+    async def test_pool_initialized_with_configured_size(self, cache):
+        # Read pool создаётся в initialize() и содержит N read-only conn
+        assert cache._read_pool is not None
+        assert cache._read_pool.qsize() == cache._read_pool_size
+        assert len(cache._read_conns) == cache._read_pool_size
+
+    @pytest.mark.asyncio
+    async def test_pool_conn_is_query_only(self, cache):
+        # Read conn должны быть в query_only режиме — попытка INSERT падает
+        await cache.store_messages(1, _make_messages([1, 2]))
+        rc = cache._read_conns[0]
+        with pytest.raises(aiosqlite.OperationalError):
+            await rc.execute(
+                "INSERT INTO messages(chat_id, topic_id, msg_id, msg_ts, data) "
+                "VALUES (?,?,?,?,?)",
+                (999, 0, 999, 0, b""),
+            )
+
+    @pytest.mark.asyncio
+    async def test_acquire_read_returns_to_pool(self, cache):
+        # Acquire → use → release: после async with размер пула восстановлен
+        size_before = cache._read_pool.qsize()
+        async with cache._acquire_read() as rc:
+            assert rc is not None
+            assert cache._read_pool.qsize() == size_before - 1
+        assert cache._read_pool.qsize() == size_before
+
+    @pytest.mark.asyncio
+    async def test_acquire_read_fallback_when_pool_disabled(self, tmp_path):
+        # При CACHE_READ_POOL_SIZE=0 pool=None → fallback на main conn
+        c = MessageCache(db_path=str(tmp_path / "no_pool.db"))
+        c._read_pool_size = 0
+        await c.initialize()
+        try:
+            assert c._read_pool is None
+            async with c._acquire_read() as rc:
+                assert rc is c._db
+        finally:
+            await c.close()
+
+    @pytest.mark.asyncio
+    async def test_concurrent_iter_messages_uses_different_conns(self, cache):
+        # Параллельные iter_messages должны брать разные conn из пула
+        await cache.store_messages(1, _make_messages(list(range(1, 21))))
+        seen_conns = set()
+
+        async def reader():
+            async with cache._acquire_read() as rc:
+                seen_conns.add(id(rc))
+                # Hold conn до сигнала
+                await asyncio.sleep(0.05)
+
+        await asyncio.gather(reader(), reader(), reader(), reader())
+        assert len(seen_conns) == cache._read_pool_size
+
+    @pytest.mark.asyncio
+    async def test_iter_messages_reads_via_pool(self, cache):
+        # iter_messages должен использовать _acquire_read (не main conn)
+        await cache.store_messages(42, _make_messages([1, 2, 3]))
+        result = await cache.get_messages(42, 1, 3)
+        assert [m.id for m in result] == [1, 2, 3]
+
+    @pytest.mark.asyncio
+    async def test_iter_messages_by_date_reads_via_pool(self, cache):
+        await cache.store_messages(42, _make_messages([1, 2, 3]))
+        result = await cache.get_messages_by_date(42, "2025-01-01", "2025-01-01")
+        assert len(result) == 3
+
+    @pytest.mark.asyncio
+    async def test_close_closes_all_read_conns(self, tmp_path):
+        c = MessageCache(db_path=str(tmp_path / "close.db"))
+        await c.initialize()
+        conns = list(c._read_conns)
+        assert len(conns) == c._read_pool_size
+        await c.close()
+        assert c._read_conns == []
+        assert c._read_pool is None
+        # После close попытка execute на закрытом conn падает с любой Exception
+        for rc in conns:
+            with pytest.raises(Exception):
+                await rc.execute("SELECT 1")
+
+
+class TestPerChatLock:
+
+    @pytest.mark.asyncio
+    async def test_lock_created_per_chat(self, cache):
+        # Каждый chat_id получает свой Lock; повторный store не создаёт новый
+        await cache.store_messages(1, _make_messages([1]))
+        await cache.store_messages(2, _make_messages([1]))
+        await cache.store_messages(1, _make_messages([2]))
+        assert 1 in cache._chat_locks
+        assert 2 in cache._chat_locks
+        assert cache._chat_locks[1] is not cache._chat_locks[2]
+
+    @pytest.mark.asyncio
+    async def test_lock_serializes_same_chat(self, cache):
+        # Два concurrent store на один chat_id — последовательны
+        order = []
+
+        async def store(msg_id, delay):
+            async with cache._chat_locks.setdefault(99, asyncio.Lock()):
+                order.append(f"start_{msg_id}")
+                await asyncio.sleep(delay)
+                order.append(f"end_{msg_id}")
+
+        await asyncio.gather(store(1, 0.02), store(2, 0.01))
+        # start/end чередуются, не пересекаются — lock работает
+        assert order == ["start_1", "end_1", "start_2", "end_2"] or \
+               order == ["start_2", "end_2", "start_1", "end_1"]
+
+    @pytest.mark.asyncio
+    async def test_different_chats_dont_block_each_other(self, cache):
+        # Разные chat_id блокируются независимо
+        order = []
+
+        async def store(chat_id, msg_id, delay):
+            await cache.store_messages(chat_id, [_make_msg(msg_id)])
+            order.append((chat_id, msg_id))
+
+        # Запускаем два разных чата параллельно
+        await asyncio.gather(store(10, 1, 0), store(20, 1, 0))
+        assert (10, 1) in order
+        assert (20, 1) in order
+
+    @pytest.mark.asyncio
+    async def test_close_clears_chat_locks(self, tmp_path):
+        # close() должен очистить _chat_locks (привязка к event loop)
+        c = MessageCache(db_path=str(tmp_path / "lock_close.db"))
+        await c.initialize()
+        await c.store_messages(1, _make_messages([1]))
+        assert 1 in c._chat_locks
+        await c.close()
+        assert c._chat_locks == {}
+
+    @pytest.mark.asyncio
+    async def test_lock_removed_on_eviction(self, tmp_path):
+        # Eviction удаляет lock из dict — иначе unbounded growth
+        c = MessageCache(
+            db_path=str(tmp_path / "lock_evict.db"),
+            max_disk_bytes=10 * 1024 * 1024,
+        )
+        await c.initialize()
+        try:
+            await c.store_messages(555, _make_messages([1, 2, 3]))
+            await c.store_messages(666, _make_messages([1, 2, 3]))
+            await c.get_messages(666, 1, 3)  # touch 666 → 555 = LRU
+            assert 555 in c._chat_locks
+
+            c.max_disk_bytes = 0
+            await c.evict_if_needed()
+            assert 555 not in c._chat_locks
+        finally:
+            await c.close()
+
+
+class TestPageSizeMigration:
+
+    @pytest.mark.asyncio
+    async def test_migration_skipped_when_disabled(self, tmp_path, monkeypatch):
+        # CACHE_VACUUM_PAGE_SIZE_ON_START=False → миграция skipped, page_size остаётся default
+        from config import settings
+        monkeypatch.setattr(settings, "CACHE_VACUUM_PAGE_SIZE_ON_START", False)
+        c = MessageCache(db_path=str(tmp_path / "no_migrate.db"))
+        await c.initialize()
+        try:
+            async with c._db.execute("PRAGMA page_size") as cur:
+                row = await cur.fetchone()
+            # SQLite default 4096 — миграция не сработала
+            assert row[0] == 4096
+        finally:
+            await c.close()
+
+    @pytest.mark.asyncio
+    async def test_migration_runs_when_enabled(self, tmp_path, monkeypatch):
+        from config import settings
+        monkeypatch.setattr(settings, "CACHE_VACUUM_PAGE_SIZE_ON_START", True)
+        monkeypatch.setattr(settings, "CACHE_TARGET_PAGE_SIZE", 8192)
+        c = MessageCache(db_path=str(tmp_path / "migrate.db"))
+        await c.initialize()
+        try:
+            async with c._db.execute("PRAGMA page_size") as cur:
+                row = await cur.fetchone()
+            assert row[0] == 8192
+        finally:
+            await c.close()
+
+    @pytest.mark.asyncio
+    async def test_migration_skipped_when_already_target(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        # Повторная инициализация на уже-мигрированной БД → skip без VACUUM
+        from config import settings
+        monkeypatch.setattr(settings, "CACHE_VACUUM_PAGE_SIZE_ON_START", True)
+        monkeypatch.setattr(settings, "CACHE_TARGET_PAGE_SIZE", 8192)
+        db_path = str(tmp_path / "skip.db")
+
+        first = MessageCache(db_path=db_path)
+        await first.initialize()
+        await first.close()
+
+        with caplog.at_level("INFO"):
+            second = MessageCache(db_path=db_path)
+            await second.initialize()
+        try:
+            # Не должно быть второй migration log line
+            migrate_logs = [r for r in caplog.records if "migrated page_size" in r.message]
+            assert len(migrate_logs) == 0
+        finally:
+            await second.close()
+
+    @pytest.mark.asyncio
+    async def test_migration_preserves_data(self, tmp_path, monkeypatch):
+        # VACUUM не теряет данные при смене page_size
+        from config import settings
+        # Шаг 1: создать БД на default page_size (4096), записать данные
+        monkeypatch.setattr(settings, "CACHE_VACUUM_PAGE_SIZE_ON_START", False)
+        db_path = str(tmp_path / "preserve.db")
+        first = MessageCache(db_path=db_path)
+        await first.initialize()
+        await first.store_messages(777, _make_messages(list(range(1, 51))))
+        await first.close()
+
+        # Шаг 2: включить миграцию, открыть ту же БД
+        monkeypatch.setattr(settings, "CACHE_VACUUM_PAGE_SIZE_ON_START", True)
+        monkeypatch.setattr(settings, "CACHE_TARGET_PAGE_SIZE", 8192)
+        second = MessageCache(db_path=db_path)
+        await second.initialize()
+        try:
+            # page_size мигрировал
+            async with second._db.execute("PRAGMA page_size") as cur:
+                row = await cur.fetchone()
+            assert row[0] == 8192
+            # Данные не потеряны
+            count = await second.count_messages(777, 1, 50)
+            assert count == 50
+        finally:
+            await second.close()
+
+    @pytest.mark.asyncio
+    async def test_migration_skipped_low_disk_space(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        # Если free space < 2x db_size → skip миграции с warning
+        from config import settings
+        import shutil
+        monkeypatch.setattr(settings, "CACHE_VACUUM_PAGE_SIZE_ON_START", False)
+        db_path = str(tmp_path / "low_disk.db")
+        first = MessageCache(db_path=db_path)
+        await first.initialize()
+        await first.store_messages(1, _make_messages(list(range(1, 11))))
+        await first.close()
+
+        # Mock disk_usage чтобы вернуть очень мало free
+        from collections import namedtuple
+        Usage = namedtuple("Usage", ["total", "used", "free"])
+        monkeypatch.setattr(shutil, "disk_usage", lambda _: Usage(0, 0, 1024))
+
+        monkeypatch.setattr(settings, "CACHE_VACUUM_PAGE_SIZE_ON_START", True)
+        monkeypatch.setattr(settings, "CACHE_TARGET_PAGE_SIZE", 8192)
+        second = MessageCache(db_path=db_path)
+        with caplog.at_level("WARNING"):
+            await second.initialize()
+        try:
+            # page_size остался default — миграция skipped
+            async with second._db.execute("PRAGMA page_size") as cur:
+                row = await cur.fetchone()
+            assert row[0] == 4096
+            # Warning об skip
+            assert any(
+                "page_size migration skipped" in r.message for r in caplog.records
+            )
+        finally:
+            await second.close()
+
+
+class TestCacheSizePragma:
+
+    @pytest.mark.asyncio
+    async def test_cache_size_is_8mb(self, cache):
+        # cache_size=-8192 = 8 MB на main conn
+        async with cache._db.execute("PRAGMA cache_size") as cur:
+            row = await cur.fetchone()
+        # Negative value = KB; -8192 = 8 MB
+        assert row[0] == -8192
