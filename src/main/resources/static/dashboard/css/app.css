@@ -166,10 +166,9 @@ code, kbd {
 }
 
 .dashboard-header__logo {
-    width: 28px;
     height: 28px;
+    width: auto;
     display: block;
-    border-radius: var(--tec-radius-sm);
 }
 
 .dashboard-header__title {
@@ -227,7 +226,7 @@ code, kbd {
     border-top: 3px solid var(--tec-tg-blue);
 }
 .login-form__brand { display: flex; flex-direction: column; align-items: center; gap: var(--tec-space-2); }
-.login-form__logo  { width: 48px; height: 48px; display: block; }
+.login-form__logo  { height: 48px; width: auto; display: block; }
 .login-form__title { margin: 0; font-size: var(--tec-fs-h1); font-weight: var(--tec-fw-semibold); }
 .login-form__subtitle { margin: 0; color: var(--tec-muted); font-size: var(--tec-fs-body); text-align: center; }
 .login-form__widget { width: 100%; display: flex; justify-content: center; min-height: 48px; }
@@ -498,9 +497,15 @@ th[data-sort-key].is-sort-asc::after  { content: "▲"; opacity: 1; }
 .period-filter { display: flex; gap: var(--tec-space-2); flex-wrap: wrap; margin-bottom: var(--tec-space-4); }
 .period-filter__btn {
     background: var(--tec-surface); color: var(--tec-text); border: 1px solid var(--tec-border);
+    border-radius: var(--tec-radius);
     padding: 6px 12px; font-size: var(--tec-fs-body);
+    font-family: inherit;
+    cursor: pointer;
+    transition: background-color 100ms ease-in-out, border-color 100ms ease-in-out;
 }
+.period-filter__btn:hover { background: var(--tec-surface-alt); border-color: var(--tec-muted); }
 .period-filter__btn.is-active { background: var(--tec-accent); color: #fff; border-color: var(--tec-accent); }
+.period-filter__btn.is-active:hover { background: var(--tec-accent-hover); border-color: var(--tec-accent-hover); }
 
 /* ─── Status chips ────────────────────────────────────────────────── */
 
