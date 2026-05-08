@@ -377,6 +377,7 @@ CREATE INDEX idx_events_topchats_covering
 -- но запросы фильтруют по started_at → плохой план → регрессия +27%).
 -- Правильно: leading column = started_at (колонка фильтра WHERE).
 --changeset app:012-fix-covering-index-column-order splitStatements:true endDelimiter:;
+--validCheckSum 9:16611eed36756b688a2ed6a1162833fc
 
 DROP INDEX IF EXISTS idx_events_status_started;
 DROP INDEX IF EXISTS idx_events_topchats_covering;
