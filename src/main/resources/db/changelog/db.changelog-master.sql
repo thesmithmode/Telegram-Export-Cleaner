@@ -391,3 +391,27 @@ CREATE INDEX idx_events_status_covering
 --rollback DROP INDEX IF EXISTS idx_events_topchats_covering;
 --rollback CREATE INDEX idx_events_topchats_covering ON export_events (chat_ref_id, started_at DESC, messages_count, bytes_count);
 --rollback CREATE INDEX idx_events_status_started ON export_events (status, started_at DESC);
+
+-- 013: Defensive idempotent re-create индексов через IF NOT EXISTS.
+-- Если 012 упал partial / индекс был дропнут вручную / restore из backup без 012 →
+-- Liquibase повторно докатит без ошибки "index already exists".
+-- ВАЖНО: IF NOT EXISTS не пересоздаёт индекс если он уже есть с ДРУГИМ определением.
+-- Сценарий 011-applied + 012-failed: idx_events_topchats_covering остался с leading
+-- column = chat_ref_id (старый порядок 011). 013 такой индекс не исправит — нужно
+-- вручную DROP + повторный запуск 013. Sentinel-тест IndexMigrationIntegrationTest
+-- ловит это: проверяет что leading column = started_at.
+--changeset app:013-defensive-indexes splitStatements:true endDelimiter:;
+
+CREATE INDEX IF NOT EXISTS idx_events_overview_covering
+    ON export_events (started_at DESC, bot_user_id, messages_count, bytes_count);
+
+CREATE INDEX IF NOT EXISTS idx_events_topchats_covering
+    ON export_events (started_at DESC, chat_ref_id, messages_count, bytes_count);
+
+CREATE INDEX IF NOT EXISTS idx_events_status_covering
+    ON export_events (started_at DESC, status);
+
+-- 013 защитный, индексы создаются IF NOT EXISTS; rollback no-op:
+-- откат 013 не должен дропать индексы — это работа rollback 012/011.
+-- Liquibase: --rollback с no-op SELECT — стандартный идиом для пустого rollback.
+--rollback SELECT 1;

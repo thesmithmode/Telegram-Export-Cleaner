@@ -102,6 +102,16 @@ public class CacheMetricsService {
                 Chat dbChat = dbChatMap.get(rc.chat_id + ":" + tid);
 
                 String username = redisOk ? redisVals.get(i * 2) : null;
+                // Blank-check покрывает все Unicode whitespace + zero-width spoofing:
+                // String.isBlank() ловит только ASCII; isSpaceChar ловит NBSP/em-space (Zs);
+                // ZWSP/ZWJ/ZWNJ/BOM (категория Cf) ни тем ни другим не ловятся — telegram
+                // username может содержать только zero-width chars → "невидимый" в UI.
+                if (username != null && username.codePoints().allMatch(cp ->
+                        Character.isWhitespace(cp)
+                                || Character.isSpaceChar(cp)
+                                || isZeroWidth(cp))) {
+                    username = null;
+                }
                 if (username != null && (username.startsWith("-") || username.chars().allMatch(Character::isDigit))) {
                     username = null;
                 }
@@ -152,6 +162,10 @@ public class CacheMetricsService {
                 segmentation);
     }
 
+    // ZWSP/ZWNJ/ZWJ + BOM/word-joiner: Cf-категория, не whitespace по Java API.
+    private static boolean isZeroWidth(int cp) {
+        return cp == 0x200B || cp == 0x200C || cp == 0x200D || cp == 0xFEFF || cp == 0x2060;
+    }
 
     // ── wire-level records (snake_case, matches Python payload) ──────────────
 

@@ -198,6 +198,11 @@
     // ── API calls ──────────────────────────────────────────────────────────────
 
     let _pollTimer = null;
+    let _inFlight = false;
+    // Sequence-id: последний выпущенный fetch выигрывает render. Если polling
+    // и forceReload летят параллельно, stale ответ не затрёт свежий.
+    let _seqNext = 0;
+    let _seqLast = 0;
 
     function schedulePollingIfNeeded(rows) {
         clearTimeout(_pollTimer);
@@ -211,19 +216,36 @@
 
     document.addEventListener("visibilitychange", function () {
         if (!document.hidden) {
-            loadSubscriptions();
+            // _inFlight guard: tab flap → не дублировать fetch если предыдущий ещё летит
+            if (!_inFlight) loadSubscriptions();
         } else {
             clearTimeout(_pollTimer);
         }
     });
 
+    // После явной мутации (pause/resume/delete/create) — гарантируем что свежий
+    // ответ выиграет, даже если polling-fetch уже в полёте: bumped seq инвалидирует
+    // старший response.
+    async function forceReload() {
+        _inFlight = false;
+        await loadSubscriptions();
+    }
+
     async function loadSubscriptions() {
+        if (_inFlight) return;
+        _inFlight = true;
+        const mySeq = ++_seqNext;
         try {
             const data = await fetchJson("/dashboard/api/subscriptions");
+            // Stale ответ (более ранний seq, чем последний отрендеренный) — выбрасываем.
+            if (mySeq < _seqLast) return;
+            _seqLast = mySeq;
             const rows = Array.isArray(data) ? data : (data.content || []);
             renderTable(rows);
             schedulePollingIfNeeded(rows);
         } catch (e) {
+            if (mySeq < _seqLast) return;
+            _seqLast = mySeq;
             const tbody = document.getElementById("subscriptions-body");
             if (tbody) {
                 while (tbody.firstChild) { tbody.removeChild(tbody.firstChild); }
@@ -235,6 +257,8 @@
                 errRow.appendChild(errCell);
                 tbody.appendChild(errRow);
             }
+        } finally {
+            _inFlight = false;
         }
     }
 
@@ -274,7 +298,7 @@
         if (!await tgConfirm(`Приостановить подписку #${id}?`)) { return; }
         try {
             await mutate("PATCH", `/dashboard/api/subscriptions/${id}/pause`);
-            await loadSubscriptions();
+            await forceReload();
         } catch (e) {
             await tgAlert(`Ошибка: ${e.message}`);
         }
@@ -284,7 +308,7 @@
         if (!await tgConfirm(`Возобновить подписку #${id}?`)) { return; }
         try {
             await mutate("PATCH", `/dashboard/api/subscriptions/${id}/resume`);
-            await loadSubscriptions();
+            await forceReload();
         } catch (e) {
             await tgAlert(`Ошибка: ${e.message}`);
         }
@@ -294,7 +318,7 @@
         if (!await tgConfirm(`Удалить подписку #${id}? Это действие нельзя отменить.`)) { return; }
         try {
             await mutate("DELETE", `/dashboard/api/subscriptions/${id}`);
-            await loadSubscriptions();
+            await forceReload();
         } catch (e) {
             await tgAlert(`Ошибка: ${e.message}`);
         }
@@ -372,7 +396,7 @@
 
             // Успех — сбрасываем форму и перезагружаем таблицу
             form.reset();
-            await loadSubscriptions();
+            await forceReload();
         } catch (e) {
             showError(errorEl, `Сетевая ошибка: ${e.message}`);
         } finally {

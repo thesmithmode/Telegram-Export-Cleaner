@@ -135,6 +135,9 @@ public class StatsQueryService {
 
     @Cacheable(value = HISTORICAL, key = "#period.toString() + '_users_' + #limit + '_' + #botUserId")
     public List<UserStatsRow> topUsersByPeriod(StatsPeriod period, int limit, Long botUserId) {
+        // Atomicity: оба jdbc.query() работают в одной транзакции (классовый @Transactional)
+        // → один connection через DataSourceUtils → один WAL snapshot SQLite. Без транзакции
+        // bot_users мог бы быть удалён между шагами → null username.
         String from = period.fromSql();
         String to = period.toSql();
         // Step 1: aggregate-only query — no JOIN, fully covered by idx_events_overview_covering
@@ -187,6 +190,7 @@ public class StatsQueryService {
 
     @Cacheable(value = HISTORICAL, key = "#period.toString() + '_' + #botUserId + '_' + #limit")
     public List<ChatStatsRow> topChats(StatsPeriod period, Long botUserId, int limit) {
+        // Atomicity: см. topUsersByPeriod — split на 2 query безопасен внутри @Transactional.
         String from = period.fromSql();
         String to = period.toSql();
         // Step 1: aggregate-only — covered by idx_events_topchats_covering, no JOIN
