@@ -1729,3 +1729,96 @@ class TestGetChatHistoryCancel:
         # Экспорт прошёл до конца несмотря на сломанный Redis check
         assert collected == [1]
         assert call_count["n"] == 2
+
+
+@pytest.mark.asyncio
+class TestFallbackTypeGuard:
+    """Sentinel: fallback resolve paths must also block non-group/channel types."""
+
+    async def test_resolve_numeric_fallback1_blocks_private(self):
+        client = TelegramClient()
+        client.is_connected = True
+        client.redis_client = None
+
+        async def _empty_dialogs():
+            return
+            yield
+
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.get_dialogs = MagicMock(side_effect=lambda: _empty_dialogs())
+        mock_pyrogram.get_chat = AsyncMock(
+            return_value=MagicMock(title="Private Person", type="private", members_count=None)
+        )
+        client.client = mock_pyrogram
+
+        with patch("pyrogram_client.asyncio.sleep", new_callable=AsyncMock):
+            result = await client._resolve_numeric_chat_id(123456789)
+
+        assert result == (False, None, "PRIVATE_CHAT_FORBIDDEN")
+
+    async def test_resolve_numeric_fallback2_blocks_private(self):
+        # chat_id < -1000000000000 triggers Fallback 2 (raw MTProto)
+        chat_id = -1001234567890
+        client = TelegramClient()
+        client.is_connected = True
+        client.redis_client = None
+
+        async def _empty_dialogs():
+            return
+            yield
+
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.get_dialogs = MagicMock(side_effect=lambda: _empty_dialogs())
+        mock_pyrogram.get_chat = AsyncMock(
+            side_effect=[
+                RuntimeError("not in entity cache"),
+                MagicMock(title="Some User", type="private", members_count=None),
+            ]
+        )
+        mock_invoke_result = MagicMock()
+        mock_invoke_result.chats = [MagicMock(username="somechannel")]
+        mock_pyrogram.invoke = AsyncMock(return_value=mock_invoke_result)
+        client.client = mock_pyrogram
+
+        with patch("pyrogram_client.asyncio.sleep", new_callable=AsyncMock):
+            result = await client._resolve_numeric_chat_id(chat_id)
+
+        assert result == (False, None, "PRIVATE_CHAT_FORBIDDEN")
+
+    async def test_resolve_via_canonical_mapping_blocks_private(self):
+        client = TelegramClient()
+        client.is_connected = True
+
+        mock_redis = AsyncMock()
+        mock_redis.get = AsyncMock(return_value="someuser")
+        client.redis_client = mock_redis
+
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.get_chat = AsyncMock(
+            return_value=MagicMock(title="Some User", type="private", members_count=None)
+        )
+        client.client = mock_pyrogram
+
+        result = await client._resolve_via_canonical_mapping(-100123456789)
+        assert result == (False, None, "PRIVATE_CHAT_FORBIDDEN")
+
+    async def test_resolve_via_canonical_mapping_allows_supergroup(self):
+        client = TelegramClient()
+        client.is_connected = True
+
+        mock_redis = AsyncMock()
+        mock_redis.get = AsyncMock(return_value="mychat")
+        client.redis_client = mock_redis
+
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.get_chat = AsyncMock(
+            return_value=MagicMock(title="My Group", type="supergroup", members_count=50)
+        )
+        client.client = mock_pyrogram
+
+        result = await client._resolve_via_canonical_mapping(-100123456789)
+        assert result is not None
+        accessible, info, error = result
+        assert accessible is True
+        assert info["type"] == "supergroup"
+        assert error is None

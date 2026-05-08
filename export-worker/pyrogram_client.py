@@ -711,6 +711,11 @@ class TelegramClient:
                     logger.info(f"Saved canonical mapping: canonical:{chat_id} → {username}")
                 except Exception as redis_err:
                     logger.warning(f"Failed to save canonical mapping: {redis_err}")
+            if chat_info.get("type") not in {"group", "supergroup", "channel"}:
+                logger.warning(
+                    f"⛔ Blocked {chat_info.get('type')!r} chat {chat_id!r} — only groups/channels allowed"
+                )
+                return (False, None, "PRIVATE_CHAT_FORBIDDEN")
             return (True, chat_info, None)
 
         except FloodWait as fw:
@@ -759,6 +764,11 @@ class TelegramClient:
                         logger.info(f"Saved canonical mapping: canonical:{chat_id} → {username}")
                     except Exception as redis_err:
                         logger.warning(f"Failed to save canonical mapping: {redis_err}")
+                if chat_info.get("type") not in {"group", "supergroup", "channel"}:
+                    logger.warning(
+                        f"⛔ Blocked {chat_info.get('type')!r} chat {chat_id!r} — only groups/channels allowed"
+                    )
+                    return (False, None, "PRIVATE_CHAT_FORBIDDEN")
                 return (True, chat_info, None)
             except ChannelPrivate:
                 logger.error(f"❌ Channel {chat_id} is private (raw MTProto)")
@@ -797,7 +807,13 @@ class TelegramClient:
             )
             chat = await self.client.get_chat(username)
             logger.info(f"Resolved chat {chat_id} via canonical mapping → @{username}")
-            return (True, self._build_chat_info(chat), None)
+            chat_info = self._build_chat_info(chat)
+            if chat_info.get("type") not in {"group", "supergroup", "channel"}:
+                logger.warning(
+                    f"⛔ Blocked {chat_info.get('type')!r} chat {chat_id!r} — only groups/channels allowed"
+                )
+                return (False, None, "PRIVATE_CHAT_FORBIDDEN")
+            return (True, chat_info, None)
         except Exception as e:
             logger.warning(
                 f"Canonical mapping fallback failed for {chat_id}: {e}"

@@ -17,6 +17,11 @@ from models import ExportedMessage, SendResponsePayload
 
 logger = logging.getLogger(__name__)
 
+_BOT_TOKEN_RE = re.compile(r'/bot[^/]+/')
+
+def _safe_err(e: Exception) -> str:
+    return _BOT_TOKEN_RE.sub('/bot<REDACTED>/', str(e))
+
 class JavaBotClient:
 
     def __init__(self, timeout: int = 3600, max_retries: int = 3):
@@ -296,7 +301,7 @@ class JavaBotClient:
             )
             return response.status_code == 200
         except Exception as e:
-            logger.error(f"Telegram upload failed: {e}")
+            logger.error(f"Telegram upload failed: {_safe_err(e)}")
             return False
 
     def _split_text_by_size(self, text: str, max_bytes: int) -> list[str]:
@@ -327,7 +332,7 @@ class JavaBotClient:
                 url, data={"chat_id": chat_id, "text": text}, timeout=self._tg_timeout
             )
         except Exception as e:
-            logger.warning(f"Failed to notify user {chat_id} about failure: {e}")
+            logger.warning(f"Failed to notify user {chat_id} about failure: {_safe_err(e)}")
 
     async def notify_subscription_empty(
         self, chat_id: int, chat_label: str, from_date: Optional[str], to_date: Optional[str]
@@ -350,7 +355,7 @@ class JavaBotClient:
                     f"{response.status_code} {response.text[:200]}"
                 )
         except Exception as e:
-            logger.warning(f"Failed to notify user {chat_id} about empty subscription: {e}")
+            logger.warning(f"Failed to notify user {chat_id} about empty subscription: {_safe_err(e)}")
 
     @staticmethod
     def _format_date_human(date_str: Optional[str]) -> str:
@@ -385,7 +390,7 @@ class JavaBotClient:
                 url, data={"chat_id": chat_id, "text": text}, timeout=self._tg_timeout
             )
         except Exception as e:
-            logger.warning(f"Failed to notify user {chat_id} about empty export: {e}")
+            logger.warning(f"Failed to notify user {chat_id} about empty export: {_safe_err(e)}")
 
     @staticmethod
     def _format_period(from_date: Optional[str], to_date: Optional[str]) -> Optional[str]:
@@ -431,7 +436,7 @@ class JavaBotClient:
                 timeout=self._tg_timeout,
             )
         except Exception as e:
-            logger.debug("Failed to update queue position: %s", e)
+            logger.debug("Failed to update queue position: %s", _safe_err(e))
 
     async def aclose(self) -> None:
         await self._http_client.aclose()
@@ -495,7 +500,7 @@ class JavaBotClient:
                     return resp.json().get("result", {}).get("message_id")
                 return None
         except Exception as e:
-            logger.warning("Telegram progress edit/send failed: %s", e)
+            logger.warning("Telegram progress edit/send failed: %s", _safe_err(e))
             return None
 
 # Progress-tracker tuning constants
