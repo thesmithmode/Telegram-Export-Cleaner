@@ -99,7 +99,7 @@ class TestTelegramClientVerifyAccess:
         mock_pyrogram.get_chat = AsyncMock(
             return_value=MagicMock(
                 title="Test Chat",
-                type="private",
+                type="channel",
                 members_count=100,
             )
         )
@@ -110,8 +110,29 @@ class TestTelegramClientVerifyAccess:
         assert accessible is True
         assert info is not None
         assert info["title"] == "Test Chat"
-        assert info["type"] == "private"
+        assert info["type"] == "channel"
         assert error_reason is None
+
+    @pytest.mark.asyncio
+    async def test_verify_and_get_info_private_chat_blocked(self):
+        """Sentinel: приватный чат должен быть заблокирован в точке get_chat."""
+        client = TelegramClient()
+        client.is_connected = True
+        mock_pyrogram = AsyncMock()
+        mock_pyrogram.get_chat = AsyncMock(
+            return_value=MagicMock(
+                title="Some User",
+                type="private",
+                members_count=None,
+            )
+        )
+        client.client = mock_pyrogram
+
+        accessible, info, error_reason = await client.verify_and_get_info(123456789)
+
+        assert accessible is False
+        assert info is None
+        assert error_reason == "PRIVATE_CHAT_FORBIDDEN"
 
     @pytest.mark.asyncio
     async def test_verify_and_get_info_chat_not_found(self):

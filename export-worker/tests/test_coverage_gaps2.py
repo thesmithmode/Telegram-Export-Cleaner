@@ -150,7 +150,7 @@ class TestProcessJobCancelled:
         w.queue_consumer.mark_job_completed = AsyncMock(return_value=True)
         w.telegram_client = AsyncMock()
         w.telegram_client.verify_and_get_info = AsyncMock(
-            return_value=(True, {"id": 1, "title": "T"}, None)
+            return_value=(True, {"id": 1, "title": "T", "type": "supergroup"}, None)
         )
         w.telegram_client.get_messages_count = AsyncMock(return_value=100)
         w.telegram_client.get_chat_history = MagicMock()

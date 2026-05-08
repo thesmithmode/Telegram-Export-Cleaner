@@ -83,7 +83,7 @@ class TestExportWorkerJobProcessing:
 
         # Mock Telegram client
         worker.telegram_client.verify_and_get_info = AsyncMock(
-            return_value=(True, {"title": "Test Chat", "type": "private"}, None)
+            return_value=(True, {"title": "Test Chat", "type": "supergroup"}, None)
         )
 
         # Mock message generator
@@ -152,7 +152,7 @@ class TestExportWorkerJobProcessing:
         )
 
         worker.telegram_client.verify_and_get_info = AsyncMock(
-            return_value=(True, {"title": "Test", "type": "private"}, None)
+            return_value=(True, {"title": "Test", "type": "supergroup"}, None)
         )
 
         # Mock error during export
@@ -186,7 +186,7 @@ class TestExportWorkerJobProcessing:
         )
 
         worker.telegram_client.verify_and_get_info = AsyncMock(
-            return_value=(True, {"title": "Test", "type": "private"}, None)
+            return_value=(True, {"title": "Test", "type": "supergroup"}, None)
         )
 
         # Mock successful export
@@ -601,7 +601,7 @@ class TestExportWorkerProgressReporting:
         # info, reason), исключение упадёт в outer except и до _fetch_all
         # код вообще не дойдёт.
         worker.telegram_client.verify_and_get_info = AsyncMock(
-            return_value=(True, {"title": "Test", "type": "private"}, None)
+            return_value=(True, {"title": "Test", "type": "supergroup"}, None)
         )
         worker.java_client = _make_mock_java_client()
         worker.telegram_client.get_messages_count = AsyncMock(return_value=100)
@@ -670,7 +670,7 @@ class TestExportWorkerProgressReporting:
         )
 
         worker.telegram_client.verify_and_get_info = AsyncMock(
-            return_value=(True, {"title": "Test", "type": "private"}, None)
+            return_value=(True, {"title": "Test", "type": "supergroup"}, None)
         )
         # Make send_response raise to trigger except block
         worker.java_client.send_response = AsyncMock(side_effect=RuntimeError("OOM"))
@@ -750,7 +750,7 @@ class TestExportWorkerWithCache:
         )
 
         worker.telegram_client.verify_and_get_info = AsyncMock(
-            return_value=(True, {"title": "Test", "type": "private"}, None)
+            return_value=(True, {"title": "Test", "type": "supergroup"}, None)
         )
 
         messages = [
@@ -784,7 +784,7 @@ class TestExportWorkerWithCache:
         )
 
         worker.telegram_client.verify_and_get_info = AsyncMock(
-            return_value=(True, {"title": "Test", "type": "private"}, None)
+            return_value=(True, {"title": "Test", "type": "supergroup"}, None)
         )
 
         # Pre-populate cache with messages 1-3

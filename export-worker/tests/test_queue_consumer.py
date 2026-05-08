@@ -762,3 +762,43 @@ class TestStagingDurability:
         mock_pipe.lrem.assert_called_once_with(
             "telegram_export_processing", 1, '{"task_id":"task_123"}'
         )
+
+    @pytest.mark.asyncio
+    async def test_mark_job_completed_with_bot_user_id_publishes_completed_event(self):
+        """Sentinel: 0-message экспорт должен публиковать export.completed в stats:events."""
+        import json as _json
+        staging_meta = _json.dumps({
+            "payload": '{"task_id":"task_999"}',
+            "queue": "telegram_export_processing"
+        })
+        mock_client = AsyncMock()
+        mock_client.set = AsyncMock(return_value=True)
+        mock_client.get = AsyncMock(return_value=staging_meta)
+        mock_client.xadd = AsyncMock(return_value=b"1-0")
+
+        mock_pipe = MagicMock()
+        mock_pipe.execute = AsyncMock(return_value=[1, 1, 1, 1, 1])
+        mock_client.pipeline = MagicMock(return_value=mock_pipe)
+
+        with patch('queue_consumer.settings') as mock_settings:
+            mock_settings.REDIS_HOST = "redis"
+            mock_settings.REDIS_PORT = 6379
+            mock_settings.REDIS_DB = 0
+            mock_settings.REDIS_PASSWORD = None
+            mock_settings.REDIS_QUEUE_NAME = "telegram_export"
+            mock_settings.STATS_STREAM_KEY = "stats:events"
+
+            consumer = QueueConsumer()
+            consumer.redis_client = mock_client
+
+        result = await consumer.mark_job_completed("task_999", bot_user_id=42)
+
+        assert result is True
+        mock_client.xadd.assert_called_once()
+        xadd_args = mock_client.xadd.call_args
+        payload_str = xadd_args.kwargs.get("fields", xadd_args.args[1] if len(xadd_args.args) > 1 else {}).get("payload", "{}")
+        event = _json.loads(payload_str)
+        assert event["type"] == "export.completed"
+        assert event["task_id"] == "task_999"
+        assert event.get("bot_user_id") == 42
+        assert "subscription_id" not in event
