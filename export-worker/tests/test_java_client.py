@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
 from models import ExportedMessage, SendResponsePayload
-from java_client import JavaBotClient, ProgressTracker
+from java_client import JavaBotClient, ProgressTracker, _safe_err
 
 # ---------- helpers -----------------------------------------------------
 
@@ -1219,3 +1219,33 @@ class TestEmptyCleanedTextFromJava:
             mock_notify_empty.assert_not_called()
         finally:
             p.stop()
+
+
+class TestSafeErr:
+
+    def test_redacts_bot_token_in_url(self):
+        e = Exception(
+            "Request failed for URL https://api.telegram.org/bot123456:ABC-DEF1234/sendDocument"
+        )
+        result = _safe_err(e)
+        assert "123456:ABC-DEF1234" not in result
+        assert "/bot<REDACTED>/" in result
+
+    def test_no_token_url_unchanged(self):
+        e = Exception("Connection refused")
+        result = _safe_err(e)
+        assert result == "Connection refused"
+
+    def test_redacts_multiple_token_occurrences(self):
+        e = Exception(
+            "Failed https://api.telegram.org/bot111:AAA/sendMessage "
+            "and https://api.telegram.org/bot222:BBB/editMessageText"
+        )
+        result = _safe_err(e)
+        assert "111:AAA" not in result
+        assert "222:BBB" not in result
+        assert result.count("/bot<REDACTED>/") == 2
+
+    def test_returns_string(self):
+        e = RuntimeError("some error")
+        assert isinstance(_safe_err(e), str)
