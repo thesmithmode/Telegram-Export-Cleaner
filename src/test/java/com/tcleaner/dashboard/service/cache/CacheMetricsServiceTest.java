@@ -7,6 +7,8 @@ import com.tcleaner.dashboard.repository.ChatRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
@@ -188,6 +190,68 @@ class CacheMetricsServiceTest {
         when(ops.get(CacheMetricsService.SNAPSHOT_KEY)).thenReturn(json);
         // canonical:-1001 = "-1001" → numeric-id, должно фильтроваться → username=null
         when(ops.multiGet(anyCollection())).thenReturn(Arrays.asList("-1001", null));
+        when(chatRepo.findAllByCanonicalChatIdIn(anyCollection())).thenReturn(List.of());
+
+        CacheMetricsDto dto = service.get();
+        assertThat(dto.topChats().get(0).username()).isNull();
+    }
+
+    @ParameterizedTest(name = "blank username #{index} -> null")
+    @ValueSource(strings = {
+            "   ",
+            "\t",
+            "\n",
+            " \t\n ",
+            "\u00A0",
+            "\u00A0\u00A0\u00A0",
+            "\u2003",
+            " \u00A0\t ",
+            "\u200B",
+            "\u200B\u200C\u200D",
+            "\uFEFF",
+            " \u200B "
+    })
+    @DisplayName("blank/whitespace + zero-width (NBSP, em-space, ZWSP, ZWNJ, ZWJ, BOM) -> null")
+    void blankUsernameBecomesNull(String blank) {
+        String json = """
+                {
+                  "used_bytes": 100, "limit_bytes": 1000, "pct": 10.0,
+                  "total_chats": 1, "total_messages": 5, "generated_at": 0,
+                  "top_chats": [
+                    {"chat_id": -1001, "topic_id": 0, "msg_count": 5,
+                     "size_bytes": 100, "last_accessed": 0, "pct": 100.0}
+                  ],
+                  "heatmap": {}
+                }
+                """;
+        when(ops.get(CacheMetricsService.SNAPSHOT_KEY)).thenReturn(json);
+        when(ops.multiGet(anyCollection())).thenReturn(Arrays.asList(blank, null));
+        when(chatRepo.findAllByCanonicalChatIdIn(anyCollection())).thenReturn(List.of());
+
+        CacheMetricsDto dto = service.get();
+        assertThat(dto.topChats().get(0).username()).isNull();
+    }
+
+    @Test
+    @DisplayName("Redis вернул пустую строку → username=null (документирует, не регрессирует)")
+    void emptyUsernameBecomesNull() {
+        // Пустая строка нуллировалась и до isBlank()-фикса: allMatch(isDigit) на пустом стриме
+        // возвращает true (vacuous truth) → попадала в digit-фильтр. Sentinel на whitespace —
+        // в blankUsernameBecomesNull. Этот тест фиксирует поведение для empty-string чтобы
+        // будущая правка digit-фильтра не сломала контракт молча.
+        String json = """
+                {
+                  "used_bytes": 100, "limit_bytes": 1000, "pct": 10.0,
+                  "total_chats": 1, "total_messages": 5, "generated_at": 0,
+                  "top_chats": [
+                    {"chat_id": -1001, "topic_id": 0, "msg_count": 5,
+                     "size_bytes": 100, "last_accessed": 0, "pct": 100.0}
+                  ],
+                  "heatmap": {}
+                }
+                """;
+        when(ops.get(CacheMetricsService.SNAPSHOT_KEY)).thenReturn(json);
+        when(ops.multiGet(anyCollection())).thenReturn(Arrays.asList("", null));
         when(chatRepo.findAllByCanonicalChatIdIn(anyCollection())).thenReturn(List.of());
 
         CacheMetricsDto dto = service.get();

@@ -88,7 +88,11 @@
       "Bash(xargs basename *)",
       "Bash(grep -E \"\\\\.\\(sql|xml\\)$\")",
       "Bash(gh secret *)",
-      "Bash(git check-ignore *)"
+      "Bash(git check-ignore *)",
+      "Bash(git ls-tree *)",
+      "Bash(echo -e \"b6e0641\\\\tbench_dashboard\\\\tp99_topchats_ms\\\\t25.40\\\\t43.1\\\\twin\\\\ttopChats split: no JOIN + batch lookup. -29% WIN\")",
+      "Bash(echo -e \"43d17f4\\\\tbench_dashboard\\\\tp99_overview_ms\\\\t25.35\\\\t43.3\\\\tdiscard\\\\tREGR: COUNT\\(DISTINCT\\)+SUM breaks covering index in SQLite. REVERTED\")",
+      "PowerShell(git *)"
     ]
   }
 }
