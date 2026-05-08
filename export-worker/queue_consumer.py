@@ -324,22 +324,23 @@ class QueueConsumer:
         )
         if ok:
             logger.debug(f"Marked job completed: {task_id}")
-            if subscription_id is not None:
+            if subscription_id is not None or bot_user_id is not None:
                 await self._publish_completed_event(task_id, bot_user_id, subscription_id)
         return ok
 
     async def _publish_completed_event(self, task_id: str,
                                        bot_user_id: Optional[int],
-                                       subscription_id: int) -> None:
-        """XADD export.completed для subscription empty-итераций — обновляет lastSuccessAt."""
+                                       subscription_id: Optional[int] = None) -> None:
+        """XADD export.completed в stats:events — обновляет статус в дашборде."""
         try:
             event_data: dict = {
                 "type": "export.completed",
                 "task_id": task_id,
                 "status": "completed",
                 "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "subscription_id": subscription_id,
             }
+            if subscription_id is not None:
+                event_data["subscription_id"] = subscription_id
             if bot_user_id is not None:
                 event_data["bot_user_id"] = bot_user_id
             await self.redis_client.xadd(

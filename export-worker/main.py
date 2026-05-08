@@ -302,6 +302,10 @@ class ExportWorker:
                     "Аккаунт worker-а временно ограничен Telegram (flood). "
                     "Попробуйте позже."
                 ),
+                "PRIVATE_CHAT_FORBIDDEN": (
+                    "⛔ Экспорт личных переписок недоступен. "
+                    "Бот работает только с группами, супергруппами и каналами."
+                ),
                 "UNKNOWN": (
                     f"Не удалось получить доступ к чату {job.chat_id}. "
                     f"Проверьте логи worker-а для подробностей."
@@ -326,6 +330,35 @@ class ExportWorker:
 
         if chat_info:
             logger.info(f"  Chat: {chat_info.get('title')} (type: {chat_info.get('type')})")
+
+            chat_type = chat_info.get("type", "")
+            _ALLOWED_CHAT_TYPES = {"group", "supergroup", "channel"}
+            if chat_type not in _ALLOWED_CHAT_TYPES:
+                error = (
+                    f"⛔ Экспорт недоступен: чат имеет тип '{chat_type}'. "
+                    f"Бот работает только с группами, супергруппами и каналами. "
+                    f"Личные переписки и боты экспортировать нельзя."
+                )
+                logger.warning(
+                    f"⛔ Blocked export of {chat_type!r} chat {job.chat_id} "
+                    f"for user {job.user_id}"
+                )
+                await self.java_client.send_response(
+                    SendResponsePayload(
+                        task_id=job.task_id,
+                        status="failed",
+                        messages=[],
+                        error=error,
+                        error_code="CHAT_PRIVATE",
+                        user_chat_id=job.user_chat_id,
+                    )
+                )
+                await self.queue_consumer.mark_job_failed(
+                    job.task_id, error, job.subscription_id, job.user_id
+                )
+                await self._cleanup_job(job)
+                return False, job, None, None
+
             # Нормализуем chat_id до канонического числового ID.
             canonical_id = chat_info.get("id")
             original_chat_input = job.chat_id
@@ -474,7 +507,12 @@ class ExportWorker:
 
         if success:
             logger.info(f"✅ Job {job.task_id} completed ({msg_count} messages)")
-            await self.queue_consumer.mark_job_completed(job.task_id)
+            # Для 0-message экспортов Java не вызывается (/api/convert пропускается),
+            # поэтому TelegramController не публикует export.completed в stats:events.
+            # Передаём bot_user_id чтобы queue_consumer сам опубликовал событие
+            # и дашборд сменил статус QUEUED → COMPLETED.
+            bot_user_id_for_event = job.user_id if msg_count == 0 else None
+            await self.queue_consumer.mark_job_completed(job.task_id, bot_user_id=bot_user_id_for_event)
             self.jobs_processed += 1
             self.log_memory_usage("JOB_DONE")
         else:

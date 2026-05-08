@@ -811,7 +811,13 @@ class TelegramClient:
         try:
             logger.debug(f"Attempting to get chat info for: {chat_id!r} (type: {type(chat_id)})")
             chat = await self.client.get_chat(chat_id)
-            return (True, self._build_chat_info(chat), None)
+            chat_info = self._build_chat_info(chat)
+            if chat_info.get("type") not in {"group", "supergroup", "channel"}:
+                logger.warning(
+                    f"⛔ Blocked {chat_info.get('type')!r} chat {chat_id!r} — only groups/channels allowed"
+                )
+                return (False, None, "PRIVATE_CHAT_FORBIDDEN")
+            return (True, chat_info, None)
 
         except ChatAdminRequired:
             logger.error(f"❌ Admin rights required for chat {chat_id}")
