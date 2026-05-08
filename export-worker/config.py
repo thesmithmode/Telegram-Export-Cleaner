@@ -63,6 +63,14 @@ class Settings(BaseSettings):
     CACHE_STATS_TOP_N: int = 50                    # chats per snapshot
     CACHE_FETCH_CHUNK_SIZE: int = 1_000           # rows per cursor.fetchmany
     CACHE_STORE_BATCH_SIZE: int = 1_000           # rows per executemany INSERT
+    CACHE_READ_POOL_SIZE: int = 4                  # отдельные read-only conn для concurrent reads
+    # Миграция page_size 4096 → 8192. Требует VACUUM + ~2x места на диске на пике.
+    # Worker startup блокируется на время прохода (минуты для крупных БД).
+    # Healthcheck в docker-compose использует pgrep → процесс жив во время VACUUM,
+    # контейнер не рестартует. Disk space check + один раз на жизнь БД.
+    # Можно отключить: CACHE_VACUUM_PAGE_SIZE_ON_START=false (env override).
+    CACHE_VACUUM_PAGE_SIZE_ON_START: bool = True
+    CACHE_TARGET_PAGE_SIZE: int = 8192
 
     # Единая политика таймаутов: heartbeat-loop в worker, job-execution,
     # сетевые операции к Java, BLPOP socket. Хотя сейчас разнесены по
