@@ -131,7 +131,8 @@
         const el = document.getElementById(id);
         if (!el) { return null; }
         const h = Number(el.dataset.height) || 300;
-        el.style.height = `${h}px`;
+        const wrap = el.closest('.chart-block__canvas-wrap');
+        if (wrap) { wrap.style.height = `${h}px`; }
         return el.getContext("2d");
     }
 
@@ -303,16 +304,31 @@
     }
 
     function renderBarChart(canvasId, items, { labelFn, valueFn, label, color, tickFn }) {
+        // Filter out items where label is empty/null — they produce invisible bars
+        // but still affect the X-axis scale, making real bars look tiny.
+        const validItems = items.filter(item => {
+            const lbl = labelFn(item);
+            return lbl != null && String(lbl).trim() !== '';
+        });
         const ctx = makeCanvas(canvasId);
         if (!ctx || !window.Chart) { return; }
+        // Dynamic height: 28px per bar so labels are evenly spaced.
+        const dynH = Math.max(220, validItems.length * 28 + 48);
+        const wrap = ctx.canvas.closest('.chart-block__canvas-wrap');
+        if (wrap) { wrap.style.height = dynH + 'px'; }
         new Chart(ctx, {
             type: "bar",
             data: {
-                labels: items.map(labelFn),
-                datasets: [{ label, data: items.map(valueFn), backgroundColor: color }],
+                labels: validItems.map(labelFn),
+                datasets: [{ label, data: validItems.map(valueFn), backgroundColor: color, barThickness: 16 }],
             },
-            options: { responsive: true, maintainAspectRatio: false, indexAxis: "y",
-                scales: { x: { beginAtZero: true, ticks: tickFn ? { callback: tickFn } : { precision: 0 } } } },
+            options: {
+                responsive: true, maintainAspectRatio: false, indexAxis: "y",
+                scales: {
+                    x: { beginAtZero: true, ticks: tickFn ? { callback: tickFn } : { precision: 0 } },
+                    y: { ticks: { autoSkip: false } },
+                },
+            },
         });
     }
 
