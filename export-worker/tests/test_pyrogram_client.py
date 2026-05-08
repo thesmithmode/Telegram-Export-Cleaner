@@ -1053,6 +1053,7 @@ class TestResolveNumericChatIdWithCanonicalMapping:
         mock_chat = MagicMock()
         mock_chat.id = -1001234567890
         mock_chat.username = "testchannel"
+        mock_chat.type = "supergroup"
         mock_pyrogram.get_chat = AsyncMock(return_value=mock_chat)
 
         client.client = mock_pyrogram
@@ -1101,6 +1102,7 @@ class TestResolveNumericChatIdWithCanonicalMapping:
         mock_chat = MagicMock()
         mock_chat.id = -1001234567899
         mock_chat.username = "publicchannel"
+        mock_chat.type = "channel"
         mock_pyrogram.get_chat = AsyncMock(return_value=mock_chat)
 
         client.client = mock_pyrogram
@@ -1137,6 +1139,7 @@ class TestResolveNumericChatIdWithCanonicalMapping:
         mock_chat = MagicMock()
         mock_chat.id = -1001234567890
         mock_chat.username = "testchannel"
+        mock_chat.type = "supergroup"
         mock_pyrogram.get_chat = AsyncMock(return_value=mock_chat)
 
         client.client = mock_pyrogram
