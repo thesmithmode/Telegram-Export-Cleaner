@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Service;
 import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
+import org.telegram.telegrambots.meta.api.methods.BotApiMethod;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands;
 import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText;
@@ -18,6 +19,7 @@ import org.telegram.telegrambots.meta.api.methods.menubutton.SetChatMenuButton;
 import org.telegram.telegrambots.meta.api.objects.menubutton.MenuButtonWebApp;
 import org.telegram.telegrambots.meta.api.objects.webapp.WebAppInfo;
 
+import java.io.Serializable;
 import java.util.List;
 
 @Service
@@ -38,13 +40,30 @@ public class BotMessenger {
                 .text(text);
     }
 
+    // Все Telegram API вызовы из этого класса — best-effort: ошибка не должна
+    // ронять остальной flow (валидацию, очередь, ответ юзеру). Helper унифицирует
+    // обработку TelegramApiException: один лог, один return null. Уровень
+    // логирования передаётся, чтобы edit/callback (тихие фейлы) шли в debug,
+    // а отправка / регистрация команд — в error.
+    private <T extends Serializable> T executeQuietly(
+            BotApiMethod<T> method, String errorContext, boolean errorLevel) {
+        try {
+            return telegramClient.execute(method);
+        } catch (TelegramApiException e) {
+            if (errorLevel) {
+                log.error("{}: {}", errorContext, e.getMessage());
+            } else {
+                log.debug("{}: {}", errorContext, e.getMessage());
+            }
+            return null;
+        }
+    }
+
     public void send(long chatId, String text) {
         SendMessage message = buildMessage(chatId, text).build();
-        try {
-            telegramClient.execute(message);
+        if (executeQuietly(message,
+                "Не удалось отправить сообщение в чат " + chatId, true) != null) {
             log.debug("Сообщение отправлено в чат {}: {} символов", chatId, text.length());
-        } catch (TelegramApiException e) {
-            log.error("Не удалось отправить сообщение в чат {}: {}", chatId, e.getMessage());
         }
     }
 
@@ -54,38 +73,30 @@ public class BotMessenger {
      */
     public boolean trySend(long chatId, String text) {
         SendMessage message = buildMessage(chatId, text).build();
-        try {
-            telegramClient.execute(message);
+        Message sent = executeQuietly(message,
+                "trySend → fail, chat " + chatId, true);
+        if (sent != null) {
             log.debug("trySend → ok, chat {}: {} символов", chatId, text.length());
             return true;
-        } catch (TelegramApiException e) {
-            log.error("trySend → fail, chat {}: {}", chatId, e.getMessage());
-            return false;
         }
+        return false;
     }
 
     public void sendWithKeyboard(long chatId, String text, InlineKeyboardMarkup keyboard) {
         SendMessage message = buildMessage(chatId, text)
                 .replyMarkup(keyboard)
                 .build();
-        try {
-            telegramClient.execute(message);
-        } catch (TelegramApiException e) {
-            log.error("Не удалось отправить сообщение с клавиатурой в чат {}: {}", chatId, e.getMessage());
-        }
+        executeQuietly(message,
+                "Не удалось отправить сообщение с клавиатурой в чат " + chatId, true);
     }
 
     public int sendWithKeyboardGetId(long chatId, String text, InlineKeyboardMarkup keyboard) {
         SendMessage message = buildMessage(chatId, text)
                 .replyMarkup(keyboard)
                 .build();
-        try {
-            Message sent = telegramClient.execute(message);
-            return sent != null ? sent.getMessageId() : 0;
-        } catch (TelegramApiException e) {
-            log.error("Не удалось отправить сообщение с клавиатурой в чат {}: {}", chatId, e.getMessage());
-            return 0;
-        }
+        Message sent = executeQuietly(message,
+                "Не удалось отправить сообщение с клавиатурой в чат " + chatId, true);
+        return sent != null ? sent.getMessageId() : 0;
     }
 
     public void editMessage(long chatId, int messageId, String text, InlineKeyboardMarkup keyboard) {
@@ -96,21 +107,17 @@ public class BotMessenger {
         if (keyboard != null) {
             builder.replyMarkup(keyboard);
         }
-        try {
-            telegramClient.execute(builder.build());
-        } catch (TelegramApiException e) {
-            log.debug("Не удалось отредактировать сообщение {} в чате {}: {}",
-                    messageId, chatId, e.getMessage());
-        }
+        // Edit fail обычно "message is not modified" / "message to edit not found" —
+        // debug-уровень, не засорять error-log.
+        executeQuietly(builder.build(),
+                "Не удалось отредактировать сообщение " + messageId + " в чате " + chatId, false);
     }
 
     public void answerCallback(String callbackQueryId) {
-        try {
-            telegramClient.execute(
-                    AnswerCallbackQuery.builder().callbackQueryId(callbackQueryId).build());
-        } catch (TelegramApiException e) {
-            log.debug("Не удалось подтвердить callback query {}: {}", callbackQueryId, e.getMessage());
-        }
+        // Stale callback (юзер закрыл диалог) — типичный debug-кейс.
+        executeQuietly(
+                AnswerCallbackQuery.builder().callbackQueryId(callbackQueryId).build(),
+                "Не удалось подтвердить callback query " + callbackQueryId, false);
     }
 
     /**
@@ -119,32 +126,28 @@ public class BotMessenger {
      * регистрируется default-набор (используется как fallback).
      */
     public void setMyCommands(List<BotCommand> commands, String languageCode) {
-        try {
-            SetMyCommands.SetMyCommandsBuilder<?, ?> builder = SetMyCommands.builder()
-                    .commands(commands)
-                    .scope(new BotCommandScopeDefault());
-            if (languageCode != null && !languageCode.isBlank()) {
-                builder.languageCode(languageCode);
-            }
-            telegramClient.execute(builder.build());
+        SetMyCommands.SetMyCommandsBuilder<?, ?> builder = SetMyCommands.builder()
+                .commands(commands)
+                .scope(new BotCommandScopeDefault());
+        if (languageCode != null && !languageCode.isBlank()) {
+            builder.languageCode(languageCode);
+        }
+        Boolean ok = executeQuietly(builder.build(),
+                "Не удалось зарегистрировать slash-команды (lang=" + languageCode + ")", true);
+        if (Boolean.TRUE.equals(ok)) {
             log.info("Telegram slash-команды зарегистрированы ({}): lang={}",
                     commands.size(), languageCode != null ? languageCode : "default");
-        } catch (TelegramApiException e) {
-            log.error("Не удалось зарегистрировать slash-команды (lang={}): {}",
-                    languageCode, e.getMessage());
         }
     }
 
     public void setChatMenuButton(String url, String title) {
-        try {
-            telegramClient.execute(
-                    SetChatMenuButton.builder()
-                            .menuButton(new MenuButtonWebApp(title, new WebAppInfo(url)))
-                            .build()
-            );
+        Boolean ok = executeQuietly(
+                SetChatMenuButton.builder()
+                        .menuButton(new MenuButtonWebApp(title, new WebAppInfo(url)))
+                        .build(),
+                "Не удалось установить кнопку меню", true);
+        if (Boolean.TRUE.equals(ok)) {
             log.info("Кнопка меню установлена: {}", url);
-        } catch (TelegramApiException e) {
-            log.error("Не удалось установить кнопку меню: {}", e.getMessage());
         }
     }
 }
