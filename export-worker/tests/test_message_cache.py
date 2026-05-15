@@ -1082,6 +1082,94 @@ class TestPageSizeMigration:
             await second.close()
 
     @pytest.mark.asyncio
+    async def test_publish_cache_ranges_to_redis_on_store(self, tmp_path):
+        """T22: после store_messages MessageCache публикует cache:ranges:{chat_id}
+        в Redis, чтобы Java ExportJobProducer.isLikelyCached() мог направить
+        повторный экспорт в Express queue. Без этого ключа Express ветка мертва."""
+        from unittest.mock import AsyncMock
+        c = MessageCache(db_path=str(tmp_path / "ranges_redis.db"))
+        await c.initialize()
+        try:
+            redis_mock = AsyncMock()
+            # canonical lookup → None (нет username), значит один publish — numeric
+            redis_mock.get = AsyncMock(return_value=None)
+            c.redis_client = redis_mock
+
+            await c.store_messages(424242, _make_messages([10, 11, 12]))
+
+            redis_mock.set.assert_awaited()
+            set_calls = redis_mock.set.call_args_list
+            keys = [call.args[0] for call in set_calls]
+            assert "cache:ranges:424242" in keys
+
+            numeric_call = next(call for call in set_calls if call.args[0] == "cache:ranges:424242")
+            import json as _json
+            ranges = _json.loads(numeric_call.args[1])
+            # [10..12] схлопывается в один диапазон
+            assert ranges == [[10, 12]]
+            # TTL ~ 30 дней
+            assert numeric_call.kwargs.get("ex") == 30 * 86400
+        finally:
+            await c.close()
+
+    @pytest.mark.asyncio
+    async def test_publish_cache_ranges_dual_write_with_username(self, tmp_path):
+        """T22 regression: для numeric input юзера обратный canonical маппинг
+        `canonical:{numeric}→username` ломает Java lookup — Java получит
+        username и будет искать cache:ranges:{username}. Поэтому publish
+        дублируется под username, если он известен в Redis."""
+        from unittest.mock import AsyncMock
+        c = MessageCache(db_path=str(tmp_path / "ranges_dual.db"))
+        await c.initialize()
+        try:
+            redis_mock = AsyncMock()
+            redis_mock.get = AsyncMock(return_value="mychat")  # canonical:numeric → username
+            c.redis_client = redis_mock
+
+            await c.store_messages(-100123, _make_messages([1, 2, 3]))
+
+            set_calls = redis_mock.set.call_args_list
+            keys = [call.args[0] for call in set_calls]
+            assert "cache:ranges:-100123" in keys
+            assert "cache:ranges:mychat" in keys
+            # canonical lookup был сделан
+            redis_mock.get.assert_awaited_with("canonical:-100123")
+        finally:
+            await c.close()
+
+    @pytest.mark.asyncio
+    async def test_publish_cache_ranges_skipped_for_topic(self, tmp_path):
+        """T22: Java логика isLikelyCached без topic-awareness — Express ветка
+        для топиков нерелевантна. Публикация ограничена topic_id=0."""
+        from unittest.mock import AsyncMock
+        c = MessageCache(db_path=str(tmp_path / "ranges_topic.db"))
+        await c.initialize()
+        try:
+            redis_mock = AsyncMock()
+            c.redis_client = redis_mock
+            await c.store_messages(100, _make_messages([1, 2]), topic_id=42)
+            redis_mock.set.assert_not_called()
+        finally:
+            await c.close()
+
+    @pytest.mark.asyncio
+    async def test_publish_cache_ranges_swallows_redis_errors(self, tmp_path):
+        """T22: Redis down не должен ронять ingestion — SQLite уже зафиксирован."""
+        from unittest.mock import AsyncMock
+        c = MessageCache(db_path=str(tmp_path / "ranges_err.db"))
+        await c.initialize()
+        try:
+            redis_mock = AsyncMock()
+            redis_mock.set = AsyncMock(side_effect=ConnectionError("Redis down"))
+            redis_mock.get = AsyncMock(side_effect=ConnectionError("Redis down"))
+            c.redis_client = redis_mock
+            # Не должно бросать — best-effort publish
+            stored = await c.store_messages(999, _make_messages([1, 2, 3]))
+            assert stored == 3
+        finally:
+            await c.close()
+
+    @pytest.mark.asyncio
     async def test_migration_skipped_low_disk_space(
         self, tmp_path, monkeypatch, caplog
     ):
