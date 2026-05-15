@@ -293,6 +293,49 @@ class SubscriptionSchedulerTest {
     }
 
     @Test
+    @DisplayName("isPeriodElapsed: первый запуск (anchor=null) ВНЕ desired-окна → НЕ истёк")
+    void isPeriodElapsed_firstRunOutsideDesiredWindow_returnsFalse() {
+        // Подписка создана в 04:00 МСК с desiredTimeMsk=10:00 (окно 09:30-16:00).
+        // sinceDate=4ч назад → now>sinceDate=true. До фикса возвращалось true,
+        // подписка сразу же выстреливала в случайное время первого tick'а.
+        ZonedDateTime zDt = ZonedDateTime.now(MSK).withHour(4).withMinute(0).withSecond(0).withNano(0);
+        Instant now = zDt.toInstant();
+        Instant sinceDate = now.minusSeconds(3600);   // 1 час до now (=03:00 МСК)
+        ChatSubscription sub = ChatSubscription.builder()
+                .id(50L).botUserId(100L).chatRefId(200L)
+                .periodHours(24).desiredTimeMsk("10:00").sinceDate(sinceDate)
+                .status(SubscriptionStatus.ACTIVE).consecutiveFailures(0)
+                .lastRunAt(null).lastSuccessAt(null).lastFailureAt(null)
+                .lastConfirmAt(now)
+                .createdAt(now).updatedAt(now)
+                .build();
+
+        boolean elapsed = scheduler.isPeriodElapsed(sub, now);
+
+        assertThat(elapsed).isFalse();
+    }
+
+    @Test
+    @DisplayName("isPeriodElapsed: первый запуск (anchor=null) В desired-окне → истёк")
+    void isPeriodElapsed_firstRunInsideDesiredWindow_returnsTrue() {
+        // desiredTimeMsk=now+10мин → окно (windowStart=now-20мин) уже открыто.
+        Instant now = Instant.now();
+        Instant sinceDate = now.minusSeconds(3600);
+        ChatSubscription sub = ChatSubscription.builder()
+                .id(51L).botUserId(100L).chatRefId(200L)
+                .periodHours(24).desiredTimeMsk(mskHhMm(10)).sinceDate(sinceDate)
+                .status(SubscriptionStatus.ACTIVE).consecutiveFailures(0)
+                .lastRunAt(null).lastSuccessAt(null).lastFailureAt(null)
+                .lastConfirmAt(now)
+                .createdAt(now).updatedAt(now)
+                .build();
+
+        boolean elapsed = scheduler.isPeriodElapsed(sub, now);
+
+        assertThat(elapsed).isTrue();
+    }
+
+    @Test
     @DisplayName("isPeriodElapsed: lastRunAt только что (lastSuccessAt=null) → НЕ истёк — защита от 5-мин цикла")
     void isPeriodElapsed_guardsAgainstReEnqueueByLastRunAt() {
         Instant sinceDate = Instant.now().minusSeconds(25 * 3600L);
