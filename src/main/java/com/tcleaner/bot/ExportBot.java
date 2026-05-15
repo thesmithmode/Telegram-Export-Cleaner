@@ -30,7 +30,6 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKe
 
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -600,23 +599,7 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     }
 
     private String buildDateInfoText(BotLanguage lang, UserSession session) {
-        if (session.getFromDate() == null && session.getToDate() == null) {
-            return "";
-        }
-        StringBuilder sb = new StringBuilder(i18n.msg(lang, "bot.date.prefix")).append(' ');
-        if (session.getFromDate() != null) {
-            LocalDate from = LocalDateTime.parse(session.getFromDate()).toLocalDate();
-            sb.append(i18n.msg(lang, "bot.date.from", from.format(BotInputParser.dateFormat())));
-        } else {
-            sb.append(i18n.msg(lang, "bot.date.from_chat_start"));
-        }
-        if (session.getToDate() != null) {
-            LocalDate to = LocalDateTime.parse(session.getToDate()).toLocalDate();
-            sb.append(i18n.msg(lang, "bot.date.to", to.format(BotInputParser.dateFormat())));
-        } else {
-            sb.append(i18n.msg(lang, "bot.date.to_today"));
-        }
-        return sb.toString();
+        return queueDisplayBuilder.dateInfo(lang, session);
     }
 
     private void publishBotUserSeen(User from) {
@@ -629,27 +612,11 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
                     .type(StatsEventType.BOT_USER_SEEN)
                     .botUserId(from.getId())
                     .username(from.getUserName())
-                    .displayName(buildDisplayName(from))
+                    .displayName(QueueDisplayBuilder.displayName(from))
                     .ts(Instant.now())
                     .build());
         } catch (Exception ex) {
             log.warn("bot_user.seen не опубликовано (stats analytics loss): {}", ex.getMessage());
         }
-    }
-
-    private static String buildDisplayName(User from) {
-        String first = from.getFirstName();
-        String last = from.getLastName();
-        StringBuilder sb = new StringBuilder();
-        if (first != null && !first.isBlank()) {
-            sb.append(first);
-        }
-        if (last != null && !last.isBlank()) {
-            if (!sb.isEmpty()) {
-                sb.append(' ');
-            }
-            sb.append(last);
-        }
-        return sb.isEmpty() ? null : sb.toString();
     }
 }
