@@ -51,7 +51,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Trivy filesystem scan (high+critical)
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0 (pin SHA — теги без префикса 'v' marketplace не резолвит)
         continue-on-error: true
         with:
           scan-type: 'fs'
