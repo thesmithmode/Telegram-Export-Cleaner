@@ -10,7 +10,6 @@ import jakarta.servlet.http.HttpSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContext;
@@ -30,27 +29,19 @@ public class TelegramAuthController {
 
     private static final Logger log = LoggerFactory.getLogger(TelegramAuthController.class);
 
-    private static final String NONCE_PREFIX = "tg:nonce:";
-
-    private final TelegramMiniAppAuthVerifier verifier;
-    private final TelegramLoginService loginService;
+    private final TelegramAuthService authService;
     private final long adminTelegramId;
     private final SecurityContextRepository contextRepository;
-    private final StringRedisTemplate redis;
 
-    public TelegramAuthController(TelegramMiniAppAuthVerifier verifier,
-                                  TelegramLoginService loginService,
+    public TelegramAuthController(TelegramAuthService authService,
                                   SecurityContextRepository contextRepository,
-                                  StringRedisTemplate redis,
                                   @Value("${dashboard.auth.admin.telegram-id}") long adminTelegramId) {
         if (adminTelegramId <= 0) {
             throw new IllegalArgumentException(
                     "DASHBOARD_ADMIN_TG_ID не настроен (=" + adminTelegramId + ") — запуск невозможен");
         }
-        this.verifier = verifier;
-        this.loginService = loginService;
+        this.authService = authService;
         this.contextRepository = contextRepository;
-        this.redis = redis;
         this.adminTelegramId = adminTelegramId;
     }
 
@@ -59,66 +50,26 @@ public class TelegramAuthController {
                            HttpServletRequest request,
                            HttpServletResponse response) {
         String ip = clientIp(request);
-        TelegramMiniAppLoginData data;
-        try {
-            data = TelegramMiniAppLoginData.parse(initData);
-        } catch (IllegalArgumentException e) {
-            log.warn("Telegram Mini App login: ошибка парсинга initData ip={}: {}", ip, e.getMessage());
-            return "redirect:/dashboard/login?error=invalid";
+        TelegramAuthService.LoginOutcome outcome = authService.login(initData, ip, adminTelegramId);
+        if (outcome.isFailure()) {
+            return "redirect:/dashboard/login?error=" + outcome.errorCode();
         }
+        return finalizeLogin(outcome.loginResult(), request, response, ip);
+    }
 
-        try {
-            verifier.verify(data);
-        } catch (TelegramAuthenticationException e) {
-            log.warn("Telegram Mini App login rejected: id={} ip={} reason={}", data.id(), ip, e.getMessage());
-            return "redirect:/dashboard/login?error=invalid";
-        }
-
-        // Replay protection: одноразовый nonce по hash, TTL = MAX_AGE окна initData.
-        // Fail-closed: при недоступности Redis отказываем в логине, иначе replay-окно
-        // открыто на всё время outage (initData можно использовать повторно до auth_date+MAX_AGE).
-        try {
-            Boolean isNew = redis.opsForValue().setIfAbsent(
-                    NONCE_PREFIX + data.hash(), "1", TelegramMiniAppAuthVerifier.MAX_AGE);
-            if (!Boolean.TRUE.equals(isNew)) {
-                log.warn("Telegram Mini App login rejected: replay detected, id={} ip={}", data.id(), ip);
-                return "redirect:/dashboard/login?error=invalid";
-            }
-        } catch (Exception e) {
-            log.error("Redis nonce check failed ip={}: {}", ip, e.getMessage(), e);
-            return "redirect:/dashboard/login?error=infra";
-        }
-
-        long id = data.id();
-        if (id <= 0) {
-            log.warn("Telegram Mini App login rejected: отсутствует user.id в initData ip={}", ip);
-            return "redirect:/dashboard/login?error=invalid";
-        }
-
-        TelegramLoginService.LoginResult result = loginService.loginOrCreate(data, adminTelegramId);
+    private String finalizeLogin(TelegramLoginService.LoginResult result,
+                                  HttpServletRequest request,
+                                  HttpServletResponse response,
+                                  String ip) {
         DashboardUser user = result.user();
         DashboardRole role = result.role();
+        long id = user.getBotUserId();
         DashboardUserDetails principal = new DashboardUserDetails(
                 user.getUsername(), "",
                 List.of(new SimpleGrantedAuthority(role.authority())),
-                role, user.getBotUserId());
+                role, id);
 
-        HttpSession oldSession = request.getSession(false);
-        if (oldSession != null) {
-            Object oldCtx = oldSession.getAttribute(
-                    HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY);
-            if (oldCtx instanceof SecurityContext sc
-                    && sc.getAuthentication() != null
-                    && sc.getAuthentication().getPrincipal() instanceof DashboardUserDetails prev) {
-                Long prevBotUserId = prev.getBotUserId();
-                if (prevBotUserId != null && !prevBotUserId.equals(id)) {
-                    log.warn("Mini-App: смена principal в сессии prevBotUserId={} → newTgId={} ip={} (cross-user session reuse)",
-                            prevBotUserId, id, ip);
-                }
-            }
-            oldSession.invalidate();
-        }
-        request.getSession(true);
+        rotateSession(request, id, ip);
 
         UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
                 principal, null, principal.getAuthorities());
@@ -129,10 +80,37 @@ public class TelegramAuthController {
 
         writeTgUidCookie(response, id, request.isSecure());
 
-        log.info("Telegram Mini App login: tgId={} role={} user='{}' ip={}", id, role, user.getUsername(), ip);
+        log.info("Telegram Mini App login: tgId={} role={} user='{}' ip={}",
+                id, role, user.getUsername(), ip);
         return role == DashboardRole.ADMIN
                 ? "redirect:/dashboard/overview"
                 : "redirect:/dashboard/me";
+    }
+
+    /**
+     * Session fixation defense: invalidate старую сессию и создать новую.
+     * Дополнительно: если предыдущий principal был другим юзером — диагностический
+     * warn для отслеживания WebView session reuse (старый JSESSIONID в attachment menu
+     * для нового юзера).
+     */
+    private static void rotateSession(HttpServletRequest request, long newTgId, String ip) {
+        HttpSession oldSession = request.getSession(false);
+        if (oldSession != null) {
+            Object oldCtx = oldSession.getAttribute(
+                    HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY);
+            if (oldCtx instanceof SecurityContext sc
+                    && sc.getAuthentication() != null
+                    && sc.getAuthentication().getPrincipal() instanceof DashboardUserDetails prev) {
+                Long prevBotUserId = prev.getBotUserId();
+                if (prevBotUserId != null && !prevBotUserId.equals(newTgId)) {
+                    log.warn(
+                            "Mini-App: смена principal в сессии prevBotUserId={} → newTgId={} ip={} (cross-user session reuse)",
+                            prevBotUserId, newTgId, ip);
+                }
+            }
+            oldSession.invalidate();
+        }
+        request.getSession(true);
     }
 
     /**
