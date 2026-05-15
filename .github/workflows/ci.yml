@@ -33,6 +33,15 @@ jobs:
       - name: Build and test
         run: mvn clean package
 
+      - name: Upload JaCoCo report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: target/site/jacoco/
+          retention-days: 7
+          if-no-files-found: warn
+
 
   # ─── Python тесты (reusable workflow — единый источник истины) ───────────────
   python-tests:
