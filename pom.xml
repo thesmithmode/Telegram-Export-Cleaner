@@ -241,7 +241,11 @@
                                         <limit>
                                             <counter>LINE</counter>
                                             <value>COVEREDRATIO</value>
-                                            <minimum>0.82</minimum>
+                                            <!-- Целевое значение по policy: 0.95 (см. CLAUDE.md).
+                                                 Текущий gate подняли пошагово: 0.82 → 0.85.
+                                                 Следующий шаг — после добавления тестов на uncovered
+                                                 hot-spot'ах (StatsQueryService, ExportBot ветки). -->
+                                            <minimum>0.85</minimum>
                                         </limit>
                                     </limits>
                                 </rule>
