@@ -248,6 +248,25 @@ class ExportWorker:
         await self.clear_active_processing_job()
         await self.clear_heartbeat(job.task_id)
 
+    async def _alert_admin_session_invalid(self) -> None:
+        """Уведомляет администратора о невалидной MTProto-сессии напрямую через
+        Bot API (httpx). Не зависит от Pyrogram и MTProto. Никогда не бросает —
+        не должна задерживать sys.exit. Молча проглатывает любую ошибку."""
+        if not settings.TELEGRAM_BOT_TOKEN or not settings.ADMIN_TG_ID:
+            logger.warning("Cannot alert admin: TELEGRAM_BOT_TOKEN or ADMIN_TG_ID not set")
+            return
+        try:
+            import httpx
+            url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
+            text = (
+                f"⚠️ TELEGRAM_SESSION_STRING невалидна на {settings.WORKER_NAME}.\n"
+                f"Worker завершается. Требуется обновить session string через get_session.py."
+            )
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.post(url, json={"chat_id": settings.ADMIN_TG_ID, "text": text})
+        except Exception as e:
+            logger.warning(f"Failed to alert admin about SESSION_INVALID: {e}")
+
     async def _setup_processing(self, job: ExportRequest) -> bool:
         """Маркирует job как processing + обновляет active_export + ранний cancel-check.
 
@@ -326,6 +345,15 @@ class ExportWorker:
             )
             await self.queue_consumer.mark_job_failed(job.task_id, error, job.subscription_id, job.user_id)
             await self._cleanup_job(job)
+
+            # SESSION_INVALID = permanent (юзер deauth'нулся, force-logout, превышен
+            # лимит сессий). Каждый последующий job тоже сфейлится. Не ждём
+            # consecutive_errors=10 — алертим админа и завершаемся, docker рестартанёт.
+            if error_reason == "SESSION_INVALID":
+                await self._alert_admin_session_invalid()
+                logger.critical("SESSION_INVALID — terminating worker, requires manual session refresh")
+                sys.exit(1)
+
             return False, job, None, None
 
         if chat_info:

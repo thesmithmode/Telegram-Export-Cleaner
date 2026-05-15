@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     # Telegram Bot API (for sending results back to users)
     TELEGRAM_BOT_TOKEN: Optional[str] = None
 
+    # Опционально: куда слать критические алерты (например SESSION_INVALID).
+    # Тот же ID что DASHBOARD_ADMIN_TG_ID на стороне Java. 0 = алерты отключены.
+    ADMIN_TG_ID: int = 0
+
     # Pyrogram
     SESSION_NAME: str = "export_worker"  # Will be saved in session/ folder
     TELEGRAM_SESSION_STRING: Optional[str] = None  # Production: string session for stateless auth
