@@ -8,8 +8,11 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
+import org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands;
+import org.telegram.telegrambots.meta.api.methods.menubutton.SetChatMenuButton;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText;
+import org.telegram.telegrambots.meta.api.objects.commands.BotCommand;
 import org.telegram.telegrambots.meta.api.objects.message.Message;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
@@ -311,6 +314,111 @@ class BotMessengerTest {
             verify(mockTelegramClient).execute(captor.capture());
             assertEquals("99", captor.getValue().getChatId());
             assertEquals("payload", captor.getValue().getText());
+        }
+    }
+
+    @Nested
+    @DisplayName("executeQuietly — error-paths не бросают наружу")
+    class ExecuteQuietlyErrorPaths {
+
+        @Test
+        @DisplayName("send: TelegramApiException → swallow, не бросает")
+        void sendSwallowsException() throws TelegramApiException {
+            setupMessenger();
+            when(mockTelegramClient.execute(any(SendMessage.class)))
+                    .thenThrow(new TelegramApiException("api down"));
+
+            assertDoesNotThrow(() -> botMessenger.send(1L, "text"));
+        }
+
+        @Test
+        @DisplayName("sendWithKeyboard: TelegramApiException → swallow")
+        void sendWithKeyboardSwallowsException() throws TelegramApiException {
+            setupMessenger();
+            when(mockTelegramClient.execute(any(SendMessage.class)))
+                    .thenThrow(new TelegramApiException("api down"));
+
+            assertDoesNotThrow(() -> botMessenger.sendWithKeyboard(1L, "t", mock(InlineKeyboardMarkup.class)));
+        }
+
+        @Test
+        @DisplayName("sendWithKeyboardGetId: exception → возвращает 0 (sent=null fallback)")
+        void sendWithKeyboardGetIdReturnsZeroOnException() throws TelegramApiException {
+            setupMessenger();
+            when(mockTelegramClient.execute(any(SendMessage.class)))
+                    .thenThrow(new TelegramApiException("api down"));
+
+            int messageId = botMessenger.sendWithKeyboardGetId(1L, "t", null);
+
+            assertEquals(0, messageId);
+        }
+
+        @Test
+        @DisplayName("editMessage: TelegramApiException → swallow (\"message not modified\" debug-уровень)")
+        void editMessageSwallowsException() throws TelegramApiException {
+            setupMessenger();
+            when(mockTelegramClient.execute(any(EditMessageText.class)))
+                    .thenThrow(new TelegramApiException("message is not modified"));
+
+            assertDoesNotThrow(() -> botMessenger.editMessage(1L, 99, "t", null));
+        }
+
+        @Test
+        @DisplayName("answerCallback: TelegramApiException → swallow (stale-callback debug)")
+        void answerCallbackSwallowsException() throws TelegramApiException {
+            setupMessenger();
+            when(mockTelegramClient.execute(any(AnswerCallbackQuery.class)))
+                    .thenThrow(new TelegramApiException("query is too old"));
+
+            assertDoesNotThrow(() -> botMessenger.answerCallback("stale"));
+        }
+
+        @Test
+        @DisplayName("setMyCommands: TelegramApiException → swallow")
+        void setMyCommandsSwallowsException() throws TelegramApiException {
+            setupMessenger();
+            when(mockTelegramClient.execute(any(SetMyCommands.class)))
+                    .thenThrow(new TelegramApiException("registration failed"));
+
+            assertDoesNotThrow(() -> botMessenger.setMyCommands(List.of(new BotCommand("start", "Старт")), null));
+        }
+
+        @Test
+        @DisplayName("setMyCommands: пустой languageCode → НЕ передан в SetMyCommands.languageCode")
+        void setMyCommandsBlankLanguageCodeOmitted() throws TelegramApiException {
+            setupMessenger();
+            when(mockTelegramClient.execute(any(SetMyCommands.class)))
+                    .thenReturn(true);
+
+            botMessenger.setMyCommands(List.of(new BotCommand("start", "Старт")), "  ");
+
+            ArgumentCaptor<SetMyCommands> captor = ArgumentCaptor.forClass(SetMyCommands.class);
+            verify(mockTelegramClient).execute(captor.capture());
+            assertEquals(null, captor.getValue().getLanguageCode());
+        }
+
+        @Test
+        @DisplayName("setMyCommands: languageCode=ru → передан в API")
+        void setMyCommandsLanguageCodePassed() throws TelegramApiException {
+            setupMessenger();
+            when(mockTelegramClient.execute(any(SetMyCommands.class)))
+                    .thenReturn(true);
+
+            botMessenger.setMyCommands(List.of(new BotCommand("start", "Старт")), "ru");
+
+            ArgumentCaptor<SetMyCommands> captor = ArgumentCaptor.forClass(SetMyCommands.class);
+            verify(mockTelegramClient).execute(captor.capture());
+            assertEquals("ru", captor.getValue().getLanguageCode());
+        }
+
+        @Test
+        @DisplayName("setChatMenuButton: TelegramApiException → swallow")
+        void setChatMenuButtonSwallowsException() throws TelegramApiException {
+            setupMessenger();
+            when(mockTelegramClient.execute(any(SetChatMenuButton.class)))
+                    .thenThrow(new TelegramApiException("invalid url"));
+
+            assertDoesNotThrow(() -> botMessenger.setChatMenuButton("https://x.invalid", "Open"));
         }
     }
 

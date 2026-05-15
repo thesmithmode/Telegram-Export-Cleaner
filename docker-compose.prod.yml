@@ -22,7 +22,9 @@ services:
   # CONTAINERS, NETWORKS, SERVICES. Всё остальное (exec, start, stop, build) — 403.
   # ===========================================================================
   socket-proxy:
-    image: tecnativa/docker-socket-proxy:0.3.0
+    # Pin SHA (а не только tag) защищает от подмены образа: даже если кто-то
+    # перетянет тег 0.3.0 на новый layer с backdoor — Docker откажется его пулить.
+    image: tecnativa/docker-socket-proxy:0.3.0@sha256:2f92c6e85a1199b3403c99d7439695898a162c69689b11130450ffadb352f0a0
     container_name: telegram-cleaner-socket-proxy
     labels:
       - "project=telegram-cleaner"
