@@ -86,6 +86,15 @@ public class TelegramController {
         final Path tempFile = Files.createTempFile("tgc-", ".json");
         try (InputStream is = file.getInputStream()) {
             Files.copy(is, tempFile, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            // Если copy упал — StreamingResponseBody НЕ выполнится, его finally
+            // с deleteIfExists не сработает. Чистим temp здесь.
+            try {
+                Files.deleteIfExists(tempFile);
+            } catch (IOException cleanupEx) {
+                log.warn("Failed to delete temp file after copy error {}: {}", tempFile, cleanupEx.getMessage());
+            }
+            throw e;
         }
 
         final String capturedTaskId = taskId;
