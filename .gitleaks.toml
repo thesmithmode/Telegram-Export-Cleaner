@@ -1,0 +1,21 @@
+title = "Telegram-Export-Cleaner gitleaks config"
+
+# Расширяем default-конфиг — все встроенные правила остаются активны.
+[extend]
+useDefault = true
+
+# Allowlist для тестовых fixtures: тестовые ключи специально имеют формат API key
+# (длина+энтропия), чтобы покрывать валидацию formata. Это НЕ настоящие секреты.
+[allowlist]
+description = "Test fixtures и snapshot ключи — не настоящие секреты"
+paths = [
+    '''src/test/.*\.(java|kt)$''',
+    '''export-worker/tests/.*\.py$''',
+    '''.*Test\.java$''',
+]
+# Regexes-allowlist: типичные тестовые placeholder'ы.
+regexes = [
+    '''put-key-valid-[a-z0-9]+''',
+    '''idem-test-key-[a-z0-9]+''',
+    '''test-api-key-[a-z0-9]+''',
+]
