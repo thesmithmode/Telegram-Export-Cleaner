@@ -12,7 +12,6 @@ import org.telegram.telegrambots.meta.api.objects.commands.BotCommand;
 import org.telegram.telegrambots.meta.api.objects.message.Message;
 import org.telegram.telegrambots.meta.api.objects.commands.scope.BotCommandScopeDefault;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardRemove;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.telegram.telegrambots.meta.generics.TelegramClient;
 import org.telegram.telegrambots.meta.api.methods.menubutton.SetChatMenuButton;
@@ -111,18 +110,6 @@ public class BotMessenger {
                     AnswerCallbackQuery.builder().callbackQueryId(callbackQueryId).build());
         } catch (TelegramApiException e) {
             log.debug("Не удалось подтвердить callback query {}: {}", callbackQueryId, e.getMessage());
-        }
-    }
-
-    public void sendRemoveReplyKeyboard(long chatId, String text) {
-        SendMessage message = buildMessage(chatId, text)
-                .replyMarkup(ReplyKeyboardRemove.builder().removeKeyboard(true).build())
-                .build();
-        try {
-            telegramClient.execute(message);
-        } catch (TelegramApiException e) {
-            log.error("Не удалось отправить сообщение c ReplyKeyboardRemove в чат {}: {}",
-                    chatId, e.getMessage());
         }
     }
 

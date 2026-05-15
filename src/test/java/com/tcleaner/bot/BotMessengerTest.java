@@ -314,31 +314,4 @@ class BotMessengerTest {
         }
     }
 
-    @Nested
-    @DisplayName("sendRemoveReplyKeyboard()")
-    class SendRemoveReplyKeyboardTests {
-
-        @Test
-        @DisplayName("должен отправить сообщение без клавиатуры")
-        void shouldRemoveKeyboard() throws TelegramApiException {
-            setupMessenger();
-            String text = "Клавиатура удалена";
-
-            botMessenger.sendRemoveReplyKeyboard(12345L, text);
-
-            verify(mockTelegramClient).execute(any(SendMessage.class));
-        }
-
-        @Test
-        @DisplayName("должен очистить reply_markup")
-        void shouldClearReplyMarkup() throws TelegramApiException {
-            setupMessenger();
-
-            botMessenger.sendRemoveReplyKeyboard(12345L, "Clear keyboard");
-
-            ArgumentCaptor<SendMessage> captor = ArgumentCaptor.forClass(SendMessage.class);
-            verify(mockTelegramClient).execute(captor.capture());
-            assertNotNull(captor.getValue());
-        }
-    }
 }

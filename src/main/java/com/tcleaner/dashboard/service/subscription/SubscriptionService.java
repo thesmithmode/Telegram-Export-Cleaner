@@ -6,7 +6,6 @@ import com.tcleaner.dashboard.repository.ChatSubscriptionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -197,17 +196,6 @@ public class SubscriptionService {
     @Transactional(readOnly = true)
     public List<ChatSubscription> listForUser(long botUserId) {
         return repository.findAllByBotUserId(botUserId);
-    }
-
-    /**
-     * @deprecated Прежний admin-endpoint грузил всю таблицу в память.
-     * Новый код должен использовать {@link #listAll(Pageable)}.
-     * Текущая реализация ограничена 1000 строк во избежание OOM.
-     */
-    @Deprecated
-    @Transactional(readOnly = true)
-    public List<ChatSubscription> listAll() {
-        return repository.findAll(PageRequest.of(0, 1000)).getContent();
     }
 
     @Transactional(readOnly = true)
