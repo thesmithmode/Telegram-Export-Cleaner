@@ -1353,12 +1353,14 @@ class TestHeartbeat:
 
         await worker.heartbeat("task_abc", stage="fetch")
 
-        # heartbeat() вызывает 2 set'а: основной heartbeat и extend active_processing_job
-        assert worker.control_redis.set.call_count == 2
+        # heartbeat() вызывает 3 set'а: основной heartbeat, extend active_processing_job,
+        # extend job:processing:{task_id} (для long-running jobs > JOB_TIMEOUT)
+        assert worker.control_redis.set.call_count == 3
         calls = worker.control_redis.set.call_args_list
         keys = [c.args[0] for c in calls]
         assert "worker:heartbeat:task_abc" in keys
         assert "active_processing_job" in keys
+        assert "job:processing:task_abc" in keys
 
         heartbeat_call = next(c for c in calls if c.args[0] == "worker:heartbeat:task_abc")
         import json as _json
@@ -1370,6 +1372,11 @@ class TestHeartbeat:
         processing_call = next(c for c in calls if c.args[0] == "active_processing_job")
         assert processing_call.args[1] == "task_abc"
         assert processing_call.kwargs.get("ex") == 180
+
+        # job:processing:{task_id} TTL = JOB_TIMEOUT (1800s) — long-running protection
+        from config import settings as _settings
+        job_proc_call = next(c for c in calls if c.args[0] == "job:processing:task_abc")
+        assert job_proc_call.kwargs.get("ex") == _settings.JOB_TIMEOUT
 
     async def test_heartbeat_without_redis_is_noop(self):
         worker = ExportWorker()

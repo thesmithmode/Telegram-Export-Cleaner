@@ -196,6 +196,15 @@ class ExportWorker:
             ex=self._ACTIVE_PROCESSING_JOB_TTL_SECONDS,
             on_error_level="debug",
         )
+        # Extend job:processing:{task_id} — TTL=JOB_TIMEOUT(1800с) истёк бы для
+        # экспортов длиннее 30 мин. Java getActiveExport видел бы "ключ ушёл",
+        # чистил бы active_export, юзер думал бы что бронь слетела. Heartbeat
+        # extend держит ключ живым на всём протяжении долгого job.
+        await self._redis_ops.safe_set(
+            f"job:processing:{task_id}", payload,
+            ex=settings.JOB_TIMEOUT,
+            on_error_level="debug",
+        )
 
     async def clear_heartbeat(self, task_id: str) -> None:
         await self._redis_ops.safe_delete(
