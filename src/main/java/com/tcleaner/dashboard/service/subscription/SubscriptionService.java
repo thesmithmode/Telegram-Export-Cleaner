@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
 @Service
@@ -87,10 +88,7 @@ public class SubscriptionService {
 
     @Transactional
     public ChatSubscription pause(long id) {
-        ChatSubscription subscription = findExistingById(id);
-        subscription.setStatus(SubscriptionStatus.PAUSED);
-        subscription.setUpdatedAt(Instant.now());
-        return repository.save(subscription);
+        return mutate(id, s -> s.setStatus(SubscriptionStatus.PAUSED));
     }
 
     // Idempotent: если уже ACTIVE — no-op. ARCHIVED не резюмировать.
@@ -121,76 +119,51 @@ public class SubscriptionService {
 
     @Transactional
     public ChatSubscription archive(long id) {
-        ChatSubscription subscription = findExistingById(id);
-        subscription.setStatus(SubscriptionStatus.ARCHIVED);
-        subscription.setUpdatedAt(Instant.now());
-        ChatSubscription saved = repository.save(subscription);
+        ChatSubscription saved = mutate(id, s -> s.setStatus(SubscriptionStatus.ARCHIVED));
         log.info("Subscription archived: id={}", id);
         return saved;
     }
 
     @Transactional
     public ChatSubscription recordRunStarted(long id) {
-        ChatSubscription subscription = findExistingById(id);
-        Instant now = Instant.now();
-        subscription.setLastRunAt(now);
-        subscription.setUpdatedAt(now);
-        return repository.save(subscription);
+        return mutate(id, s -> s.setLastRunAt(Instant.now()));
     }
 
     // Не бросает NoSuchElementException если подписка удалена между enqueue и завершением —
     // вызывается из Redis Stream ingestion, где RuntimeException → rollback → infinite-retry.
     @Transactional
     public ChatSubscription recordSuccess(long id) {
-        ChatSubscription subscription = repository.findById(id).orElse(null);
-        if (subscription == null) {
-            log.warn("recordSuccess: subscription not found: id={}", id);
-            return null;
-        }
-        Instant now = Instant.now();
-        subscription.setLastSuccessAt(now);
-        subscription.setConsecutiveFailures(0);
-        subscription.setUpdatedAt(now);
-        return repository.save(subscription);
+        return mutateIfPresent(id, "recordSuccess", s -> {
+            s.setLastSuccessAt(Instant.now());
+            s.setConsecutiveFailures(0);
+        });
     }
 
     // Не бросает если подписка удалена — см. recordSuccess.
     @Transactional
     public ChatSubscription recordFailure(long id) {
-        ChatSubscription subscription = repository.findById(id).orElse(null);
-        if (subscription == null) {
-            log.warn("recordFailure: subscription not found: id={}", id);
-            return null;
-        }
-        Instant now = Instant.now();
-        int failures = subscription.getConsecutiveFailures() + 1;
-        subscription.setConsecutiveFailures(failures);
-        subscription.setLastFailureAt(now);
-        subscription.setUpdatedAt(now);
-        if (failures >= 2) {
-            subscription.setStatus(SubscriptionStatus.PAUSED);
-            log.warn("Subscription paused after consecutive failures: id={} failures={}", id, failures);
-        }
-        return repository.save(subscription);
+        return mutateIfPresent(id, "recordFailure", s -> {
+            int failures = s.getConsecutiveFailures() + 1;
+            s.setConsecutiveFailures(failures);
+            s.setLastFailureAt(Instant.now());
+            if (failures >= 2) {
+                s.setStatus(SubscriptionStatus.PAUSED);
+                log.warn("Subscription paused after consecutive failures: id={} failures={}", id, failures);
+            }
+        });
     }
 
     @Transactional
     public ChatSubscription markConfirmSent(long id) {
-        ChatSubscription subscription = findExistingById(id);
-        Instant now = Instant.now();
-        subscription.setConfirmSentAt(now);
-        subscription.setUpdatedAt(now);
-        return repository.save(subscription);
+        return mutate(id, s -> s.setConfirmSentAt(Instant.now()));
     }
 
     @Transactional
     public ChatSubscription confirmReceived(long id) {
-        ChatSubscription subscription = findExistingById(id);
-        Instant now = Instant.now();
-        subscription.setLastConfirmAt(now);
-        subscription.setConfirmSentAt(null);
-        subscription.setUpdatedAt(now);
-        return repository.save(subscription);
+        return mutate(id, s -> {
+            s.setLastConfirmAt(Instant.now());
+            s.setConfirmSentAt(null);
+        });
     }
 
     @Transactional(readOnly = true)
@@ -211,5 +184,29 @@ public class SubscriptionService {
     private ChatSubscription findExistingById(long id) {
         return repository.findById(id)
                 .orElseThrow(() -> new NoSuchElementException("ChatSubscription not found: id=" + id));
+    }
+
+    // Find → mutate → bump updatedAt → save. Бросает NoSuchElement если нет —
+    // для API-эндпоинтов (pause/archive/markConfirmSent/etc.), где удалённая
+    // подписка должна вернуть 404, а не молчаливое no-op.
+    private ChatSubscription mutate(long id, Consumer<ChatSubscription> mutator) {
+        ChatSubscription subscription = findExistingById(id);
+        mutator.accept(subscription);
+        subscription.setUpdatedAt(Instant.now());
+        return repository.save(subscription);
+    }
+
+    // То же, но без NoSuchElement — для callbacks из Redis Stream ingestion,
+    // где подписка могла исчезнуть между enqueue и завершением (расовое условие).
+    // RuntimeException там → rollback → infinite-retry. Возвращает null + warn.
+    private ChatSubscription mutateIfPresent(long id, String op, Consumer<ChatSubscription> mutator) {
+        ChatSubscription subscription = repository.findById(id).orElse(null);
+        if (subscription == null) {
+            log.warn("{}: subscription not found: id={}", op, id);
+            return null;
+        }
+        mutator.accept(subscription);
+        subscription.setUpdatedAt(Instant.now());
+        return repository.save(subscription);
     }
 }
