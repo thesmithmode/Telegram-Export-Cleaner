@@ -15,6 +15,53 @@
 
 services:
   # ===========================================================================
+  # Docker Socket Proxy — изолирует docker.sock от Traefik.
+  # Без этого Traefik c прямым доступом к /var/run/docker.sock = root-equiv:
+  # любой RCE в Traefik → docker exec в любой контейнер на хосте → root.
+  # Proxy экспонирует ТОЛЬКО endpoints необходимые для service discovery:
+  # CONTAINERS, NETWORKS, SERVICES. Всё остальное (exec, start, stop, build) — 403.
+  # ===========================================================================
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    container_name: telegram-cleaner-socket-proxy
+    labels:
+      - "project=telegram-cleaner"
+    environment:
+      # Read-only API surface для Traefik. Любая попытка modify → 403.
+      - CONTAINERS=1
+      - NETWORKS=1
+      - SERVICES=1
+      - TASKS=1
+      # Явный deny — defense in depth. Дефолты у proxy уже 0, но pin'им явно
+      # на случай если upstream image сменит дефолты.
+      - POST=0
+      - BUILD=0
+      - COMMIT=0
+      - CONFIGS=0
+      - EXEC=0
+      - IMAGES=0
+      - SECRETS=0
+      - SWARM=0
+      - SYSTEM=0
+      - VOLUMES=0
+    volumes:
+      # Только сам proxy касается реального socket — read-only.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - docker-proxy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /run
+    mem_limit: 32m
+    cpus: '0.05'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # ===========================================================================
   # Traefik v3: reverse-proxy + TLS (Let's Encrypt HTTP-01)
   # Слушает :80 (→ редирект на 443) и :443.
   # /api/** наружу НЕ публикуется — только /dashboard/** через Dashboard-router.
@@ -32,8 +79,11 @@ services:
       # HTTP → HTTPS глобальный редирект
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
-      # Docker provider — читает labels со ВСЕХ контейнеров сервера
+      # Docker provider — читает labels со ВСЕХ контейнеров сервера через
+      # docker-socket-proxy (read-only API surface), а НЕ напрямую через
+      # /var/run/docker.sock — иначе RCE в Traefik = root на хосте.
       - --providers.docker=true
+      - --providers.docker.endpoint=tcp://socket-proxy:2375
       - --providers.docker.exposedByDefault=false
       - --providers.docker.network=traefik-proxy
       # File provider — локальный конфиг на сервере (не в репо!)
@@ -55,15 +105,16 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      # SECURITY NOTE: docker.sock даёт доступ к labels/env всех контейнеров.
-      # Для продакшена рассмотреть переход на file provider (уже настроен: /config).
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # docker.sock убран — Traefik ходит к API через socket-proxy:2375.
       - traefik_acme:/acme
       - ${TRAEFIK_DATA_PATH}/logs:/logs
       - ${TRAEFIK_DATA_PATH}/config:/config:ro
       - ${TRAEFIK_DATA_PATH}/auth:/auth:ro
+    depends_on:
+      - socket-proxy
     networks:
       - traefik-proxy
+      - docker-proxy
     restart: unless-stopped
     mem_limit: 128m
     cpus: '0.1'
@@ -249,6 +300,12 @@ networks:
   # internal: java-bot ↔ worker ↔ redis (только внутренний трафик)
   internal:
     name: telegram-cleaner_internal
+  # docker-proxy: изолированная сеть только для Traefik ↔ socket-proxy.
+  # Java-bot, worker и redis в эту сеть НЕ подключаются — у них нет нужды
+  # видеть docker API, и блокирует lateral movement из app-контейнера к socket.
+  docker-proxy:
+    name: telegram-cleaner_docker-proxy
+    internal: true
 
 volumes:
   redis-data:
