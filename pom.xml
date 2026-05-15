@@ -23,6 +23,12 @@
         <!-- Версии явно зафиксированы — иначе bump Spring Boot BOM меняет их silent. -->
         <caffeine.version>3.1.8</caffeine.version>
         <liquibase.version>4.29.2</liquibase.version>
+        <!-- Override Spring Boot 3.4.x BOM defaults для закрытия CRITICAL CVE.
+             Spring Boot уважает эти property — оригинал берётся из spring-boot-dependencies. -->
+        <!-- CVE-2026-22732: security policy bypass; fixed в 6.5.9 -->
+        <spring-security.version>6.5.9</spring-security.version>
+        <!-- CVE-2026-40477/40478/41901: Server-Side Template Injection; fixed в 3.1.5 -->
+        <thymeleaf.version>3.1.5.RELEASE</thymeleaf.version>
     </properties>
 
     <dependencies>
