@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+import tempfile
+
 from pyrogram import Client
 
 def generate_session():
@@ -34,11 +36,13 @@ def generate_session():
     print("Starting authentication...\n")
 
     try:
-        with Client(
+        # Изолированная временная директория: session-файл (MTProto auth key)
+        # удаляется автоматически при выходе из контекста, не попадает в git.
+        with tempfile.TemporaryDirectory() as tmpdir, Client(
             name="temp_auth",
             api_id=int(api_id),
             api_hash=api_hash,
-            workdir="./",  # Temporary session file
+            workdir=tmpdir,
         ) as app:
             # This will prompt for phone number, SMS code, 2FA password
             session_string = app.export_session_string()
