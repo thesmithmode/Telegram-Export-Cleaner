@@ -86,6 +86,31 @@ class TelegramControllerBytesCountTest {
     }
 
     @Test
+    @DisplayName("POST /api/convert — successful response заканчивается sentinel ##OK##")
+    void successfulResponseEndsWithSentinel() throws Exception {
+        // T23: Python java_client проверяет endswith("\n##OK##") как единственный
+        // надёжный признак целостности. HTTP 200 + headers уходят ДО записи body,
+        // status_code=200 не гарантирует non-truncated content.
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "result.json", "application/json",
+                "{\"messages\":[]}".getBytes());
+
+        MvcResult asyncResult = mockMvc.perform(multipart("/api/convert")
+                        .file(file)
+                        .param("taskId", "sentinel-test"))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+        MvcResult dispatched = mockMvc.perform(asyncDispatch(asyncResult))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        String body = dispatched.getResponse().getContentAsString();
+        assertThat(body)
+                .as("успешный response должен заканчиваться sentinel — иначе Python считает truncated")
+                .endsWith("\n##OK##");
+    }
+
+    @Test
     @DisplayName("POST /api/convert без taskId — publish не вызывается")
     void noPublishWhenNoTaskId() throws Exception {
         MockMultipartFile file = new MockMultipartFile(

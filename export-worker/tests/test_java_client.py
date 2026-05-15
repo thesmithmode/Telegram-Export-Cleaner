@@ -107,12 +107,51 @@ class TestUploadFileToJava:
         try:
             path = _make_temp_json()
             try:
+                # T23: Java дописывает sentinel "\n##OK##" в конце. Python
+                # отрезает его перед return.
                 client._http_client.post = AsyncMock(
-                    return_value=MagicMock(status_code=200, text="cleaned markdown")
+                    return_value=MagicMock(status_code=200, text="cleaned markdown\n##OK##")
                 )
                 result = await client._upload_file_to_java(path)
                 assert result == "cleaned markdown"
                 client._http_client.post.assert_called_once()
+            finally:
+                os.unlink(path)
+        finally:
+            p.stop()
+
+    async def test_200_without_sentinel_treated_as_truncated_and_retries(self):
+        """T23: HTTP 200 без sentinel = truncated stream. Должен ретраить."""
+        client, p = _make_client(max_retries=2)
+        try:
+            path = _make_temp_json()
+            try:
+                # Все 3 попытки — truncated (нет sentinel) → result=None
+                truncated = MagicMock(status_code=200, text="partial content without sentinel")
+                client._http_client.post = AsyncMock(return_value=truncated)
+                with patch("java_client.asyncio.sleep", new_callable=AsyncMock):
+                    result = await client._upload_file_to_java(path)
+                assert result is None
+                # initial + 2 retries = 3 attempts (как у 500-error retry)
+                assert client._http_client.post.call_count == 3
+            finally:
+                os.unlink(path)
+        finally:
+            p.stop()
+
+    async def test_200_truncated_then_success_recovers(self):
+        """T23: один truncated → retry → второй с sentinel → success."""
+        client, p = _make_client(max_retries=3)
+        try:
+            path = _make_temp_json()
+            try:
+                truncated = MagicMock(status_code=200, text="partial chunk")
+                ok = MagicMock(status_code=200, text="final result\n##OK##")
+                client._http_client.post = AsyncMock(side_effect=[truncated, ok])
+                with patch("java_client.asyncio.sleep", new_callable=AsyncMock):
+                    result = await client._upload_file_to_java(path)
+                assert result == "final result"
+                assert client._http_client.post.call_count == 2
             finally:
                 os.unlink(path)
         finally:
@@ -158,7 +197,7 @@ class TestUploadFileToJava:
             path = _make_temp_json()
             try:
                 resp_err = MagicMock(status_code=500, text="err")
-                resp_ok = MagicMock(status_code=200, text="Success!")
+                resp_ok = MagicMock(status_code=200, text="Success!\n##OK##")
                 client._http_client.post = AsyncMock(
                     side_effect=[resp_err, resp_err, resp_ok]
                 )
@@ -166,6 +205,7 @@ class TestUploadFileToJava:
                     result = await client._upload_file_to_java(path)
                 assert result == "Success!"
                 assert client._http_client.post.call_count == 3
+                # Sentinel срезан перед return
             finally:
                 os.unlink(path)
         finally:

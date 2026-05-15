@@ -45,6 +45,10 @@ import java.util.Map;
 public class TelegramController {
 
     private static final Logger log = LoggerFactory.getLogger(TelegramController.class);
+    // Sentinel-маркер целостности streaming-response. Pyrogram-worker
+    // (java_client._upload_file_to_java) проверяет endswith и считает
+    // отсутствие sentinel как truncated stream.
+    private static final String SENTINEL = "\n##OK##";
     private final TelegramExporter exporter;
     private final ObjectProvider<StatsStreamPublisher> statsPublisherProvider;
     private final Counter publishErrorsCounter;
@@ -106,9 +110,25 @@ public class TelegramController {
             CountingOutputStream counting = new CountingOutputStream(outputStream);
             boolean[] succeeded = {false};
             String[] failureReason = {null};
+            // Размер sentinel в байтах — учтён в counting, но НЕ часть payload юзера.
+            // bytesWritten для analytics вычитает sentinel ниже.
+            final int SENTINEL_BYTES = SENTINEL.getBytes(StandardCharsets.UTF_8).length;
             try (BufferedWriter writer = new BufferedWriter(
                     new OutputStreamWriter(counting, StandardCharsets.UTF_8))) {
                 exporter.processFileStreaming(tempFile, filter, writer);
+                // Sentinel ##OK## в конце стрима — единственный надёжный способ
+                // отличить truncated response от полного. HTTP 200 + headers
+                // уходят ДО фактической записи в outputStream; если stream
+                // оборвётся в середине (timeout, broken pipe, exception в
+                // processFileStreaming), клиент всё равно увидит status=200 и
+                // частичный body. Python java_client проверяет endswith и
+                // strip'ает sentinel перед использованием контента.
+                //
+                // Trade-off: при network truncate после publish'а — Python
+                // ретраит, COMPLETED публикуется повторно (~двойной счётчик
+                // для редкого task_id). Это допустимо: окно узкое (post-flush
+                // до полного TCP-ACK), и net-benefit > silent bad-files.
+                writer.write(SENTINEL);
                 writer.flush();
                 succeeded[0] = true;
             } catch (Exception e) {
@@ -120,8 +140,12 @@ public class TelegramController {
             } finally {
                 long bytesWritten = counting.getByteCount();
                 if (succeeded[0]) {
+                    // Sentinel — служебный маркер, не часть user-видимого payload.
+                    // Вычитаем его из метрики, чтобы EXPORT_BYTES_MEASURED == размер,
+                    // который реально получает пользователь после strip'а.
+                    long payloadBytes = Math.max(0L, bytesWritten - SENTINEL_BYTES);
                     publishBytesAndCompleted(capturedTaskId, capturedBotUserId,
-                            capturedMessages, bytesWritten, capturedSubscriptionId);
+                            capturedMessages, payloadBytes, capturedSubscriptionId);
                 } else {
                     publishFailed(capturedTaskId, capturedBotUserId,
                             capturedSubscriptionId, failureReason[0]);

@@ -226,7 +226,25 @@ class JavaBotClient:
                     )
 
                 if response.status_code == 200:
-                    return response.text
+                    text = response.text
+                    # Sentinel-проверка: Java пишет "##OK##" в конец stream
+                    # после успешного flush. HTTP 200 + headers уходят ДО
+                    # фактической записи body, поэтому status_code=200 не
+                    # гарантирует целостность. Без sentinel truncated content
+                    # уходил юзеру как успешный экспорт.
+                    sentinel = "\n##OK##"
+                    if not text.endswith(sentinel):
+                        logger.error(
+                            f"Java /api/convert response truncated — sentinel "
+                            f"missing, got {len(text)} bytes ending with "
+                            f"...{text[-50:]!r}"
+                        )
+                        retry_count += 1
+                        if retry_count <= self.max_retries:
+                            await asyncio.sleep(settings.RETRY_BASE_DELAY * retry_count)
+                        continue
+                    # Sentinel найден — отрезаем и возвращаем чистый контент
+                    return text[: -len(sentinel)]
 
                 logger.error(f"Java API error {response.status_code}: {response.text[:200]}")
                 if response.status_code == 400:
