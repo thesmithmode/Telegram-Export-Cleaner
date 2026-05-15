@@ -1046,7 +1046,7 @@ class TestActiveProcessingJobHelpers:
         await worker.set_active_processing_job("export_abc123")
 
         worker.control_redis.set.assert_called_once_with(
-            "active_processing_job", "export_abc123", ex=3600
+            "active_processing_job", "export_abc123", ex=180
         )
 
     @pytest.mark.asyncio
@@ -1353,14 +1353,23 @@ class TestHeartbeat:
 
         await worker.heartbeat("task_abc", stage="fetch")
 
-        worker.control_redis.set.assert_called_once()
-        args, kwargs = worker.control_redis.set.call_args
-        assert args[0] == "worker:heartbeat:task_abc"
+        # heartbeat() вызывает 2 set'а: основной heartbeat и extend active_processing_job
+        assert worker.control_redis.set.call_count == 2
+        calls = worker.control_redis.set.call_args_list
+        keys = [c.args[0] for c in calls]
+        assert "worker:heartbeat:task_abc" in keys
+        assert "active_processing_job" in keys
+
+        heartbeat_call = next(c for c in calls if c.args[0] == "worker:heartbeat:task_abc")
         import json as _json
-        payload = _json.loads(args[1])
+        payload = _json.loads(heartbeat_call.args[1])
         assert payload["stage"] == "fetch"
         assert isinstance(payload["ts"], int)
-        assert kwargs.get("ex") == 120
+        assert heartbeat_call.kwargs.get("ex") == 120
+
+        processing_call = next(c for c in calls if c.args[0] == "active_processing_job")
+        assert processing_call.args[1] == "task_abc"
+        assert processing_call.kwargs.get("ex") == 180
 
     async def test_heartbeat_without_redis_is_noop(self):
         worker = ExportWorker()

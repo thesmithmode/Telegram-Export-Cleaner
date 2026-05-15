@@ -188,6 +188,14 @@ class ExportWorker:
             ex=self._HEARTBEAT_TTL_SECONDS,
             on_error_level="debug",
         )
+        # Extend active_processing_job синхронно с heartbeat — пока worker
+        # активно работает, scheduler видит "занят". При FloodWait/зависании
+        # heartbeat не вызывается, ключ протухает (~180с), scheduler разблокируется.
+        await self._redis_ops.safe_set(
+            RedisKeys.ACTIVE_PROCESSING_JOB, task_id,
+            ex=self._ACTIVE_PROCESSING_JOB_TTL_SECONDS,
+            on_error_level="debug",
+        )
 
     async def clear_heartbeat(self, task_id: str) -> None:
         await self._redis_ops.safe_delete(
@@ -206,8 +214,18 @@ class ExportWorker:
     async def clear_active_export(self, user_id: int) -> None:
         await self._redis_ops.safe_delete(RedisKeys.active_export(user_id))
 
+    # TTL active_processing_job привязан к heartbeat TTL (120с) с запасом — если
+    # worker завис в FloodWait sleep, cancel-poll не вызывается, heartbeat не
+    # обновляется, и через ~3 мин ключ протухает. Java-scheduler видит "worker
+    # мёртв" и снова tickается. Без этого 3600с-TTL замораживал бы все подписки
+    # на час даже при коротких зависаниях.
+    _ACTIVE_PROCESSING_JOB_TTL_SECONDS: int = 180
+
     async def set_active_processing_job(self, task_id: str) -> None:
-        await self._redis_ops.safe_set(RedisKeys.ACTIVE_PROCESSING_JOB, task_id, ex=3600)
+        await self._redis_ops.safe_set(
+            RedisKeys.ACTIVE_PROCESSING_JOB, task_id,
+            ex=self._ACTIVE_PROCESSING_JOB_TTL_SECONDS,
+        )
 
     async def clear_active_processing_job(self) -> None:
         await self._redis_ops.safe_delete(RedisKeys.ACTIVE_PROCESSING_JOB)
