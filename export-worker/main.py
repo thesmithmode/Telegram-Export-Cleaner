@@ -1304,6 +1304,12 @@ class ExportWorker:
         self.running = False
 
 async def main():  # pragma: no cover
+    # Fail-fast: без ключа все upload'ы получат 401 от Java, job'ы будут падать
+    # тихо. Симметрично с Java ApiKeyFilter, который тоже бросает на старте.
+    if not settings.JAVA_API_KEY:
+        logger.error("JAVA_API_KEY is empty — worker would 401 on every /api/convert. Refusing to start.")
+        sys.exit(1)
+
     worker = ExportWorker()
 
     # Graceful shutdown на SIGTERM/SIGINT (Docker stop, Ctrl+C).
