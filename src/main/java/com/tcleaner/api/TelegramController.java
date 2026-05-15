@@ -113,23 +113,31 @@ public class TelegramController {
             // Размер sentinel в байтах — учтён в counting, но НЕ часть payload юзера.
             // bytesWritten для analytics вычитает sentinel ниже.
             final int SENTINEL_BYTES = SENTINEL.getBytes(StandardCharsets.UTF_8).length;
-            try (BufferedWriter writer = new BufferedWriter(
-                    new OutputStreamWriter(counting, StandardCharsets.UTF_8))) {
-                exporter.processFileStreaming(tempFile, filter, writer);
-                // Sentinel ##OK## в конце стрима — единственный надёжный способ
-                // отличить truncated response от полного. HTTP 200 + headers
-                // уходят ДО фактической записи в outputStream; если stream
-                // оборвётся в середине (timeout, broken pipe, exception в
-                // processFileStreaming), клиент всё равно увидит status=200 и
-                // частичный body. Python java_client проверяет endswith и
-                // strip'ает sentinel перед использованием контента.
-                //
-                // Trade-off: при network truncate после publish'а — Python
-                // ретраит, COMPLETED публикуется повторно (~двойной счётчик
-                // для редкого task_id). Это допустимо: окно узкое (post-flush
-                // до полного TCP-ACK), и net-benefit > silent bad-files.
-                writer.write(SENTINEL);
-                writer.flush();
+            // succeeded[0]=true ставится ПОСЛЕ try-with-resources close() —
+            // если BufferedWriter.close() (последний flush в OutputStream)
+            // выкинет IOException, мы не должны опубликовать EXPORT_COMPLETED.
+            // Раньше succeeded=true стоял внутри try {} → close() throw
+            // ловился catch, но finally видел true и публиковал completed.
+            try {
+                try (BufferedWriter writer = new BufferedWriter(
+                        new OutputStreamWriter(counting, StandardCharsets.UTF_8))) {
+                    exporter.processFileStreaming(tempFile, filter, writer);
+                    // Sentinel ##OK## в конце стрима — единственный надёжный способ
+                    // отличить truncated response от полного. HTTP 200 + headers
+                    // уходят ДО фактической записи в outputStream; если stream
+                    // оборвётся в середине (timeout, broken pipe, exception в
+                    // processFileStreaming), клиент всё равно увидит status=200 и
+                    // частичный body. Python java_client проверяет endswith и
+                    // strip'ает sentinel перед использованием контента.
+                    //
+                    // Trade-off: при network truncate после publish'а — Python
+                    // ретраит, COMPLETED публикуется повторно (~двойной счётчик
+                    // для редкого task_id). Это допустимо: окно узкое (post-flush
+                    // до полного TCP-ACK), и net-benefit > silent bad-files.
+                    writer.write(SENTINEL);
+                    writer.flush();
+                }
+                // close() прошёл успешно — payload реально доставлен.
                 succeeded[0] = true;
             } catch (Exception e) {
                 // 200 + headers уже отправлены — клиент получает truncated output;

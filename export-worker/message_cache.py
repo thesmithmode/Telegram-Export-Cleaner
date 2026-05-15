@@ -283,9 +283,18 @@ class MessageCache:
             self._chat_locks[chat_id_int] = lock
 
         async with lock:
-            return await self._store_messages_locked(
+            stored = await self._store_messages_locked(
                 chat_id_int, topic_id, messages, now,
             )
+
+        # Publish cache:ranges ВНЕ lock — Redis socket_timeout=10с не должен
+        # блокировать следующий store на этот же чат. SQLite уже commited,
+        # publish best-effort: при provider outage Java увидит stale ranges
+        # (до следующего успешного store), но не зомби-блок на чат.
+        # Topic-aware skip оставлен здесь же — Java логика без topic-awareness.
+        if topic_id == 0:
+            await self._publish_cache_ranges_to_redis(chat_id_int)
+        return stored
 
     async def _store_messages_locked(
         self, chat_id_int: int, topic_id: int,
@@ -362,12 +371,8 @@ class MessageCache:
         logger.debug(
             f"Cached {len(messages)} msgs for chat {chat_id_int} (total: {actual_count})"
         )
-        # Публикация в Redis cache:ranges:{chat_id} — best-effort. Java
-        # isLikelyCached проверяет этот ключ для решения Express queue.
-        # Только для topic_id=0: Java логика без topic-awareness, для топиков
-        # Express ветка нерелевантна.
-        if topic_id == 0:
-            await self._publish_cache_ranges_to_redis(chat_id_int)
+        # cache:ranges publish теперь вызывается из store_messages ВНЕ per-chat
+        # lock — Redis timeout не должен блокировать следующий store этого чата.
         # evict_if_needed — отдельная операция, её фейл не должен трогать транзакцию store
         await self.evict_if_needed()
         return len(messages)
