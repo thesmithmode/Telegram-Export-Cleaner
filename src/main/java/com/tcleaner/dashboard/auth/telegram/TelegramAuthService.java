@@ -50,7 +50,9 @@ public class TelegramAuthService {
             log.warn("Telegram Mini App login rejected: отсутствует user.id в initData ip={}", clientIp);
             return LoginOutcome.fail("invalid");
         }
-        return LoginOutcome.ok(loginService.loginOrCreate(data, adminTelegramId));
+        // tgUserId передаём отдельно — DashboardUser.botUserId nullable для ADMIN,
+        // controller'у нужен оригинальный Telegram ID для tg_uid cookie.
+        return LoginOutcome.ok(loginService.loginOrCreate(data, adminTelegramId), data.id());
     }
 
     private TelegramMiniAppLoginData parseOrNull(String initData, String ip) {
@@ -91,16 +93,18 @@ public class TelegramAuthService {
     }
 
     /**
-     * Результат прохождения auth pipeline. Либо успешный {@link TelegramLoginService.LoginResult},
-     * либо код ошибки (передаётся в URL ?error=... для шаблона логина).
+     * Результат прохождения auth pipeline. Либо успешный {@link TelegramLoginService.LoginResult}
+     * + tgUserId из initData (DashboardUser.botUserId nullable для ADMIN), либо код ошибки.
      */
-    public record LoginOutcome(TelegramLoginService.LoginResult loginResult, String errorCode) {
-        public static LoginOutcome ok(TelegramLoginService.LoginResult r) {
-            return new LoginOutcome(r, null);
+    public record LoginOutcome(TelegramLoginService.LoginResult loginResult,
+                                long tgUserId,
+                                String errorCode) {
+        public static LoginOutcome ok(TelegramLoginService.LoginResult r, long tgUserId) {
+            return new LoginOutcome(r, tgUserId, null);
         }
 
         public static LoginOutcome fail(String code) {
-            return new LoginOutcome(null, code);
+            return new LoginOutcome(null, 0L, code);
         }
 
         public boolean isFailure() {

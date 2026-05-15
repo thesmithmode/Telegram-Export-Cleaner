@@ -109,19 +109,23 @@ class QueueDisplayBuilderTest {
 
         @Test
         void firstOnly() {
+            // last=null допустим — @NonNull только на firstName в telegrambots 9.5.0
             User u = mockUser("Анна", null);
             assertThat(QueueDisplayBuilder.displayName(u)).isEqualTo("Анна");
         }
 
         @Test
-        void lastOnly() {
-            User u = mockUser(null, "Иванова");
+        @DisplayName("empty first (Telegram API не должен присылать, но защищаемся) — last only")
+        void emptyFirstOnlyLast() {
+            // null нельзя из-за @NonNull, пустая строка эквивалентна по логике isBlank.
+            User u = mockUser("", "Иванова");
             assertThat(QueueDisplayBuilder.displayName(u)).isEqualTo("Иванова");
         }
 
         @Test
-        void bothNull() {
-            User u = mockUser(null, null);
+        @DisplayName("empty first + null last → null (всё blank)")
+        void allBlankIsNull() {
+            User u = mockUser("", null);
             assertThat(QueueDisplayBuilder.displayName(u)).isNull();
         }
 
@@ -140,18 +144,14 @@ class QueueDisplayBuilderTest {
         }
 
         private User mockUser(String first, String last) {
-            // telegrambots 9.5.0 — у User нет no-arg constructor, только Lombok @SuperBuilder.
-            // firstName помечен @NonNull в RequiredArgsConstructor, но Builder допускает null
-            // (передадим пустую строку для null-кейса чтобы не сломать build, потом setFirstName(null)).
-            User u = User.builder()
+            // telegrambots 9.5.0 — firstName @NonNull, передаём через Builder напрямую.
+            // Для тестов null-логики используем "" (isBlank() trait сохраняется).
+            return User.builder()
                     .id(1L)
-                    .firstName(first != null ? first : "")
+                    .firstName(first)
+                    .lastName(last)
                     .isBot(false)
                     .build();
-            // Возвращаем точное значение first (включая null) — production-флоу видит реальный null.
-            u.setFirstName(first);
-            u.setLastName(last);
-            return u;
         }
     }
 }

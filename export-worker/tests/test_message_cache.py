@@ -1153,6 +1153,50 @@ class TestPageSizeMigration:
             await c.close()
 
     @pytest.mark.asyncio
+    async def test_publish_cache_ranges_merges_after_second_store(self, tmp_path):
+        """T22 regression: после двух store с непересекающимися интервалами в Redis
+        ложится JSON с обоими диапазонами. Без этого Java увидит ranges от первого
+        store и считает кэшем только его, недо-роутит express в реальности с двух."""
+        from unittest.mock import AsyncMock
+        c = MessageCache(db_path=str(tmp_path / "ranges_merge.db"))
+        await c.initialize()
+        try:
+            redis_mock = AsyncMock()
+            redis_mock.get = AsyncMock(return_value=None)
+            c.redis_client = redis_mock
+
+            await c.store_messages(700, _make_messages([1, 2, 3]))
+            await c.store_messages(700, _make_messages([100, 101]))
+
+            # Последний set должен содержать ОБА диапазона
+            last_call = redis_mock.set.call_args_list[-1]
+            assert last_call.args[0] == "cache:ranges:700"
+            import json as _json
+            ranges = _json.loads(last_call.args[1])
+            assert [1, 3] in ranges
+            assert [100, 101] in ranges
+        finally:
+            await c.close()
+
+    @pytest.mark.asyncio
+    async def test_publish_cache_ranges_username_with_special_chars(self, tmp_path):
+        """T22 regression: username может содержать точки/дефисы (Telegram редко,
+        но возможно через канонические переадресации). Не должно ронять publish."""
+        from unittest.mock import AsyncMock
+        c = MessageCache(db_path=str(tmp_path / "ranges_unicode.db"))
+        await c.initialize()
+        try:
+            redis_mock = AsyncMock()
+            redis_mock.get = AsyncMock(return_value="my-chat.name")
+            c.redis_client = redis_mock
+            await c.store_messages(-100999, _make_messages([1]))
+            keys = [call.args[0] for call in redis_mock.set.call_args_list]
+            assert "cache:ranges:-100999" in keys
+            assert "cache:ranges:my-chat.name" in keys
+        finally:
+            await c.close()
+
+    @pytest.mark.asyncio
     async def test_publish_cache_ranges_swallows_redis_errors(self, tmp_path):
         """T22: Redis down не должен ронять ingestion — SQLite уже зафиксирован."""
         from unittest.mock import AsyncMock

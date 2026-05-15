@@ -54,22 +54,24 @@ public class TelegramAuthController {
         if (outcome.isFailure()) {
             return "redirect:/dashboard/login?error=" + outcome.errorCode();
         }
-        return finalizeLogin(outcome.loginResult(), request, response, ip);
+        return finalizeLogin(outcome.loginResult(), outcome.tgUserId(), request, response, ip);
     }
 
     private String finalizeLogin(TelegramLoginService.LoginResult result,
+                                  long tgUserId,
                                   HttpServletRequest request,
                                   HttpServletResponse response,
                                   String ip) {
         DashboardUser user = result.user();
         DashboardRole role = result.role();
-        long id = user.getBotUserId();
+        // tgUserId — из исходного initData (DashboardUser.botUserId nullable для ADMIN).
+        Long principalBotUserId = user.getBotUserId();
         DashboardUserDetails principal = new DashboardUserDetails(
                 user.getUsername(), "",
                 List.of(new SimpleGrantedAuthority(role.authority())),
-                role, id);
+                role, principalBotUserId);
 
-        rotateSession(request, id, ip);
+        rotateSession(request, tgUserId, ip);
 
         UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
                 principal, null, principal.getAuthorities());
@@ -78,10 +80,10 @@ public class TelegramAuthController {
         SecurityContextHolder.setContext(context);
         contextRepository.saveContext(context, request, response);
 
-        writeTgUidCookie(response, id, request.isSecure());
+        writeTgUidCookie(response, tgUserId, request.isSecure());
 
         log.info("Telegram Mini App login: tgId={} role={} user='{}' ip={}",
-                id, role, user.getUsername(), ip);
+                tgUserId, role, user.getUsername(), ip);
         return role == DashboardRole.ADMIN
                 ? "redirect:/dashboard/overview"
                 : "redirect:/dashboard/me";

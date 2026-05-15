@@ -75,7 +75,9 @@ class TelegramControllerTest {
         // Дожидаемся завершения и проверяем результат
         mockMvc.perform(asyncDispatch(mvcResult))
                 .andExpect(status().isOk())
-                .andExpect(content().string("HELLO FROM ASYNC"));
+                // T23: успешный response теперь заканчивается sentinel "\n##OK##".
+                // Python java_client отрезает sentinel перед использованием контента.
+                .andExpect(content().string("HELLO FROM ASYNC\n##OK##"));
     }
 
     @Test
