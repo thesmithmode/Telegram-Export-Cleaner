@@ -140,8 +140,15 @@ class QueueDisplayBuilderTest {
         }
 
         private User mockUser(String first, String last) {
-            User u = new User();
-            u.setId(1L);
+            // telegrambots 9.5.0 — у User нет no-arg constructor, только Lombok @SuperBuilder.
+            // firstName помечен @NonNull в RequiredArgsConstructor, но Builder допускает null
+            // (передадим пустую строку для null-кейса чтобы не сломать build, потом setFirstName(null)).
+            User u = User.builder()
+                    .id(1L)
+                    .firstName(first != null ? first : "")
+                    .isBot(false)
+                    .build();
+            // Возвращаем точное значение first (включая null) — production-флоу видит реальный null.
             u.setFirstName(first);
             u.setLastName(last);
             return u;

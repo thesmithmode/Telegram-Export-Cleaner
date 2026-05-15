@@ -271,12 +271,13 @@ class TestProcessJobErrorMapping:
         w.message_cache = None
         return w
 
+    # SESSION_INVALID удалён из параметризации — у него permanent-policy: send_response
+     # + sys.exit(1). Отдельный тест ниже мокает sys.exit и проверяет mapping без выхода.
     @pytest.mark.parametrize("reason,expected_fragment,expected_code", [
         ("CHANNEL_PRIVATE", "приватный", "CHANNEL_PRIVATE"),
         ("USERNAME_NOT_FOUND", "не найден", "USERNAME_NOT_FOUND"),
         ("ADMIN_REQUIRED", "администратор", "ADMIN_REQUIRED"),
         ("CHAT_NOT_ACCESSIBLE", "Нет доступа", "CHAT_NOT_ACCESSIBLE"),
-        ("SESSION_INVALID", "Сессия", "SESSION_INVALID"),
         ("FLOOD_RESTRICTED", "flood", "FLOOD_RESTRICTED"),
         ("UNKNOWN", "Не удалось получить доступ", "UNKNOWN"),
     ])
@@ -301,6 +302,29 @@ class TestProcessJobErrorMapping:
         assert payload.status == "failed"
         assert expected_fragment.lower() in payload.error.lower()
         assert payload.error_code == expected_code
+
+    @pytest.mark.asyncio
+    async def test_session_invalid_maps_user_text_and_exits(self, worker):
+        """SESSION_INVALID — permanent: send_response с правильным mapping + sys.exit(1).
+        Worker не продолжает, supervisor рестартанёт контейнер. Алерт админа — best-effort."""
+        from unittest.mock import patch, AsyncMock as _AM
+        worker.telegram_client.verify_and_get_info = _AM(
+            return_value=(False, None, "SESSION_INVALID")
+        )
+        worker._alert_admin_session_invalid = _AM()
+        job = ExportRequest(task_id="t1", user_id=1, chat_id=1, user_chat_id=1, limit=0)
+        worker.queue_consumer.mark_job_processing = _AM(return_value=True)
+        worker.queue_consumer.mark_job_failed = _AM(return_value=True)
+
+        with patch("main.sys.exit") as mock_exit:
+            await worker.process_job(job)
+
+        mock_exit.assert_called_once_with(1)
+        worker._alert_admin_session_invalid.assert_awaited_once()
+        payload = worker.java_client.send_response.call_args[0][0]
+        assert payload.status == "failed"
+        assert "Сессия" in payload.error
+        assert payload.error_code == "SESSION_INVALID"
 
     @pytest.mark.asyncio
     async def test_unknown_reason_falls_back_to_generic_text(self, worker):

@@ -42,8 +42,9 @@ class TelegramAuthControllerNonceFailClosedTest {
         when(ops.setIfAbsent(anyString(), eq("1"), any()))
                 .thenThrow(new RedisConnectionFailureException("redis down"));
 
+        TelegramAuthService authService = new TelegramAuthService(verifier, loginService, redis);
         TelegramAuthController controller = new TelegramAuthController(
-                verifier, loginService, contextRepository, redis, 999L);
+                authService, contextRepository, 999L);
 
         String initData = TelegramAuthTestUtils.buildMiniAppInitData(
                 TOKEN, 111L, "John", "johnny", 1_000_000L);
@@ -73,8 +74,9 @@ class TelegramAuthControllerNonceFailClosedTest {
         when(loginService.loginOrCreate(any(), org.mockito.ArgumentMatchers.anyLong()))
                 .thenThrow(new RuntimeException("stop here — past nonce check"));
 
+        TelegramAuthService authService = new TelegramAuthService(verifier, loginService, redis);
         TelegramAuthController controller = new TelegramAuthController(
-                verifier, loginService, contextRepository, redis, 999L);
+                authService, contextRepository, 999L);
 
         String initData = TelegramAuthTestUtils.buildMiniAppInitData(
                 TOKEN, 111L, "John", "johnny", 1_000_000L);
@@ -100,8 +102,9 @@ class TelegramAuthControllerNonceFailClosedTest {
         when(redis.opsForValue()).thenReturn(ops);
         when(ops.setIfAbsent(anyString(), eq("1"), any())).thenReturn(false);
 
+        TelegramAuthService authService = new TelegramAuthService(verifier, loginService, redis);
         TelegramAuthController controller = new TelegramAuthController(
-                verifier, loginService, contextRepository, redis, 999L);
+                authService, contextRepository, 999L);
 
         String initData = TelegramAuthTestUtils.buildMiniAppInitData(
                 TOKEN, 111L, "John", "johnny", 1_000_000L);
