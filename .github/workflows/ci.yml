@@ -38,3 +38,41 @@ jobs:
   python-tests:
     name: Python Tests
     uses: ./.github/workflows/python-tests.yml
+
+  # ─── Security scans (non-blocking: continue-on-error чтобы не падать
+  #     на каждый новый CVE и не блокировать релиз — смотрим в логах) ────────
+  security-scan:
+    name: Security Scans
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trivy filesystem scan (high+critical)
+        uses: aquasecurity/trivy-action@0.28.0
+        continue-on-error: true
+        with:
+          scan-type: 'fs'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+          ignore-unfixed: true
+          format: 'table'
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: pip-audit (worker dependencies)
+        continue-on-error: true
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          pip-audit -r export-worker/requirements.txt --strict || true
+
+      - name: Gitleaks secrets scan
+        uses: gitleaks/gitleaks-action@v2
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
