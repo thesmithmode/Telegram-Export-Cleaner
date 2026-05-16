@@ -64,7 +64,12 @@ async def test_run_batch_loop_full_batch_triggers_intermediate_flush():
     worker = ExportWorker()
     worker._CACHE_BATCH_SIZE = 3
     worker.message_cache = AsyncMock()
-    worker._flush_batch_and_check_cancel = AsyncMock(return_value=False)
+
+    async def fake_flush(job, batch):
+        batch.clear()  # реальный _flush_batch_and_check_cancel чистит batch (main.py:70)
+        return False
+
+    worker._flush_batch_and_check_cancel = AsyncMock(side_effect=fake_flush)
     worker._flush_partial_batch = AsyncMock()
 
     msgs = [make_msg(i) for i in range(7)]  # 3 + 3 + 1

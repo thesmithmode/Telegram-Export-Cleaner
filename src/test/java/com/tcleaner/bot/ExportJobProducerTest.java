@@ -1,5 +1,6 @@
 package com.tcleaner.bot;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tcleaner.dashboard.events.StatsStreamPublisher;
 import org.junit.jupiter.api.BeforeEach;
@@ -11,17 +12,21 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.redis.core.ListOperations;
+import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-
-import java.util.Map;
-
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.mockito.Mockito.doThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -60,6 +65,18 @@ class ExportJobProducerTest {
         jobProducer = new ExportJobProducer(redis, new ObjectMapper(), "telegram_export", noPublisher);
     }
 
+    private List<Object> pipelineResult(boolean processing, boolean completed, boolean failed,
+                                        long queue, long express, boolean payload) {
+        List<Object> res = new ArrayList<>();
+        res.add(processing);
+        res.add(completed);
+        res.add(failed);
+        res.add(queue);
+        res.add(express);
+        res.add(payload);
+        return res;
+    }
+
     @Nested
     @DisplayName("Защита от дубликатов (SET NX)")
     class DuplicateProtectionTests {
@@ -95,6 +112,20 @@ class ExportJobProducerTest {
 
             verify(listOps, never()).rightPush(anyString(), anyString());
         }
+
+        @Test
+        @DisplayName("rightPush бросает → откатывает active_export")
+        void shouldRollBackActiveExportOnQueueFailure() {
+            long userId = 55555L;
+            when(valueOps.setIfAbsent(eq("active_export:" + userId), anyString(),
+                    eq(60L), eq(TimeUnit.MINUTES))).thenReturn(true);
+            when(listOps.rightPush(anyString(), anyString()))
+                    .thenThrow(new RuntimeException("Redis down"));
+
+            assertThrows(RuntimeException.class, () -> jobProducer.enqueue(userId, userId, 111L));
+
+            verify(redis).delete("active_export:" + userId);
+        }
     }
 
     @Nested
@@ -127,6 +158,159 @@ class ExportJobProducerTest {
 
             assertDoesNotThrow(() -> jobProducer.cancelExport(userId));
             verify(valueOps, never()).set(anyString(), eq("1"), anyLong(), any(TimeUnit.class));
+        }
+
+        @Test
+        @DisplayName("targetQueue отсутствует → fallback на обе основные очереди")
+        void shouldFallBackToBothQueuesWhenTargetQueueKeyMissing() {
+            long userId = 33333L;
+            String taskId = "export_fallback";
+
+            when(valueOps.get("active_export:" + userId)).thenReturn(taskId);
+            when(valueOps.get("job_json:" + taskId)).thenReturn("{\"task_id\":\"" + taskId + "\"}");
+            when(valueOps.get("job_queue:" + taskId)).thenReturn(null);
+
+            jobProducer.cancelExport(userId);
+
+            verify(listOps).remove(eq("telegram_export"), eq(1L), anyString());
+            verify(listOps).remove(eq("telegram_export_express"), eq(1L), anyString());
+        }
+    }
+
+    @Nested
+    @DisplayName("getActiveExport — все ветки")
+    class GetActiveExportTests {
+
+        @Test
+        @DisplayName("нет active_export ключа → null")
+        void whenNoActiveExport_returnsNull() {
+            when(valueOps.get("active_export:1")).thenReturn(null);
+
+            assertNull(jobProducer.getActiveExport(1L));
+        }
+
+        @Test
+        @DisplayName("задача completed → очистить active_export, вернуть null")
+        void whenTaskCompleted_clearsAndReturnsNull() {
+            when(valueOps.get("active_export:2")).thenReturn("export_abc");
+            when(redis.executePipelined(any(SessionCallback.class)))
+                    .thenReturn(pipelineResult(false, true, false, 0L, 0L, false));
+
+            assertNull(jobProducer.getActiveExport(2L));
+            verify(redis).delete("active_export:2");
+        }
+
+        @Test
+        @DisplayName("задача failed → очистить active_export, вернуть null")
+        void whenTaskFailed_clearsAndReturnsNull() {
+            when(valueOps.get("active_export:3")).thenReturn("export_abc");
+            when(redis.executePipelined(any(SessionCallback.class)))
+                    .thenReturn(pipelineResult(false, false, true, 0L, 0L, false));
+
+            assertNull(jobProducer.getActiveExport(3L));
+            verify(redis).delete("active_export:3");
+        }
+
+        @Test
+        @DisplayName("задача processing → вернуть taskId (не очищать)")
+        void whenTaskProcessing_returnsTaskId() {
+            when(valueOps.get("active_export:4")).thenReturn("export_xyz");
+            when(redis.executePipelined(any(SessionCallback.class)))
+                    .thenReturn(pipelineResult(true, false, false, 0L, 0L, false));
+
+            assertEquals("export_xyz", jobProducer.getActiveExport(4L));
+            verify(redis, never()).delete(anyString());
+        }
+
+        @Test
+        @DisplayName("задача в очереди + payload жив → вернуть taskId")
+        void whenInQueueWithPayload_returnsTaskId() {
+            when(valueOps.get("active_export:5")).thenReturn("export_pqr");
+            when(redis.executePipelined(any(SessionCallback.class)))
+                    .thenReturn(pipelineResult(false, false, false, 1L, 0L, true));
+
+            assertEquals("export_pqr", jobProducer.getActiveExport(5L));
+        }
+
+        @Test
+        @DisplayName("express-очередь непуста + payload → вернуть taskId")
+        void whenInExpressQueueWithPayload_returnsTaskId() {
+            when(valueOps.get("active_export:6")).thenReturn("export_exp");
+            when(redis.executePipelined(any(SessionCallback.class)))
+                    .thenReturn(pipelineResult(false, false, false, 0L, 2L, true));
+
+            assertEquals("export_exp", jobProducer.getActiveExport(6L));
+        }
+
+        @Test
+        @DisplayName("очередь пуста, payload удалён → очистить, null")
+        void whenQueueEmptyAndPayloadGone_clearsAndReturnsNull() {
+            when(valueOps.get("active_export:7")).thenReturn("export_gone");
+            when(redis.executePipelined(any(SessionCallback.class)))
+                    .thenReturn(pipelineResult(false, false, false, 0L, 0L, false));
+
+            assertNull(jobProducer.getActiveExport(7L));
+            verify(redis).delete("active_export:7");
+        }
+
+        @Test
+        @DisplayName("очередь непуста, но payload удалён → очистить, null")
+        void whenQueueNonEmptyButPayloadGone_clearsAndReturnsNull() {
+            when(valueOps.get("active_export:8")).thenReturn("export_stale");
+            when(redis.executePipelined(any(SessionCallback.class)))
+                    .thenReturn(pipelineResult(false, false, false, 5L, 0L, false));
+
+            assertNull(jobProducer.getActiveExport(8L));
+            verify(redis).delete("active_export:8");
+        }
+    }
+
+    @Nested
+    @DisplayName("isLikelyCached — все ветки")
+    class IsLikelyCachedTests {
+
+        @Test
+        @DisplayName("canonical найден + ranges непустые → true")
+        void whenCanonicalAndRangesExist_returnsTrue() {
+            when(valueOps.get("canonical:@chat")).thenReturn("123456");
+            when(valueOps.get("cache:ranges:123456")).thenReturn("[1,100]");
+
+            assertTrue(jobProducer.isLikelyCached("@chat"));
+        }
+
+        @Test
+        @DisplayName("canonical отсутствует, прямой ranges непустой → true")
+        void whenNoCanonicalButDirectRangesExist_returnsTrue() {
+            when(valueOps.get("canonical:123")).thenReturn(null);
+            when(valueOps.get("cache:ranges:123")).thenReturn("[50,200]");
+
+            assertTrue(jobProducer.isLikelyCached("123"));
+        }
+
+        @Test
+        @DisplayName("ranges = '[]' → false")
+        void whenRangesEmpty_returnsFalse() {
+            when(valueOps.get("canonical:@chan")).thenReturn(null);
+            when(valueOps.get("cache:ranges:@chan")).thenReturn("[]");
+
+            assertFalse(jobProducer.isLikelyCached("@chan"));
+        }
+
+        @Test
+        @DisplayName("ranges = null → false")
+        void whenRangesNull_returnsFalse() {
+            when(valueOps.get("canonical:@xx")).thenReturn(null);
+            when(valueOps.get("cache:ranges:@xx")).thenReturn(null);
+
+            assertFalse(jobProducer.isLikelyCached("@xx"));
+        }
+
+        @Test
+        @DisplayName("Redis exception → false, не бросает")
+        void whenRedisThrows_returnsFalseWithoutThrowing() {
+            when(valueOps.get(anyString())).thenThrow(new RuntimeException("connection refused"));
+
+            assertFalse(jobProducer.isLikelyCached("@broken"));
         }
     }
 
@@ -171,7 +355,7 @@ class ExportJobProducerTest {
                             Map<String, Object> parsed = mapper.readValue(json, new TypeReference<>() {});
                             return "subscription".equals(parsed.get("source"))
                                     && subscriptionId == ((Number) parsed.get("subscription_id")).longValue();
-                        } catch (Exception e) {
+                        } catch (Exception ex) {
                             return false;
                         }
                     })
@@ -194,6 +378,145 @@ class ExportJobProducerTest {
                     anyString(),
                     anyLong(),
                     any(TimeUnit.class)
+            );
+        }
+    }
+
+    @Nested
+    @DisplayName("enqueue-оверлоады (делегирующие)")
+    class EnqueueOverloadTests {
+
+        @Test
+        @DisplayName("enqueue(long,long,long) делегирует во внутренний метод")
+        void enqueueWithLongChatId() {
+            when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class))).thenReturn(true);
+            String taskId = jobProducer.enqueue(1L, 1L, 100L);
+            assertTrue(taskId.startsWith("export_"));
+        }
+
+        @Test
+        @DisplayName("enqueue(long,long,long,String,String) делегирует во внутренний метод")
+        void enqueueWithLongChatIdAndDates() {
+            when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class))).thenReturn(true);
+            String taskId = jobProducer.enqueue(2L, 2L, 200L, "2026-01-01", "2026-01-31");
+            assertTrue(taskId.startsWith("export_"));
+        }
+
+        @Test
+        @DisplayName("enqueue(long,long,String) делегирует во внутренний метод")
+        void enqueueWithStringChatId() {
+            when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class))).thenReturn(true);
+            String taskId = jobProducer.enqueue(3L, 3L, "@chan");
+            assertTrue(taskId.startsWith("export_"));
+        }
+
+        @Test
+        @DisplayName("enqueue(long,long,String,String,String) делегирует во внутренний метод")
+        void enqueueWithStringChatIdAndDates() {
+            when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class))).thenReturn(true);
+            String taskId = jobProducer.enqueue(4L, 4L, "@chan2", "2026-02-01", "2026-02-28");
+            assertTrue(taskId.startsWith("export_"));
+        }
+    }
+
+    @Nested
+    @DisplayName("publishStats + enqueueSubscription с реальным publisher")
+    class StatsPublishTests {
+
+        private StatsStreamPublisher publisherMock;
+        private ExportJobProducer producerWithPublisher;
+
+        @BeforeEach
+        void setUpWithPublisher() {
+            publisherMock = mock(StatsStreamPublisher.class);
+            @SuppressWarnings("unchecked")
+            ObjectProvider<StatsStreamPublisher> provider = mock(ObjectProvider.class);
+            lenient().when(provider.getIfAvailable()).thenReturn(publisherMock);
+            producerWithPublisher = new ExportJobProducer(redis, new ObjectMapper(), "telegram_export", provider);
+        }
+
+        @Test
+        @DisplayName("cancelExport с publisher: publishStats вызывается с типом EXPORT_CANCELLED")
+        void cancelExportPublishesStats() {
+            String taskId = "export_stat_test";
+            when(valueOps.get("active_export:100")).thenReturn(taskId);
+            when(valueOps.get("job_json:" + taskId)).thenReturn(null);
+
+            producerWithPublisher.cancelExport(100L);
+
+            verify(publisherMock).publish(any());
+        }
+
+        @Test
+        @DisplayName("enqueueSubscription с publisher: publish вызывается, exception глотается")
+        void enqueueSubscriptionPublishesStats() {
+            producerWithPublisher.enqueueSubscription(
+                    200L, 200L, "@statchan", "2026-01-01", "2026-01-31", 10L);
+
+            verify(publisherMock).publish(any());
+        }
+
+        @Test
+        @DisplayName("publishStats: publisher.publish бросает exception — глотается, нет propagation")
+        void publishStatsSwallowsException() {
+            doThrow(new RuntimeException("stream down")).when(publisherMock).publish(any());
+            when(valueOps.get("active_export:101")).thenReturn("export_throw");
+            when(valueOps.get("job_json:export_throw")).thenReturn(null);
+
+            assertDoesNotThrow(() -> producerWithPublisher.cancelExport(101L));
+        }
+    }
+
+    @Nested
+    @DisplayName("Вспомогательные методы")
+    class UtilityTests {
+
+        @Test
+        @DisplayName("getQueueLength: null sizes → 0")
+        void getQueueLength_withNullSizes_returnsZero() {
+            when(listOps.size("telegram_export")).thenReturn(null);
+            when(listOps.size("telegram_export_express")).thenReturn(null);
+            when(listOps.size("telegram_export_subscription")).thenReturn(null);
+
+            assertEquals(0L, jobProducer.getQueueLength());
+        }
+
+        @Test
+        @DisplayName("getQueueLength: суммирует все три очереди")
+        void getQueueLength_sumsAllQueues() {
+            when(listOps.size("telegram_export")).thenReturn(2L);
+            when(listOps.size("telegram_export_express")).thenReturn(3L);
+            when(listOps.size("telegram_export_subscription")).thenReturn(1L);
+
+            assertEquals(6L, jobProducer.getQueueLength());
+        }
+
+        @Test
+        @DisplayName("hasActiveProcessingJob: ключ есть → true")
+        void hasActiveProcessingJob_whenKeyExists_returnsTrue() {
+            when(redis.hasKey("active_processing_job")).thenReturn(Boolean.TRUE);
+
+            assertTrue(jobProducer.hasActiveProcessingJob());
+        }
+
+        @Test
+        @DisplayName("hasActiveProcessingJob: null от Redis → false")
+        void hasActiveProcessingJob_whenKeyMissing_returnsFalse() {
+            when(redis.hasKey("active_processing_job")).thenReturn(null);
+
+            assertFalse(jobProducer.hasActiveProcessingJob());
+        }
+
+        @Test
+        @DisplayName("storeQueueMsgId: сохраняет key=queue_msg:<taskId> value=chatId:msgId")
+        void storeQueueMsgId_storesCorrectKeyAndValue() {
+            jobProducer.storeQueueMsgId("export_abc", 99L, 42);
+
+            verify(valueOps).set(
+                    eq("queue_msg:export_abc"),
+                    eq("99:42"),
+                    eq(2L),
+                    eq(TimeUnit.HOURS)
             );
         }
     }

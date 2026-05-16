@@ -174,7 +174,10 @@ public class ExportJobProducer {
             return null;
         }
 
-        // Проверяем статус задачи + размеры очередей одним pipeline (5 RTT → 1)
+        // Проверяем статус задачи + размеры очередей + наличие payload одним pipeline.
+        // jobPayloadExists нужен, чтобы не возвращать taskId при queueSize>0 от ЧУЖИХ задач
+        // когда наш payload уже удалён (cancel/rollback) — иначе пользователь ложно видит
+        // "экспорт активен" пока active_export не протухнет по TTL.
         @SuppressWarnings("unchecked")
         List<Object> results = redis.executePipelined(new SessionCallback<Object>() {
             @Override
@@ -184,6 +187,7 @@ public class ExportJobProducer {
                 ops.hasKey("job:failed:" + taskId);
                 ops.opsForList().size(queueName);
                 ops.opsForList().size(queueName + EXPRESS_QUEUE_SUFFIX);
+                ops.hasKey(JOB_JSON_PREFIX + taskId);
                 return null;
             }
         });
@@ -192,6 +196,7 @@ public class ExportJobProducer {
         boolean isFailed = Boolean.TRUE.equals(results.get(2));
         long queueSize = results.get(3) instanceof Number n3 ? n3.longValue() : 0L;
         long expressSize = results.get(4) instanceof Number n4 ? n4.longValue() : 0L;
+        boolean jobPayloadExists = Boolean.TRUE.equals(results.get(5));
 
         if (isCompleted || isFailed) {
             // Задача завершена, но ключ не был очищен — чистим
@@ -205,12 +210,12 @@ public class ExportJobProducer {
             return taskId;
         }
 
-        if (queueSize + expressSize > 0) {
-            // В очереди есть задачи — возможно наша ждёт
+        if (queueSize + expressSize > 0 && jobPayloadExists) {
+            // Очередь не пуста И наш payload жив — наша задача там
             return taskId;
         }
 
-        // Нигде не найдена — протухший ключ
+        // Payload отсутствует ИЛИ очередь пуста — наш taskId не найден
         log.info("Очищаю протухший active_export для user {} (task {} не найдена)", userId, taskId);
         redis.delete(ACTIVE_EXPORT_PREFIX + userId);
         return null;

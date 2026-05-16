@@ -271,12 +271,13 @@ class TestProcessJobErrorMapping:
         w.message_cache = None
         return w
 
+    # SESSION_INVALID удалён из параметризации — у него permanent-policy: send_response
+     # + sys.exit(1). Отдельный тест ниже мокает sys.exit и проверяет mapping без выхода.
     @pytest.mark.parametrize("reason,expected_fragment,expected_code", [
         ("CHANNEL_PRIVATE", "приватный", "CHANNEL_PRIVATE"),
         ("USERNAME_NOT_FOUND", "не найден", "USERNAME_NOT_FOUND"),
         ("ADMIN_REQUIRED", "администратор", "ADMIN_REQUIRED"),
         ("CHAT_NOT_ACCESSIBLE", "Нет доступа", "CHAT_NOT_ACCESSIBLE"),
-        ("SESSION_INVALID", "Сессия", "SESSION_INVALID"),
         ("FLOOD_RESTRICTED", "flood", "FLOOD_RESTRICTED"),
         ("UNKNOWN", "Не удалось получить доступ", "UNKNOWN"),
     ])
@@ -303,6 +304,81 @@ class TestProcessJobErrorMapping:
         assert payload.error_code == expected_code
 
     @pytest.mark.asyncio
+    async def test_session_invalid_maps_user_text_and_exits(self, worker):
+        """SESSION_INVALID — permanent: send_response с правильным mapping + sys.exit(1).
+        Worker не продолжает, supervisor рестартанёт контейнер. Алерт админа — best-effort."""
+        from unittest.mock import patch, AsyncMock as _AM
+        worker.telegram_client.verify_and_get_info = _AM(
+            return_value=(False, None, "SESSION_INVALID")
+        )
+        worker._alert_admin_session_invalid = _AM()
+        job = ExportRequest(task_id="t1", user_id=1, chat_id=1, user_chat_id=1, limit=0)
+        worker.queue_consumer.mark_job_processing = _AM(return_value=True)
+        worker.queue_consumer.mark_job_failed = _AM(return_value=True)
+
+        with patch("main.sys.exit") as mock_exit:
+            await worker.process_job(job)
+
+        mock_exit.assert_called_once_with(1)
+        worker._alert_admin_session_invalid.assert_awaited_once()
+        payload = worker.java_client.send_response.call_args[0][0]
+        assert payload.status == "failed"
+        assert "Сессия" in payload.error
+        assert payload.error_code == "SESSION_INVALID"
+
+    @pytest.mark.asyncio
+    async def test_session_invalid_vault_recovery_success(self, worker):
+        """SESSION_INVALID + vault key present + reconnect OK → no exit, job already failed."""
+        from unittest.mock import patch, AsyncMock as _AM
+        from config import settings as _cfg
+
+        async def _get_side_effect(key, *a, **kw):
+            return b"NEW_SESSION_STRING" if key == _cfg.REDIS_SESSION_VAULT_KEY else None
+
+        worker.telegram_client.verify_and_get_info = _AM(
+            return_value=(False, None, "SESSION_INVALID")
+        )
+        worker.telegram_client.try_reconnect = _AM(return_value=True)
+        worker.control_redis.get = _AM(side_effect=_get_side_effect)
+        worker._alert_admin_session_invalid = _AM()
+        job = ExportRequest(task_id="t1", user_id=1, chat_id=1, user_chat_id=1, limit=0)
+        worker.queue_consumer.mark_job_processing = _AM(return_value=True)
+        worker.queue_consumer.mark_job_failed = _AM(return_value=True)
+
+        with patch("main.sys.exit") as mock_exit:
+            await worker.process_job(job)
+
+        mock_exit.assert_not_called()
+        worker._alert_admin_session_invalid.assert_not_awaited()
+        worker.control_redis.delete.assert_any_await(_cfg.REDIS_SESSION_VAULT_KEY)
+        worker.telegram_client.try_reconnect.assert_awaited_once_with("NEW_SESSION_STRING")
+
+    @pytest.mark.asyncio
+    async def test_session_invalid_vault_recovery_reconnect_fails(self, worker):
+        """SESSION_INVALID + vault key present but reconnect fails → exits."""
+        from unittest.mock import patch, AsyncMock as _AM
+        from config import settings as _cfg
+
+        async def _get_side_effect(key, *a, **kw):
+            return b"BAD_SESSION" if key == _cfg.REDIS_SESSION_VAULT_KEY else None
+
+        worker.telegram_client.verify_and_get_info = _AM(
+            return_value=(False, None, "SESSION_INVALID")
+        )
+        worker.telegram_client.try_reconnect = _AM(return_value=False)
+        worker.control_redis.get = _AM(side_effect=_get_side_effect)
+        worker._alert_admin_session_invalid = _AM()
+        job = ExportRequest(task_id="t1", user_id=1, chat_id=1, user_chat_id=1, limit=0)
+        worker.queue_consumer.mark_job_processing = _AM(return_value=True)
+        worker.queue_consumer.mark_job_failed = _AM(return_value=True)
+
+        with patch("main.sys.exit") as mock_exit:
+            await worker.process_job(job)
+
+        mock_exit.assert_called_once_with(1)
+        worker._alert_admin_session_invalid.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_unknown_reason_falls_back_to_generic_text(self, worker):
         # Если verify_and_get_info вернул reason, которого нет в mapping
         worker.telegram_client.verify_and_get_info = AsyncMock(
@@ -320,6 +396,40 @@ class TestProcessJobErrorMapping:
         assert "No access" in payload.error
         # error_code = reason когда он есть, даже если нет в mapping
         assert payload.error_code == "SOMETHING_NEW_FROM_PYROGRAM"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# main._alert_admin_session_invalid — token leak protection
+# Regression-guard: httpx exception сообщение может содержать
+# `/bot<TOKEN>/sendMessage` URL. logger.warning должен redactить через _safe_err.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestAlertAdminSessionInvalidRedaction:
+
+    @pytest.mark.asyncio
+    async def test_httpx_exception_message_redacted_in_log(self, caplog, monkeypatch):
+        import logging
+        from main import ExportWorker
+        from config import settings as _cfg
+
+        monkeypatch.setattr(_cfg, "TELEGRAM_BOT_TOKEN", "123456789:ABCDEF_SECRET_TOKEN")
+        monkeypatch.setattr(_cfg, "ADMIN_TG_ID", 42)
+
+        w = ExportWorker()
+        leaky = Exception(
+            "Connection failed for https://api.telegram.org/bot"
+            "123456789:ABCDEF_SECRET_TOKEN/sendMessage"
+        )
+        with patch("httpx.AsyncClient") as mock_client:
+            instance = mock_client.return_value.__aenter__.return_value
+            instance.post = AsyncMock(side_effect=leaky)
+            with caplog.at_level(logging.WARNING, logger="main"):
+                await w._alert_admin_session_invalid()
+
+        joined = "\n".join(r.getMessage() for r in caplog.records)
+        assert "ABCDEF_SECRET_TOKEN" not in joined
+        assert "/bot<REDACTED>/" in joined
+        assert "Failed to alert admin about SESSION_INVALID" in joined
 
 
 # ─────────────────────────────────────────────────────────────────────────────

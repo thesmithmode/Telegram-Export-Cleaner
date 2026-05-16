@@ -376,4 +376,174 @@ class ExportEventIngestionServiceTest {
                 .ts(TS)
                 .build();
     }
+
+    // ─── Edge-cases: null payload, null type, невалидные парсеры ─────────────
+
+    @Test
+    @DisplayName("ingest(null) — тихий пропуск без исключения")
+    void ingestNullPayloadIsSilent() {
+        service.ingest(null);
+
+        assertThat(events.count()).isZero();
+    }
+
+    @Test
+    @DisplayName("ingest payload без type — тихий пропуск (warn log)")
+    void ingestPayloadWithoutTypeIsSilent() {
+        service.ingest(StatsEventPayload.builder()
+                .taskId("orphan-no-type").botUserId(USER_ID).ts(TS).build());
+
+        assertThat(events.count()).isZero();
+    }
+
+    @Test
+    @DisplayName("BOT_USER_SEEN без bot_user_id — пропуск, BotUser не создаётся")
+    void botUserSeenWithoutBotUserIdSkipped() {
+        long before = users.count();
+
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.BOT_USER_SEEN)
+                .username("alice").displayName("Alice").ts(TS).build());
+
+        assertThat(users.count()).isEqualTo(before);
+    }
+
+    @Test
+    @DisplayName("fromDate в невалидном формате — событие создаётся, fromDate=null")
+    void invalidDateFormatResolvedToNull() {
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_STARTED)
+                .taskId(TASK).botUserId(USER_ID)
+                .chatIdRaw("@chat").canonicalChatId("-100777")
+                .chatTitle("Test Chat").source("bot").status("queued")
+                .fromDate("not-a-date-at-all")
+                .ts(TS).build());
+
+        ExportEvent ev = events.findByTaskId(TASK).orElseThrow();
+        assertThat(ev.getFromDate()).isNull();
+    }
+
+    @Test
+    @DisplayName("source=blank — резолвится в ExportSource.BOT")
+    void blankSourceResolvedToBot() {
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_STARTED)
+                .taskId(TASK).botUserId(USER_ID)
+                .chatIdRaw("@chat").canonicalChatId("-100777")
+                .chatTitle("Test Chat").source("   ").status("queued")
+                .ts(TS).build());
+
+        ExportEvent ev = events.findByTaskId(TASK).orElseThrow();
+        assertThat(ev.getSource()).isEqualTo(com.tcleaner.dashboard.domain.ExportSource.BOT);
+    }
+
+    @Test
+    @DisplayName("source=unknown_string — fallback к ExportSource.BOT")
+    void invalidSourceFallsBackToBot() {
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_STARTED)
+                .taskId(TASK).botUserId(USER_ID)
+                .chatIdRaw("@chat").canonicalChatId("-100777")
+                .chatTitle("Test Chat").source("VERY_UNKNOWN_SOURCE").status("queued")
+                .ts(TS).build());
+
+        ExportEvent ev = events.findByTaskId(TASK).orElseThrow();
+        assertThat(ev.getSource()).isEqualTo(com.tcleaner.dashboard.domain.ExportSource.BOT);
+    }
+
+    @Test
+    @DisplayName("первый event с bot_user_id, но без chat — пропуск (нет minimal fields)")
+    void firstEventWithBotUserIdButNoChatSkipped() {
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_STARTED)
+                .taskId(TASK).botUserId(USER_ID)
+                .status("queued").ts(TS).build());
+
+        assertThat(events.findByTaskId(TASK)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("второй ingest с пустыми полями — coalesce не перезаписывает существующие")
+    void secondIngestWithNullsPreservesValues() {
+        // started заполняет начальные поля
+        service.ingest(started());
+        // bytes_measured без bytesCount → coalesce пропускает (value == null)
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_BYTES_MEASURED)
+                .taskId(TASK)
+                .ts(TS.plusSeconds(10)).build());
+
+        ExportEvent ev = events.findByTaskId(TASK).orElseThrow();
+        // Поля остались как в started() — coalesce пропускал null-fields
+        assertThat(ev.getStatus()).isEqualTo(ExportStatus.QUEUED);
+        assertThat(ev.getBytesCount()).isNull();
+    }
+
+    @Test
+    @DisplayName("повторный chatTitle/canonicalChatId — chatUpserter вызван (мост обновления метаданных)")
+    void secondIngestUpdatesChatMetadata() {
+        service.ingest(started());
+        // bytes_measured + chatTitle + canonicalChatId → ветка `chatTitle != null || canonicalChatId != null`
+        // срабатывает; canonicalChatId обязателен NOT NULL constraint в chats
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_BYTES_MEASURED)
+                .taskId(TASK).bytesCount(2048L)
+                .canonicalChatId("-100777")
+                .chatIdRaw("@chat")
+                .chatTitle("Updated Title")
+                .ts(TS.plusSeconds(20)).build());
+
+        ExportEvent ev = events.findByTaskId(TASK).orElseThrow();
+        assertThat(ev.getBytesCount()).isEqualTo(2048L);
+    }
+
+    @Test
+    @DisplayName("coalesce с пустой String — пропуск (isBlank ветка)")
+    void coalesceSkipsBlankString() {
+        service.ingest(started());
+        // error="   " (blank) → coalesce не вызывает setter
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_FAILED)
+                .taskId(TASK).botUserId(USER_ID)
+                .error("   ")  // blank → coalesce пропускает
+                .status("failed").ts(TS.plusSeconds(30)).build());
+
+        ExportEvent ev = events.findByTaskId(TASK).orElseThrow();
+        assertThat(ev.getStatus()).isEqualTo(ExportStatus.FAILED);
+        assertThat(ev.getErrorMessage()).isNull();  // blank не сохранился
+    }
+
+    @Test
+    @DisplayName("повторный COMPLETED после CANCELLED — terminal-prev блокирует canAdvanceStatus")
+    void cancelledThenCompletedDoesNotAdvance() {
+        // started с subscriptionId → init
+        service.ingest(started());
+        // CANCELLED первым → terminal
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_CANCELLED)
+                .taskId(TASK).botUserId(USER_ID)
+                .status("cancelled").ts(TS.plusSeconds(30)).build());
+        // Late COMPLETED → canAdvanceStatus(CANCELLED, COMPLETED) == false → статус не меняется
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_COMPLETED)
+                .taskId(TASK).botUserId(USER_ID)
+                .messagesCount(50L).bytesCount(500L)
+                .status("completed").ts(TS.plusSeconds(60)).build());
+
+        ExportEvent ev = events.findByTaskId(TASK).orElseThrow();
+        assertThat(ev.getStatus()).isEqualTo(ExportStatus.CANCELLED);
+    }
+
+    @Test
+    @DisplayName("CANCELLED первым событием — totalExports НЕ инкрементится (юзер отменил)")
+    void cancelledFirstEventDoesNotBumpUserTotals() {
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_CANCELLED)
+                .taskId(TASK).botUserId(USER_ID)
+                .chatIdRaw("@chat").canonicalChatId("-100777")
+                .status("cancelled").ts(TS).build());
+
+        BotUser user = users.findById(USER_ID).orElseThrow();
+        assertThat(user.getTotalExports()).isZero();
+    }
 }

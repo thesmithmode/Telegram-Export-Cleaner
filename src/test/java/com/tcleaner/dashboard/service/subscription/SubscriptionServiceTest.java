@@ -13,6 +13,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -290,7 +291,7 @@ class SubscriptionServiceTest {
         subscriptionService.create(99L, otherChatRefId, 48, "10:00", sinceDate);
 
         List<ChatSubscription> forUser = subscriptionService.listForUser(BOT_USER_ID);
-        List<ChatSubscription> all = subscriptionService.listAll();
+        List<ChatSubscription> all = subscriptionService.listAll(PageRequest.of(0, 100)).getContent();
 
         assertThat(forUser).hasSize(1);
         assertThat(forUser).allMatch(s -> s.getBotUserId().equals(BOT_USER_ID));

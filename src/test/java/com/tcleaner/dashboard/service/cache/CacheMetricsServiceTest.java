@@ -259,6 +259,149 @@ class CacheMetricsServiceTest {
     }
 
     @Test
+    @DisplayName("top_chats=null → enrichment пропущен, heatmap всё равно строится")
+    void nullTopChatsStillBuildsDto() {
+        String json = """
+                {"used_bytes":100,"limit_bytes":1000,"pct":10.0,
+                 "total_chats":0,"total_messages":0,"generated_at":0,
+                 "top_chats":null,
+                 "heatmap":{"hot":{"chat_count":1,"size_bytes":50}}}""";
+        when(ops.get(CacheMetricsService.SNAPSHOT_KEY)).thenReturn(json);
+
+        CacheMetricsDto dto = service.get();
+
+        assertThat(dto.available()).isTrue();
+        assertThat(dto.topChats()).isEmpty();
+        assertThat(dto.heatmap()).hasSize(1);
+        assertThat(dto.chatTypeSegmentation()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("top_chats=[] (пустой массив) → enrichment пропущен")
+    void emptyTopChatsSkipsEnrichment() {
+        String json = """
+                {"used_bytes":0,"limit_bytes":0,"pct":0,"total_chats":0,"total_messages":0,
+                 "generated_at":0,"top_chats":[],"heatmap":{}}""";
+        when(ops.get(CacheMetricsService.SNAPSHOT_KEY)).thenReturn(json);
+
+        CacheMetricsDto dto = service.get();
+
+        assertThat(dto.available()).isTrue();
+        assertThat(dto.topChats()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("heatmap=null → пустой heatmap-список, без NPE")
+    void nullHeatmapBecomesEmpty() {
+        String json = """
+                {"used_bytes":0,"limit_bytes":0,"pct":0,"total_chats":0,"total_messages":0,
+                 "generated_at":0,"top_chats":[],"heatmap":null}""";
+        when(ops.get(CacheMetricsService.SNAPSHOT_KEY)).thenReturn(json);
+
+        CacheMetricsDto dto = service.get();
+
+        assertThat(dto.available()).isTrue();
+        assertThat(dto.heatmap()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Redis multiGet бросает exception → redisOk=false, enrichment работает через DB")
+    void multiGetFailureFallsBackToDb() {
+        String json = """
+                {"used_bytes":100,"limit_bytes":1000,"pct":10.0,
+                 "total_chats":1,"total_messages":5,"generated_at":0,
+                 "top_chats":[{"chat_id":-1001,"topic_id":0,"msg_count":5,
+                               "size_bytes":100,"last_accessed":0,"pct":100.0}],
+                 "heatmap":{}}""";
+        when(ops.get(CacheMetricsService.SNAPSHOT_KEY)).thenReturn(json);
+        when(ops.multiGet(anyCollection())).thenThrow(new RuntimeException("Redis broke"));
+        when(chatRepo.findAllByCanonicalChatIdIn(anyCollection())).thenReturn(List.of(
+                Chat.builder().canonicalChatId("-1001").topicId(null)
+                        .chatTitle("DB Chat").chatType("group").build()));
+
+        CacheMetricsDto dto = service.get();
+
+        assertThat(dto.topChats().get(0).username()).isNull();
+        assertThat(dto.topChats().get(0).chatType()).isEqualTo("group");
+        assertThat(dto.topChats().get(0).title()).isEqualTo("DB Chat");
+    }
+
+    @Test
+    @DisplayName("Redis multiGet вернул размер != ожидаемого → redisOk=false (degrade без IOOBE)")
+    void multiGetSizeMismatchSkipsRedis() {
+        String json = """
+                {"used_bytes":100,"limit_bytes":1000,"pct":10.0,
+                 "total_chats":1,"total_messages":5,"generated_at":0,
+                 "top_chats":[{"chat_id":-1001,"topic_id":0,"msg_count":5,
+                               "size_bytes":100,"last_accessed":0,"pct":100.0}],
+                 "heatmap":{}}""";
+        when(ops.get(CacheMetricsService.SNAPSHOT_KEY)).thenReturn(json);
+        // partial response: только 1 элемент вместо 2 ожидаемых
+        when(ops.multiGet(anyCollection())).thenReturn(List.of("partial"));
+        when(chatRepo.findAllByCanonicalChatIdIn(anyCollection())).thenReturn(List.of());
+
+        CacheMetricsDto dto = service.get();
+
+        assertThat(dto.topChats().get(0).username()).isNull();
+    }
+
+    @Test
+    @DisplayName("topic_id != 0 (форум-чат) → topicId передаётся в DTO")
+    void nonZeroTopicPassedThrough() {
+        String json = """
+                {"used_bytes":0,"limit_bytes":0,"pct":0,"total_chats":0,"total_messages":0,
+                 "generated_at":0,
+                 "top_chats":[{"chat_id":-1001,"topic_id":42,"msg_count":5,
+                               "size_bytes":100,"last_accessed":0,"pct":50.0}],
+                 "heatmap":{}}""";
+        when(ops.get(CacheMetricsService.SNAPSHOT_KEY)).thenReturn(json);
+        when(ops.multiGet(anyCollection())).thenReturn(Arrays.asList(null, null));
+        when(chatRepo.findAllByCanonicalChatIdIn(anyCollection())).thenReturn(List.of());
+
+        CacheMetricsDto dto = service.get();
+
+        assertThat(dto.topChats().get(0).topicId()).isEqualTo(42);
+    }
+
+    @Test
+    @DisplayName("redisType=blank → fallback на DB chat_type")
+    void blankRedisTypeFallsBackToDb() {
+        String json = """
+                {"used_bytes":0,"limit_bytes":0,"pct":0,"total_chats":0,"total_messages":0,
+                 "generated_at":0,
+                 "top_chats":[{"chat_id":-1001,"topic_id":0,"msg_count":5,
+                               "size_bytes":100,"last_accessed":0,"pct":100.0}],
+                 "heatmap":{}}""";
+        when(ops.get(CacheMetricsService.SNAPSHOT_KEY)).thenReturn(json);
+        // canonical:-1001 = null, canonical:-1001:type = "  " (blank) → fallback to DB
+        when(ops.multiGet(anyCollection())).thenReturn(Arrays.asList(null, "   "));
+        when(chatRepo.findAllByCanonicalChatIdIn(anyCollection())).thenReturn(List.of(
+                Chat.builder().canonicalChatId("-1001").topicId(null).chatType("dbtype").build()));
+
+        CacheMetricsDto dto = service.get();
+
+        assertThat(dto.topChats().get(0).chatType()).isEqualTo("dbtype");
+    }
+
+    @Test
+    @DisplayName("username начинается с '-' → отбрасывается (chat_id-формат, не username)")
+    void usernameStartingWithMinusBecomesNull() {
+        String json = """
+                {"used_bytes":0,"limit_bytes":0,"pct":0,"total_chats":0,"total_messages":0,
+                 "generated_at":0,
+                 "top_chats":[{"chat_id":-1001,"topic_id":0,"msg_count":5,
+                               "size_bytes":100,"last_accessed":0,"pct":100.0}],
+                 "heatmap":{}}""";
+        when(ops.get(CacheMetricsService.SNAPSHOT_KEY)).thenReturn(json);
+        when(ops.multiGet(anyCollection())).thenReturn(Arrays.asList("-something", null));
+        when(chatRepo.findAllByCanonicalChatIdIn(anyCollection())).thenReturn(List.of());
+
+        CacheMetricsDto dto = service.get();
+
+        assertThat(dto.topChats().get(0).username()).isNull();
+    }
+
+    @Test
     @DisplayName("topic_id=0 → API отдаёт null (нет топика)")
     void zeroTopicBecomesNull() {
         String json = """

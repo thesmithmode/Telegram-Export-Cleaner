@@ -23,7 +23,7 @@ from pyrogram_client import (
 )
 from queue_consumer import QueueConsumer, create_queue_consumer
 from redis_ops import RedisKeys, RedisOps
-from java_client import JavaBotClient, ProgressTracker, create_java_client
+from java_client import JavaBotClient, ProgressTracker, _safe_err, create_java_client
 from message_cache import MessageCache
 from models import ExportRequest, ExportedMessage, SendResponsePayload
 from cache_stats import build_snapshot, publish_snapshot
@@ -188,6 +188,23 @@ class ExportWorker:
             ex=self._HEARTBEAT_TTL_SECONDS,
             on_error_level="debug",
         )
+        # Extend active_processing_job синхронно с heartbeat — пока worker
+        # активно работает, scheduler видит "занят". При FloodWait/зависании
+        # heartbeat не вызывается, ключ протухает (~180с), scheduler разблокируется.
+        await self._redis_ops.safe_set(
+            RedisKeys.ACTIVE_PROCESSING_JOB, task_id,
+            ex=self._ACTIVE_PROCESSING_JOB_TTL_SECONDS,
+            on_error_level="debug",
+        )
+        # Extend job:processing:{task_id} — TTL=JOB_TIMEOUT(1800с) истёк бы для
+        # экспортов длиннее 30 мин. Java getActiveExport видел бы "ключ ушёл",
+        # чистил бы active_export, юзер думал бы что бронь слетела. Heartbeat
+        # extend держит ключ живым на всём протяжении долгого job.
+        await self._redis_ops.safe_set(
+            f"job:processing:{task_id}", payload,
+            ex=settings.JOB_TIMEOUT,
+            on_error_level="debug",
+        )
 
     async def clear_heartbeat(self, task_id: str) -> None:
         await self._redis_ops.safe_delete(
@@ -206,8 +223,18 @@ class ExportWorker:
     async def clear_active_export(self, user_id: int) -> None:
         await self._redis_ops.safe_delete(RedisKeys.active_export(user_id))
 
+    # TTL active_processing_job привязан к heartbeat TTL (120с) с запасом — если
+    # worker завис в FloodWait sleep, cancel-poll не вызывается, heartbeat не
+    # обновляется, и через ~3 мин ключ протухает. Java-scheduler видит "worker
+    # мёртв" и снова tickается. Без этого 3600с-TTL замораживал бы все подписки
+    # на час даже при коротких зависаниях.
+    _ACTIVE_PROCESSING_JOB_TTL_SECONDS: int = 180
+
     async def set_active_processing_job(self, task_id: str) -> None:
-        await self._redis_ops.safe_set(RedisKeys.ACTIVE_PROCESSING_JOB, task_id, ex=3600)
+        await self._redis_ops.safe_set(
+            RedisKeys.ACTIVE_PROCESSING_JOB, task_id,
+            ex=self._ACTIVE_PROCESSING_JOB_TTL_SECONDS,
+        )
 
     async def clear_active_processing_job(self) -> None:
         await self._redis_ops.safe_delete(RedisKeys.ACTIVE_PROCESSING_JOB)
@@ -247,6 +274,43 @@ class ExportWorker:
         await self.clear_active_export(job.user_id)
         await self.clear_active_processing_job()
         await self.clear_heartbeat(job.task_id)
+
+    async def _try_session_recovery(self) -> bool:
+        try:
+            raw = await self.control_redis.get(settings.REDIS_SESSION_VAULT_KEY)
+            if not raw:
+                logger.warning("SESSION_INVALID: vault key absent, cannot auto-recover")
+                return False
+            new_session = raw.decode() if isinstance(raw, bytes) else raw
+            logger.info("SESSION_INVALID: vault key found, attempting reconnect")
+            if await self.telegram_client.try_reconnect(new_session):
+                await self.control_redis.delete(settings.REDIS_SESSION_VAULT_KEY)
+                logger.info("SESSION_INVALID: auto-recovery succeeded, resuming worker")
+                return True
+            logger.warning("SESSION_INVALID: reconnect with vault session failed")
+            return False
+        except Exception as e:
+            logger.warning(f"SESSION_INVALID: vault recovery error: {e}")
+            return False
+
+    async def _alert_admin_session_invalid(self) -> None:
+        """Уведомляет администратора о невалидной MTProto-сессии напрямую через
+        Bot API (httpx). Не зависит от Pyrogram и MTProto. Никогда не бросает —
+        не должна задерживать sys.exit. Молча проглатывает любую ошибку."""
+        if not settings.TELEGRAM_BOT_TOKEN or not settings.ADMIN_TG_ID:
+            logger.warning("Cannot alert admin: TELEGRAM_BOT_TOKEN or ADMIN_TG_ID not set")
+            return
+        try:
+            import httpx
+            url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
+            text = (
+                f"⚠️ TELEGRAM_SESSION_STRING невалидна на {settings.WORKER_NAME}.\n"
+                f"Worker завершается. Требуется обновить session string через get_session.py."
+            )
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.post(url, json={"chat_id": settings.ADMIN_TG_ID, "text": text})
+        except Exception as e:
+            logger.warning(f"Failed to alert admin about SESSION_INVALID: {_safe_err(e)}")
 
     async def _setup_processing(self, job: ExportRequest) -> bool:
         """Маркирует job как processing + обновляет active_export + ранний cancel-check.
@@ -326,6 +390,17 @@ class ExportWorker:
             )
             await self.queue_consumer.mark_job_failed(job.task_id, error, job.subscription_id, job.user_id)
             await self._cleanup_job(job)
+
+            # SESSION_INVALID = permanent без recovery. Пробуем vault-ключ в Redis:
+            # если там лежит свежий session string — переподключаемся и продолжаем.
+            # При успехе текущий job уже зафейлен, но следующие пойдут нормально.
+            if error_reason == "SESSION_INVALID":
+                if await self._try_session_recovery():
+                    return False, job, None, None
+                await self._alert_admin_session_invalid()
+                logger.critical("SESSION_INVALID — terminating worker, requires manual session refresh")
+                sys.exit(1)
+
             return False, job, None, None
 
         if chat_info:
@@ -617,6 +692,9 @@ class ExportWorker:
                 enabled=settings.CACHE_ENABLED,
             )
             await self.message_cache.initialize()
+            # Publish cache:ranges:{chat_id} в Redis после каждого store_messages —
+            # Java isLikelyCached() читает этот ключ для Express queue routing.
+            self.message_cache.redis_client = self.control_redis
             logger.info(
                 f"  Cache: enabled={settings.CACHE_ENABLED}, "
                 f"db={settings.CACHE_DB_PATH}, "
@@ -1304,6 +1382,12 @@ class ExportWorker:
         self.running = False
 
 async def main():  # pragma: no cover
+    # Fail-fast: без ключа все upload'ы получат 401 от Java, job'ы будут падать
+    # тихо. Симметрично с Java ApiKeyFilter, который тоже бросает на старте.
+    if not settings.JAVA_API_KEY:
+        logger.error("JAVA_API_KEY is empty — worker would 401 on every /api/convert. Refusing to start.")
+        sys.exit(1)
+
     worker = ExportWorker()
 
     # Graceful shutdown на SIGTERM/SIGINT (Docker stop, Ctrl+C).

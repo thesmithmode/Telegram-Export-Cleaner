@@ -19,7 +19,9 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -109,5 +111,117 @@ class StatsStreamConsumerTest {
 
         assertThat(captured.get()).isNull();
         verify(streamOps).acknowledge(props.key(), props.group(), "0-3");
+    }
+
+    @Test
+    @DisplayName("blank payload (whitespace) → poison-ACK, handle не вызывается")
+    void blankPayloadAcksAsPoison() {
+        MapRecord<String, String, String> record = StreamRecords.newRecord()
+                .in(props.key())
+                .withId(RecordId.of("0-4"))
+                .ofMap(Map.of("payload", "   "));
+
+        consumer.onMessage(record);
+
+        assertThat(captured.get()).isNull();
+        verify(streamOps).acknowledge(props.key(), props.group(), "0-4");
+    }
+
+    @Test
+    @DisplayName("transient exception в handle (не JsonProcessing) → НЕТ ACK (будет retry)")
+    @SuppressWarnings("unchecked")
+    void transientExceptionInHandleSkipsAck() throws Exception {
+        // consumer кидает RuntimeException из handle → catch(Exception) → ack остаётся false
+        ObjectProvider<com.tcleaner.dashboard.service.ingestion.ExportEventIngestionService> noIngestion =
+                mock(ObjectProvider.class);
+        when(noIngestion.getIfAvailable()).thenReturn(null);
+        StatsStreamConsumer throwingConsumer = new StatsStreamConsumer(mapper, redis, props, noIngestion) {
+            @Override
+            void handle(StatsEventPayload payload) {
+                throw new RuntimeException("DB transient error");
+            }
+        };
+
+        StatsEventPayload original = StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_STARTED).taskId("task-x").ts(Instant.now()).build();
+        MapRecord<String, String, String> record = StreamRecords.newRecord()
+                .in(props.key())
+                .withId(RecordId.of("0-5"))
+                .ofMap(Map.of("payload", mapper.writeValueAsString(original)));
+
+        throwingConsumer.onMessage(record);
+
+        // ACK НЕ должен быть вызван — иначе сообщение потеряется из PEL
+        verify(streamOps, never()).acknowledge(anyString(), anyString(), any(String[].class));
+    }
+
+    @Test
+    @DisplayName("XACK сам бросает exception → consumer не падает (graceful warn)")
+    void xackFailureIsGraceful() {
+        doThrow(new RuntimeException("Redis down"))
+                .when(streamOps).acknowledge(anyString(), anyString(), any(String[].class));
+
+        MapRecord<String, String, String> record = StreamRecords.newRecord()
+                .in(props.key())
+                .withId(RecordId.of("0-6"))
+                .ofMap(Map.of("payload", "{not-json"));  // JsonProcessingException → ack=true
+
+        // Не должно бросить ничего наружу — log.warn внутри try/catch
+        consumer.onMessage(record);
+
+        verify(streamOps).acknowledge(props.key(), props.group(), "0-6");
+    }
+
+    @Test
+    @DisplayName("handle с доступным ingestion service → service.ingest вызван")
+    @SuppressWarnings("unchecked")
+    void handleWithIngestionServiceDelegates() throws Exception {
+        com.tcleaner.dashboard.service.ingestion.ExportEventIngestionService realService =
+                mock(com.tcleaner.dashboard.service.ingestion.ExportEventIngestionService.class);
+        ObjectProvider<com.tcleaner.dashboard.service.ingestion.ExportEventIngestionService> provider =
+                mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(realService);
+
+        StatsStreamConsumer realConsumer = new StatsStreamConsumer(mapper, redis, props, provider);
+
+        StatsEventPayload original = StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_STARTED).taskId("task-real").ts(Instant.now()).build();
+        MapRecord<String, String, String> record = StreamRecords.newRecord()
+                .in(props.key())
+                .withId(RecordId.of("0-7"))
+                .ofMap(Map.of("payload", mapper.writeValueAsString(original)));
+
+        realConsumer.onMessage(record);
+
+        verify(realService).ingest(any(StatsEventPayload.class));
+        verify(streamOps).acknowledge(props.key(), props.group(), "0-7");
+    }
+
+    @Test
+    @DisplayName("handle без ingestion service → log.debug, не падает")
+    void handleWithoutIngestionServiceIsSilent() throws Exception {
+        // captured.get() остаётся null т.к. в setUp() handle переопределён
+        // — но в этом тесте нужно проверить default handle (с service==null)
+        StatsStreamConsumer defaultConsumer = new StatsStreamConsumer(mapper, redis, props,
+                mockedNullProvider());
+
+        StatsEventPayload original = StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_STARTED).taskId("task-no-svc").ts(Instant.now()).build();
+        MapRecord<String, String, String> record = StreamRecords.newRecord()
+                .in(props.key())
+                .withId(RecordId.of("0-8"))
+                .ofMap(Map.of("payload", mapper.writeValueAsString(original)));
+
+        defaultConsumer.onMessage(record);
+
+        verify(streamOps).acknowledge(props.key(), props.group(), "0-8");
+    }
+
+    @SuppressWarnings("unchecked")
+    private ObjectProvider<com.tcleaner.dashboard.service.ingestion.ExportEventIngestionService> mockedNullProvider() {
+        ObjectProvider<com.tcleaner.dashboard.service.ingestion.ExportEventIngestionService> p =
+                mock(ObjectProvider.class);
+        when(p.getIfAvailable()).thenReturn(null);
+        return p;
     }
 }

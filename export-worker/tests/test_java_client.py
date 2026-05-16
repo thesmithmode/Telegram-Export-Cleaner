@@ -107,12 +107,104 @@ class TestUploadFileToJava:
         try:
             path = _make_temp_json()
             try:
+                # T23: Java дописывает sentinel "\n##OK##" в конце. Python
+                # отрезает его перед return.
                 client._http_client.post = AsyncMock(
-                    return_value=MagicMock(status_code=200, text="cleaned markdown")
+                    return_value=MagicMock(status_code=200, text="cleaned markdown\n##OK##")
                 )
                 result = await client._upload_file_to_java(path)
                 assert result == "cleaned markdown"
                 client._http_client.post.assert_called_once()
+            finally:
+                os.unlink(path)
+        finally:
+            p.stop()
+
+    async def test_200_without_sentinel_treated_as_truncated_and_retries(self):
+        """T23: HTTP 200 без sentinel = truncated stream. Должен ретраить."""
+        client, p = _make_client(max_retries=2)
+        try:
+            path = _make_temp_json()
+            try:
+                # Все 3 попытки — truncated (нет sentinel) → result=None
+                truncated = MagicMock(status_code=200, text="partial content without sentinel")
+                client._http_client.post = AsyncMock(return_value=truncated)
+                with patch("java_client.asyncio.sleep", new_callable=AsyncMock):
+                    result = await client._upload_file_to_java(path)
+                assert result is None
+                # initial + 2 retries = 3 attempts (как у 500-error retry)
+                assert client._http_client.post.call_count == 3
+            finally:
+                os.unlink(path)
+        finally:
+            p.stop()
+
+    async def test_200_sentinel_without_newline_treated_as_truncated(self):
+        """T23 regression: sentinel должен быть точно \\n##OK## (с newline).
+        '##OK##' в конце текста БЕЗ \\n — это случайное совпадение или
+        половинная запись (write дошёл до 6 байт но не успел newline сначала).
+        Защита от false-positive — bug перешёл бы как валидный."""
+        client, p = _make_client(max_retries=0)
+        try:
+            path = _make_temp_json()
+            try:
+                # endswith("\n##OK##") = False, хотя endswith("##OK##") = True
+                bad = MagicMock(status_code=200, text="some content##OK##")
+                client._http_client.post = AsyncMock(return_value=bad)
+                with patch("java_client.asyncio.sleep", new_callable=AsyncMock):
+                    result = await client._upload_file_to_java(path)
+                assert result is None, "должен быть None (truncated), а не 'some content'"
+            finally:
+                os.unlink(path)
+        finally:
+            p.stop()
+
+    async def test_200_empty_string_treated_as_truncated(self):
+        """T23 boundary: пустой ответ — не имеет sentinel, тоже truncated."""
+        client, p = _make_client(max_retries=0)
+        try:
+            path = _make_temp_json()
+            try:
+                empty = MagicMock(status_code=200, text="")
+                client._http_client.post = AsyncMock(return_value=empty)
+                with patch("java_client.asyncio.sleep", new_callable=AsyncMock):
+                    result = await client._upload_file_to_java(path)
+                assert result is None
+            finally:
+                os.unlink(path)
+        finally:
+            p.stop()
+
+    async def test_200_only_sentinel_strips_to_empty_string(self):
+        """T23 boundary: ровно '\\n##OK##' (нет контента) → strip → ''.
+        Это происходит когда filter исключил все сообщения. Upper-layer
+        (send_response) обрабатывает empty как notify_empty_export."""
+        client, p = _make_client(max_retries=0)
+        try:
+            path = _make_temp_json()
+            try:
+                only = MagicMock(status_code=200, text="\n##OK##")
+                client._http_client.post = AsyncMock(return_value=only)
+                result = await client._upload_file_to_java(path)
+                assert result == ""
+            finally:
+                os.unlink(path)
+        finally:
+            p.stop()
+
+    async def test_200_truncated_then_success_recovers(self):
+        """T23: один truncated → retry → второй с sentinel → success."""
+        client, p = _make_client(max_retries=3)
+        try:
+            path = _make_temp_json()
+            try:
+                truncated = MagicMock(status_code=200, text="partial chunk")
+                ok = MagicMock(status_code=200, text="final result\n##OK##")
+                client._http_client.post = AsyncMock(side_effect=[truncated, ok])
+                with patch("java_client.asyncio.sleep", new_callable=AsyncMock):
+                    result = await client._upload_file_to_java(path)
+                assert result == "final result"
+                assert client._http_client.post.call_count == 2
             finally:
                 os.unlink(path)
         finally:
@@ -158,7 +250,7 @@ class TestUploadFileToJava:
             path = _make_temp_json()
             try:
                 resp_err = MagicMock(status_code=500, text="err")
-                resp_ok = MagicMock(status_code=200, text="Success!")
+                resp_ok = MagicMock(status_code=200, text="Success!\n##OK##")
                 client._http_client.post = AsyncMock(
                     side_effect=[resp_err, resp_err, resp_ok]
                 )
@@ -166,6 +258,7 @@ class TestUploadFileToJava:
                     result = await client._upload_file_to_java(path)
                 assert result == "Success!"
                 assert client._http_client.post.call_count == 3
+                # Sentinel срезан перед return
             finally:
                 os.unlink(path)
         finally:

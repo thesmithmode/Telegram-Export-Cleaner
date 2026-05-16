@@ -33,8 +33,74 @@ jobs:
       - name: Build and test
         run: mvn clean package
 
+      - name: Upload JaCoCo report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: target/site/jacoco/
+          retention-days: 7
+          if-no-files-found: warn
+
 
   # ─── Python тесты (reusable workflow — единый источник истины) ───────────────
   python-tests:
     name: Python Tests
     uses: ./.github/workflows/python-tests.yml
+
+  # ─── Security scans
+  # Двухуровневая стратегия: CRITICAL → блокирует merge (jacoco-style gate),
+  # HIGH → continue-on-error (информация в логах, не блокирует). Без блокера на
+  # CRITICAL прод-уязвимости проскакивали тихо. HIGH часто = transitive deps
+  # без fix-версии — не стоит блокировать релиз.
+  security-scan:
+    name: Security Scans
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Gitleaks scan range BASE^..HEAD. На multi-commit push shallow checkout
+          # не подтягивает parent первого коммита push'а → range не строится →
+          # CI красный без реальных утечек. fetch-depth: 0 решает.
+          fetch-depth: 0
+
+      - name: Trivy filesystem scan (CRITICAL — blocking)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0 (pin SHA — теги без префикса 'v' marketplace не резолвит)
+        with:
+          scan-type: 'fs'
+          severity: 'CRITICAL'
+          exit-code: '1'
+          ignore-unfixed: true
+          format: 'table'
+
+      - name: Trivy filesystem scan (HIGH — informational)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        continue-on-error: true
+        with:
+          scan-type: 'fs'
+          severity: 'HIGH'
+          exit-code: '0'
+          ignore-unfixed: true
+          format: 'table'
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: pip-audit (worker dependencies — informational)
+        # pip-audit без severity-фильтра. Все findings в логах, но CI не падает —
+        # transitive deps часто без CVE-fixed-versions. Решение об апдейте — оператор.
+        continue-on-error: true
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          pip-audit -r export-worker/requirements.txt --strict || true
+
+      - name: Gitleaks secrets scan (blocking)
+        # Утечка секрета = CRITICAL. Любая находка должна резать pipeline.
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

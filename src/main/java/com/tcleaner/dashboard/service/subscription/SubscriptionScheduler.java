@@ -153,10 +153,35 @@ public class SubscriptionScheduler {
         // до следующего окна периода (consecutive_failures=2 → PAUSED обрабатывается отдельно).
         Instant anchor = latest(sub.getLastSuccessAt(), sub.getLastRunAt(), sub.getLastFailureAt());
         if (anchor == null) {
-            return now.isAfter(sub.getSinceDate());
+            // Первый запуск: требуем not только sinceDate < now, но и попадание в desired
+            // окно — иначе юзер видит первую доставку в момент создания (15:00) вместо
+            // запрошенного desired_time_msk (03:00). Open-ended normal case в
+            // isInDesiredWindow создавал бы ложно-широкое окно для anchor=null.
+            return now.isAfter(sub.getSinceDate()) && isInStrictFirstRunWindow(sub, now);
         }
         Instant nextRunMin = anchor.plus(Duration.ofHours(sub.getPeriodHours())).minus(PREWINDOW);
         return now.isAfter(nextRunMin);
+    }
+
+    // Строгое окно для первого запуска: [desired-30мин, desired+6ч]. Для уже работающих
+    // подписок open-ended normal case в isInDesiredWindow остаётся допустимым (tolerance
+    // на занятость worker), но для anchor=null open-ended приводил бы к мгновенному
+    // запуску при создании подписки в течение дня.
+    private boolean isInStrictFirstRunWindow(ChatSubscription sub, Instant now) {
+        LocalTime desired = LocalTime.parse(sub.getDesiredTimeMsk(), HHMM);
+        LocalTime currentMsk = LocalTime.from(now.atZone(MSK));
+        LocalTime windowStart = desired.minus(PREWINDOW);
+        LocalTime windowEnd = desired.plusHours(6);
+
+        if (windowStart.isAfter(desired)) {
+            // Midnight crossover: windowStart=23:40, windowEnd=06:10 (через полночь)
+            return currentMsk.isAfter(windowStart) || currentMsk.isBefore(windowEnd);
+        }
+        if (windowEnd.isBefore(desired)) {
+            // desired ≥ 18:00 → plusHours(6) переехало через полночь
+            return currentMsk.isAfter(windowStart) || currentMsk.isBefore(windowEnd);
+        }
+        return currentMsk.isAfter(windowStart) && currentMsk.isBefore(windowEnd);
     }
 
     private static Instant latest(Instant... instants) {

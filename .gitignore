@@ -130,3 +130,9 @@ export-worker/session/
 # TLS keys (never commit)
 *.pem
 *.key
+
+# CI artifacts downloaded locally for diagnostics (JaCoCo HTML/XML, etc.)
+.ci-artifacts/
+
+# GSD/planning scratch (per-session, not committed)
+.planning/

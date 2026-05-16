@@ -92,7 +92,12 @@
       "Bash(git ls-tree *)",
       "Bash(echo -e \"b6e0641\\\\tbench_dashboard\\\\tp99_topchats_ms\\\\t25.40\\\\t43.1\\\\twin\\\\ttopChats split: no JOIN + batch lookup. -29% WIN\")",
       "Bash(echo -e \"43d17f4\\\\tbench_dashboard\\\\tp99_overview_ms\\\\t25.35\\\\t43.3\\\\tdiscard\\\\tREGR: COUNT\\(DISTINCT\\)+SUM breaks covering index in SQLite. REVERTED\")",
-      "PowerShell(git *)"
+      "PowerShell(git *)",
+      "Bash(python -m pytest tests/test_coverage_gaps.py::TestChatAccessAndExportErrors::test_session_invalid_maps_user_text_and_exits tests/test_coverage_gaps.py::TestChatAccessAndExportErrors::test_session_invalid_vault_recovery_success tests/test_coverage_gaps.py::TestChatAccessAndExportErrors::test_session_invalid_vault_recovery_reconnect_fails -v)",
+      "Bash(pip show *)",
+      "Bash(uv run *)",
+      "Bash(uv pip *)",
+      "Bash(git rm *)"
     ]
   }
 }

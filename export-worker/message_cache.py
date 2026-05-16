@@ -6,9 +6,10 @@ import shutil
 import time
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
-from typing import AsyncGenerator, List, Optional, Tuple, Union
+from typing import Any, AsyncGenerator, List, Optional, Tuple, Union
 
 import aiosqlite
+import json as _stdjson
 import msgpack
 
 from models import ExportedMessage
@@ -17,6 +18,12 @@ from pyrogram_client import ensure_utc
 logger = logging.getLogger(__name__)
 
 from config import settings
+
+# TTL для Redis cache:ranges:{chat_id} — публикуется из Python после store_messages,
+# Java читает в isLikelyCached() и решает Express queue vs main. Значение совпадает
+# с TTL канонических маппингов (30 дней), чтобы expire ранжей не оставлял zombie
+# в Java логике. Не привязано к SQLite TTL (там диапазоны хранятся вечно до evict).
+_CACHE_RANGES_REDIS_TTL_SECONDS = 30 * 86400
 
 
 class MessageCache:
@@ -44,6 +51,11 @@ class MessageCache:
         # Per-chat asyncio.Lock: разделяет write contention между чатами. На N=4
         # concurrent jobs +29% throughput; при N=1 overhead ~ноль (один Lock на чат).
         self._chat_locks: dict = {}
+        # Optional Redis-клиент для публикации cache:ranges:{chat_id}. Java
+        # ExportJobProducer.isLikelyCached читает этот ключ и направляет
+        # повторные экспорты в Express queue. Без публикации Express ветка
+        # никогда не активируется (false → main queue всегда).
+        self.redis_client: Optional[Any] = None
 
     # ------------------------------------------------------------------ #
     # Lifecycle
@@ -271,9 +283,18 @@ class MessageCache:
             self._chat_locks[chat_id_int] = lock
 
         async with lock:
-            return await self._store_messages_locked(
+            stored = await self._store_messages_locked(
                 chat_id_int, topic_id, messages, now,
             )
+
+        # Publish cache:ranges ВНЕ lock — Redis socket_timeout=10с не должен
+        # блокировать следующий store на этот же чат. SQLite уже commited,
+        # publish best-effort: при provider outage Java увидит stale ranges
+        # (до следующего успешного store), но не зомби-блок на чат.
+        # Topic-aware skip оставлен здесь же — Java логика без topic-awareness.
+        if topic_id == 0:
+            await self._publish_cache_ranges_to_redis(chat_id_int)
+        return stored
 
     async def _store_messages_locked(
         self, chat_id_int: int, topic_id: int,
@@ -350,9 +371,61 @@ class MessageCache:
         logger.debug(
             f"Cached {len(messages)} msgs for chat {chat_id_int} (total: {actual_count})"
         )
+        # cache:ranges publish теперь вызывается из store_messages ВНЕ per-chat
+        # lock — Redis timeout не должен блокировать следующий store этого чата.
         # evict_if_needed — отдельная операция, её фейл не должен трогать транзакцию store
         await self.evict_if_needed()
         return len(messages)
+
+    async def _publish_cache_ranges_to_redis(self, chat_id_int: int) -> None:
+        """Best-effort publish текущих id-ranges в Redis для Java Express queue.
+
+        Без этого ключа Java ExportJobProducer.isLikelyCached() всегда возвращает
+        false и Express ветка мертва. Падение Redis не должно ломать ingestion —
+        SQLite cache уже зафиксирован.
+
+        Java резолвит lookup как:
+            canonical = GET canonical:{input}; if null → canonical = input
+            ranges    = GET cache:ranges:{canonical}
+
+        Если юзер ввёл numeric id (например -100123), а в Redis уже есть
+        обратный маппинг `canonical:-100123` → "mychat", Java получит "mychat"
+        и будет искать `cache:ranges:mychat` (а не numeric). Поэтому
+        дублируем publish: numeric (обычный случай — username input) +
+        username (если найден в canonical reverse map).
+        """
+        if self.redis_client is None:
+            return
+        try:
+            ranges = await self.get_cached_ranges(chat_id_int, topic_id=0)
+            payload = _stdjson.dumps(ranges, separators=(",", ":"))
+            await self.redis_client.set(
+                f"cache:ranges:{chat_id_int}",
+                payload,
+                ex=_CACHE_RANGES_REDIS_TTL_SECONDS,
+            )
+            # Дублируем под username (если известен) — иначе numeric input
+            # юзера попадёт на обратный canonical и Java не найдёт ranges.
+            try:
+                username = await self.redis_client.get(f"canonical:{chat_id_int}")
+                if username:
+                    if isinstance(username, bytes):
+                        username = username.decode("utf-8", "ignore")
+                    await self.redis_client.set(
+                        f"cache:ranges:{username}",
+                        payload,
+                        ex=_CACHE_RANGES_REDIS_TTL_SECONDS,
+                    )
+            except Exception as username_exc:
+                logger.debug(
+                    "publish cache:ranges username-dup skipped chat=%s: %s",
+                    chat_id_int, username_exc,
+                )
+        except Exception as exc:
+            logger.debug(
+                "publish cache:ranges:%s skipped: %s",
+                chat_id_int, exc,
+            )
 
     # ------------------------------------------------------------------ #
     # Core read API
