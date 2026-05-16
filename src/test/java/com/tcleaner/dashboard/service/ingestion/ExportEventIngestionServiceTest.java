@@ -463,6 +463,75 @@ class ExportEventIngestionServiceTest {
     }
 
     @Test
+    @DisplayName("второй ingest с пустыми полями — coalesce не перезаписывает существующие")
+    void secondIngestWithNullsPreservesValues() {
+        // started заполняет начальные поля
+        service.ingest(started());
+        // bytes_measured без bytesCount → coalesce пропускает (value == null)
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_BYTES_MEASURED)
+                .taskId(TASK)
+                .ts(TS.plusSeconds(10)).build());
+
+        ExportEvent ev = events.findByTaskId(TASK).orElseThrow();
+        // Поля остались как в started() — coalesce пропускал null-fields
+        assertThat(ev.getStatus()).isEqualTo(ExportStatus.QUEUED);
+        assertThat(ev.getBytesCount()).isNull();
+    }
+
+    @Test
+    @DisplayName("повторный chatTitle/canonicalChatId — chatUpserter вызван (мост обновления метаданных)")
+    void secondIngestUpdatesChatMetadata() {
+        service.ingest(started());
+        // bytes_measured + chatTitle → ветка `chatTitle != null || canonicalChatId != null` срабатывает
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_BYTES_MEASURED)
+                .taskId(TASK).bytesCount(2048L)
+                .chatTitle("Updated Title")
+                .ts(TS.plusSeconds(20)).build());
+
+        ExportEvent ev = events.findByTaskId(TASK).orElseThrow();
+        assertThat(ev.getBytesCount()).isEqualTo(2048L);
+    }
+
+    @Test
+    @DisplayName("coalesce с пустой String — пропуск (isBlank ветка)")
+    void coalesceSkipsBlankString() {
+        service.ingest(started());
+        // error="   " (blank) → coalesce не вызывает setter
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_FAILED)
+                .taskId(TASK).botUserId(USER_ID)
+                .error("   ")  // blank → coalesce пропускает
+                .status("failed").ts(TS.plusSeconds(30)).build());
+
+        ExportEvent ev = events.findByTaskId(TASK).orElseThrow();
+        assertThat(ev.getStatus()).isEqualTo(ExportStatus.FAILED);
+        assertThat(ev.getErrorMessage()).isNull();  // blank не сохранился
+    }
+
+    @Test
+    @DisplayName("повторный COMPLETED после CANCELLED — terminal-prev блокирует canAdvanceStatus")
+    void cancelledThenCompletedDoesNotAdvance() {
+        // started с subscriptionId → init
+        service.ingest(started());
+        // CANCELLED первым → terminal
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_CANCELLED)
+                .taskId(TASK).botUserId(USER_ID)
+                .status("cancelled").ts(TS.plusSeconds(30)).build());
+        // Late COMPLETED → canAdvanceStatus(CANCELLED, COMPLETED) == false → статус не меняется
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_COMPLETED)
+                .taskId(TASK).botUserId(USER_ID)
+                .messagesCount(50L).bytesCount(500L)
+                .status("completed").ts(TS.plusSeconds(60)).build());
+
+        ExportEvent ev = events.findByTaskId(TASK).orElseThrow();
+        assertThat(ev.getStatus()).isEqualTo(ExportStatus.CANCELLED);
+    }
+
+    @Test
     @DisplayName("CANCELLED первым событием — totalExports НЕ инкрементится (юзер отменил)")
     void cancelledFirstEventDoesNotBumpUserTotals() {
         service.ingest(StatsEventPayload.builder()

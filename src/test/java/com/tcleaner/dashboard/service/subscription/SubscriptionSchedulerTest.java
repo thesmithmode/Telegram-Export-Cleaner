@@ -545,4 +545,69 @@ class SubscriptionSchedulerTest {
         verify(subscriptionService).recordFailure(5L);
         verify(subscriptionService).recordRunStarted(6L);
     }
+
+    // ─── Round 2 coverage: error-paths runDueSubscriptions ────────────────────
+
+    @Test
+    @DisplayName("runDueSubscriptions: пустой список кандидатов → ранний выход, enqueue не вызывается")
+    void emptyCandidatesEarlyReturn() {
+        when(jobProducer.hasActiveProcessingJob()).thenReturn(false);
+        when(jobProducer.getQueueLength()).thenReturn(0L);
+        when(repository.findDueForRun(any())).thenReturn(List.of());
+
+        scheduler.runDueSubscriptions();
+
+        verify(chatRepository, never()).findAllById(any());
+        verify(jobProducer, never()).enqueueSubscription(anyLong(), anyLong(), anyString(),
+                anyString(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("runDueSubscriptions: chatRepository.findAllById бросает exception → errors++ и graceful return")
+    void chatRepositoryFailureIsGraceful() {
+        when(jobProducer.hasActiveProcessingJob()).thenReturn(false);
+        when(jobProducer.getQueueLength()).thenReturn(0L);
+        ChatSubscription sub = activeSub(7L, 70L, 700L, 24, mskHhMm(12),
+                Instant.now().minusSeconds(25 * 3600L), null);
+        when(repository.findDueForRun(any())).thenReturn(List.of(sub));
+        when(chatRepository.findAllById(any())).thenThrow(new RuntimeException("DB down"));
+
+        scheduler.runDueSubscriptions();
+
+        verify(jobProducer, never()).enqueueSubscription(anyLong(), anyLong(), anyString(),
+                anyString(), anyString(), anyLong());
+        verify(subscriptionService, never()).recordRunStarted(anyLong());
+    }
+
+    @Test
+    @DisplayName("processCandidate: recordFailure сам бросает exception → swallowed, не пробрасывается")
+    void recordFailureExceptionIsGraceful() {
+        when(jobProducer.hasActiveProcessingJob()).thenReturn(false);
+        when(jobProducer.getQueueLength()).thenReturn(0L);
+        // chat == null → попадаем в ветку errorsCounter + recordFailure
+        ChatSubscription sub = activeSub(8L, 80L, 800L, 24, mskHhMm(12),
+                Instant.now().minusSeconds(25 * 3600L), null);
+        when(repository.findDueForRun(any())).thenReturn(List.of(sub));
+        when(chatRepository.findAllById(any())).thenReturn(List.of());  // нет chat для 800L
+        org.mockito.Mockito.doThrow(new RuntimeException("DB write failed"))
+                .when(subscriptionService).recordFailure(8L);
+
+        // Не должно бросить наружу — внутренний try/catch ловит
+        scheduler.runDueSubscriptions();
+
+        verify(subscriptionService).recordFailure(8L);
+    }
+
+    @Test
+    @DisplayName("runDueSubscriptions: критическая ошибка (repository.findDueForRun throws) → проглатывается")
+    void criticalErrorIsGraceful() {
+        when(jobProducer.hasActiveProcessingJob()).thenReturn(false);
+        when(jobProducer.getQueueLength()).thenReturn(0L);
+        when(repository.findDueForRun(any())).thenThrow(new RuntimeException("DB connection lost"));
+
+        // Не должно бросить наружу
+        scheduler.runDueSubscriptions();
+
+        verify(chatRepository, never()).findAllById(any());
+    }
 }
