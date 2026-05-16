@@ -60,14 +60,12 @@ class StatsStreamPublisherTest {
                     return callback.doInRedis(connection);
                 });
 
-        String id = publisher.publish(StatsEventPayload.builder()
+        publisher.publish(StatsEventPayload.builder()
                 .type(StatsEventType.EXPORT_STARTED)
                 .taskId("task-1")
                 .botUserId(42L)
                 .ts(Instant.parse("2026-04-15T12:00:00Z"))
                 .build());
-
-        assertThat(id).isEqualTo("0-1");
 
         ArgumentCaptor<MapRecord> recordCaptor = ArgumentCaptor.forClass(MapRecord.class);
         ArgumentCaptor<XAddOptions> optsCaptor = ArgumentCaptor.forClass(XAddOptions.class);
@@ -94,12 +92,10 @@ class StatsStreamPublisherTest {
         when(redis.execute(any(RedisCallback.class)))
                 .thenThrow(new RuntimeException("connection refused"));
 
-        String id = publisher.publish(StatsEventPayload.builder()
+        publisher.publish(StatsEventPayload.builder()
                 .type(StatsEventType.EXPORT_STARTED)
                 .taskId("task-err")
                 .build());
-
-        assertThat(id).isNull();
     }
 
     @Test
@@ -117,8 +113,6 @@ class StatsStreamPublisherTest {
                     return callback.doInRedis(connection);
                 });
 
-        String id = publisher.publish(new StatsEventPayload());
-
-        assertThat(id).isEqualTo("0-2");
+        publisher.publish(new StatsEventPayload());
     }
 }

@@ -9,6 +9,7 @@ import org.springframework.data.redis.connection.RedisStreamCommands.XAddOptions
 import org.springframework.data.redis.connection.stream.MapRecord;
 import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
@@ -43,15 +44,8 @@ public class StatsStreamPublisher {
         this.props = props;
     }
 
-    /**
-     * Отправляет событие в стрим. Ошибки сериализации/сети логируются,
-     * но не пробрасываются — статистика не должна валить основной flow
-     * (экспорт идёт дальше даже если стрим недоступен).
-     *
-     * @param event payload события
-     * @return id записи в стриме или {@code null}, если отправка не удалась
-     */
-    public String publish(StatsEventPayload event) {
+    @Async
+    public void publish(StatsEventPayload event) {
         try {
             String json = objectMapper.writeValueAsString(event);
             MapRecord<byte[], byte[], byte[]> record = MapRecord.create(
@@ -61,15 +55,12 @@ public class StatsStreamPublisher {
                             json.getBytes(StandardCharsets.UTF_8)
                     ));
             XAddOptions options = XAddOptions.maxlen(props.maxlen()).approximateTrimming(true);
-            RecordId id = redis.execute((RedisConnection conn) ->
+            redis.execute((RedisConnection conn) ->
                     conn.streamCommands().xAdd(record, options));
-            return id != null ? id.getValue() : null;
         } catch (JsonProcessingException ex) {
             log.error("Не удалось сериализовать событие {}: {}", event.getType(), ex.getMessage());
-            return null;
         } catch (Exception ex) {
             log.warn("XADD в {} упал: {}", props.key(), ex.getMessage());
-            return null;
         }
     }
 }
