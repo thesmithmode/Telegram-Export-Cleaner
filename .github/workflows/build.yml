@@ -184,11 +184,11 @@ jobs:
             echo "Rollback checkpoint: java=${PREV_JAVA_ID:-none} worker=${PREV_WORKER_ID:-none}"
 
             rollback() {
-              echo "🔙 Откат стека на предыдущие образы..."
+              echo "Откат стека на предыдущие образы..."
               if [ -n "$PREV_JAVA_ID" ];   then docker tag "$JAVA_IMG:rollback"   "$JAVA_IMG:latest";   fi
               if [ -n "$PREV_WORKER_ID" ]; then docker tag "$WORKER_IMG:rollback" "$WORKER_IMG:latest"; fi
               if [ -z "$PREV_JAVA_ID" ] && [ -z "$PREV_WORKER_ID" ]; then
-                echo "⚠️  Нет rollback-точки (первый деплой) — останавливаем стек, прод в down state"
+                echo "Нет rollback-точки (первый деплой) — останавливаем стек, прод в down state"
                 docker compose -f docker-compose.prod.yml --env-file .env down || true
                 return
               fi
@@ -199,18 +199,18 @@ jobs:
             docker compose -f docker-compose.prod.yml --env-file .env up -d --remove-orphans
 
             # ── Post-deploy smoke test ──────────────────────────────────────
-            echo "⏳ Ждём /api/health (до 90 сек)..."
+            echo "Ждём /api/health (до 90 сек)..."
             HEALTH_OK=""
             for i in $(seq 1 30); do
               if docker exec telegram-export-java-bot wget -qO/dev/null http://localhost:8080/api/health 2>/dev/null; then
                 HEALTH_OK=1
-                echo "✅ java-bot жив после $((i*3)) сек"
+                echo "java-bot жив после $((i*3)) сек"
                 break
               fi
               sleep 3
             done
             if [ -z "$HEALTH_OK" ]; then
-              echo "❌ /api/health не отвечает 90 сек — деплой сломан"
+              echo "FAIL: /api/health не отвечает 90 сек — деплой сломан"
               echo "--- docker ps ---"
               docker compose -f docker-compose.prod.yml ps
               echo "--- java-bot logs (tail 100) ---"
@@ -221,21 +221,70 @@ jobs:
               exit 1
             fi
 
+            # ── Диагностика Traefik routing (всегда, не только при ошибке) ──
+            # java-bot жив напрямую (8080), но нужно проверить реальный HTTP path
+            # через Traefik. Health check выше обходит Traefik — мы не знаем,
+            # видит ли Traefik docker labels и правильно ли роутит запросы.
+            echo "=== TRAEFIK ROUTING DIAGNOSTICS ==="
+
+            echo "--- docker compose ps ---"
+            docker compose -f docker-compose.prod.yml ps
+
+            echo "--- socket-proxy logs (tail 30) ---"
+            docker compose -f docker-compose.prod.yml logs --tail=30 socket-proxy || true
+
+            echo "--- traefik logs (tail 50) ---"
+            docker compose -f docker-compose.prod.yml logs --tail=50 traefik || true
+
+            echo "--- socket-proxy reachability from traefik container ---"
+            # Проверяем: может ли Traefik говорить с socket-proxy на порту 2375
+            docker exec telegram-cleaner-traefik \
+              wget -qO- "http://socket-proxy:2375/v1.41/containers/json?limit=5" 2>/dev/null \
+              && echo "socket-proxy: OK" \
+              || echo "socket-proxy: UNREACHABLE from traefik"
+
+            echo "--- traefik → java-bot network membership ---"
+            # Проверяем: оба контейнера в сети traefik-proxy?
+            docker network inspect traefik-proxy \
+              --format '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null \
+              || echo "traefik-proxy network inspect failed"
+
+            echo "--- real Traefik HTTP smoke test (through routing, NOT bypass) ---"
+            DOMAIN=$(grep '^TRAEFIK_DASHBOARD_DOMAIN=' .env | cut -d= -f2- || echo "")
+            if [ -n "$DOMAIN" ]; then
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+                --connect-timeout 5 --max-time 10 \
+                -H "Host: $DOMAIN" \
+                http://localhost/dashboard/login 2>/dev/null || echo "CURL_FAIL")
+              echo "Traefik HTTP smoke: Host=$DOMAIN path=/dashboard/login -> HTTP $HTTP_CODE"
+              if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "302" ] && [ "$HTTP_CODE" != "301" ]; then
+                echo "FAIL: Traefik smoke test вернул $HTTP_CODE — routing не работает"
+                echo "--- traefik logs (extended, tail 100) ---"
+                docker compose -f docker-compose.prod.yml logs --tail=100 traefik || true
+                rollback
+                exit 1
+              fi
+              echo "OK: Traefik routing работает (HTTP $HTTP_CODE)"
+            else
+              echo "WARN: TRAEFIK_DASHBOARD_DOMAIN не определён — пропускаем smoke test через Traefik"
+            fi
+            echo "=== END TRAEFIK DIAGNOSTICS ==="
+
             # ── Запуск python-worker после того как java-bot здоров ───────────
-            echo "⏳ Запускаем python-worker..."
+            echo "Запускаем python-worker..."
             docker compose -f docker-compose.prod.yml --env-file .env up -d python-worker
             WORKER_OK=""
             for i in $(seq 1 20); do
               WORKER_STATUS=$(docker inspect --format='{{.State.Status}}' telegram-export-worker 2>/dev/null || echo "missing")
               if [ "$WORKER_STATUS" = "running" ]; then
                 WORKER_OK=1
-                echo "✅ python-worker запущен после $((i*3)) сек"
+                echo "python-worker запущен после $((i*3)) сек"
                 break
               fi
               sleep 3
             done
             if [ -z "$WORKER_OK" ]; then
-              echo "❌ python-worker не запустился за 60 сек"
+              echo "FAIL: python-worker не запустился за 60 сек"
               docker compose -f docker-compose.prod.yml logs --tail=50 python-worker || true
               rollback
               exit 1
