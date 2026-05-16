@@ -29,6 +29,7 @@ class MessageConverter:
         "blockquote": "blockquote",
         "spoiler": "spoiler",
         "custom_emoji": "custom_emoji",
+        "bank_card": "bank_card",
     }
 
     # Media type mapping: Pyrogram class → result.json string
