@@ -5,11 +5,13 @@ import com.tcleaner.dashboard.service.ingestion.BotUserUpserter;
 import com.tcleaner.dashboard.service.subscription.SubscriptionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
 import org.telegram.telegrambots.meta.api.objects.message.Message;
 
 @Component
+@ConditionalOnExpression("'${telegram.bot.token:}' != ''")
 public class ExportBotCallbackHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ExportBotCallbackHandler.class);

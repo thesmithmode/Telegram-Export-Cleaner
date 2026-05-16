@@ -4,6 +4,7 @@ import com.tcleaner.core.BotLanguage;
 import com.tcleaner.dashboard.service.ingestion.BotUserUpserter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
@@ -14,6 +15,7 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 
 @Component
+@ConditionalOnExpression("'${telegram.bot.token:}' != ''")
 public class ExportBotCommandHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ExportBotCommandHandler.class);
