@@ -63,6 +63,12 @@ jobs:
             tests/test_coverage_gaps3.py \
             tests/test_queue_priority.py \
             tests/test_subscription_empty_export.py \
+            tests/test_api_key_wiring.py \
+            tests/test_batch_loop.py \
+            tests/test_cache_stats.py \
+            tests/test_redis_ops.py \
+            tests/test_entity_type_guard.py \
+            tests/test_main_loop_circuit_breaker.py \
             -v --cov=. --cov-report=term-missing --cov-fail-under=95 --cov-branch
 
   integration:
