@@ -34,6 +34,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -679,6 +680,191 @@ class ExportBotTest {
         void msgWithArgs() {
             String result = i18n.msg(BotLanguage.RU, "bot.cancel.ok", "task_123");
             assertThat(result).contains("task_123").contains("отменён");
+        }
+    }
+
+    @Nested
+    @DisplayName("startExport: ошибочные пути")
+    class StartExportErrorPaths {
+
+        @Test
+        @DisplayName("Нет chatId в сессии (сессия истекла): сообщение об ошибке, нет enqueue")
+        void nullChatIdSendsSessionExpired() {
+            // CB_EXPORT_ALL без предварительного ввода username → chatId = null
+            bot.consume(createCallbackUpdate(50L, ExportBot.CB_EXPORT_ALL));
+
+            verify(messengerMock).editMessage(eq(50L), anyInt(), anyString(), isNull());
+            verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("Активный экспорт существует (getActiveExport != null): сообщение о дублировании")
+        void activeExportExistsSendsError() {
+            when(jobProducerMock.getActiveExport(51L)).thenReturn("existing_task_id");
+
+            bot.consume(createTextMessageUpdate(51L, "@some_chat"));
+            bot.consume(createCallbackUpdate(51L, ExportBot.CB_EXPORT_ALL));
+
+            verify(messengerMock).send(eq(51L), anyString());
+            verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("enqueue бросает IllegalStateException: сообщение о дублировании")
+        void enqueueIllegalStateNotifiesUser() {
+            when(jobProducerMock.enqueue(anyLong(), anyLong(), anyString(), any(), any(), any()))
+                    .thenThrow(new IllegalStateException("duplicate"));
+
+            bot.consume(createTextMessageUpdate(52L, "@chan"));
+            bot.consume(createCallbackUpdate(52L, ExportBot.CB_EXPORT_ALL));
+
+            verify(messengerMock).send(eq(52L), anyString());
+        }
+
+        @Test
+        @DisplayName("enqueue бросает RuntimeException: сообщение об ошибке очереди")
+        void enqueueRuntimeExceptionNotifiesUser() {
+            when(jobProducerMock.enqueue(anyLong(), anyLong(), anyString(), any(), any(), any()))
+                    .thenThrow(new RuntimeException("redis down"));
+
+            bot.consume(createTextMessageUpdate(53L, "@chan"));
+            bot.consume(createCallbackUpdate(53L, ExportBot.CB_EXPORT_ALL));
+
+            verify(messengerMock).send(eq(53L), anyString());
+        }
+    }
+
+    @Nested
+    @DisplayName("Метаданные бота")
+    class BotMetadata {
+
+        @Test
+        @DisplayName("getBotToken возвращает токен")
+        void botTokenIsReturned() {
+            assertThat(bot.getBotToken()).isEqualTo("token");
+        }
+
+        @Test
+        @DisplayName("getUpdatesConsumer возвращает сам объект")
+        void updatesConsumerReturnsSelf() {
+            assertThat(bot.getUpdatesConsumer()).isSameAs(bot);
+        }
+    }
+
+    @Nested
+    @DisplayName("processUpdate: граничные случаи")
+    class ProcessUpdateEdgeCases {
+
+        @Test
+        @DisplayName("Update без message и без callback тихо игнорируется")
+        void updateWithNoMessageNoCallbackIgnored() {
+            Update update = new Update();
+            update.setUpdateId(99);
+            bot.consume(update);
+
+            verify(messengerMock, never()).send(anyLong(), anyString());
+            verify(messengerMock, never()).editMessage(anyLong(), anyInt(), anyString(), any());
+        }
+
+        @Test
+        @DisplayName("Сообщение не из приватного чата тихо игнорируется")
+        void groupChatMessageIgnored() {
+            Update update = new Update();
+            update.setUpdateId(100);
+            Message message = new Message();
+            message.setMessageId(5);
+            message.setText("/start");
+            org.telegram.telegrambots.meta.api.objects.chat.Chat groupChat =
+                    org.telegram.telegrambots.meta.api.objects.chat.Chat.builder()
+                            .id(111L).type("supergroup").build();
+            message.setChat(groupChat);
+            User user = User.builder().id(123L).firstName("Test").isBot(false).build();
+            message.setFrom(user);
+            update.setMessage(message);
+
+            bot.consume(update);
+
+            verify(messengerMock, never()).send(anyLong(), anyString());
+            verify(messengerMock, never()).sendWithKeyboard(anyLong(), anyString(), any());
+        }
+
+        @Test
+        @DisplayName("Сообщение без текста в приватном чате тихо игнорируется")
+        void privateMessageWithoutTextIgnored() {
+            Update update = new Update();
+            update.setUpdateId(101);
+            Message message = new Message();
+            message.setMessageId(6);
+            org.telegram.telegrambots.meta.api.objects.chat.Chat chat =
+                    org.telegram.telegrambots.meta.api.objects.chat.Chat.builder()
+                            .id(123L).type("private").build();
+            message.setChat(chat);
+            User user = User.builder().id(123L).firstName("Test").isBot(false).build();
+            message.setFrom(user);
+            update.setMessage(message);
+
+            bot.consume(update);
+
+            verify(messengerMock, never()).send(anyLong(), anyString());
+        }
+
+        @Test
+        @DisplayName("Исключение в processUpdate увеличивает счётчик ошибок, не бросает наружу")
+        void exceptionInProcessUpdateDoesNotPropagate() {
+            doThrow(new RuntimeException("unexpected"))
+                    .when(messengerMock).sendWithKeyboard(anyLong(), anyString(), any());
+
+            assertThatCode(() -> bot.consume(createTextMessageUpdate(123L, "/start")))
+                    .doesNotThrowAnyException();
+        }
+    }
+
+    @Nested
+    @DisplayName("publishBotUserSeen")
+    class PublishBotUserSeen {
+
+        @Test
+        @DisplayName("С publisher: publish вызывается при получении callback")
+        void publishCalledWithPublisher() {
+            StatsStreamPublisher publisherMock = mock(StatsStreamPublisher.class);
+            @SuppressWarnings("unchecked")
+            ObjectProvider<StatsStreamPublisher> provider = mock(ObjectProvider.class);
+            when(provider.getIfAvailable()).thenReturn(publisherMock);
+
+            ExportBot botWithPublisher = buildBotWithPublisher(provider);
+            botWithPublisher.consume(createCallbackUpdate(123L, ExportBot.CB_EXPORT_ALL));
+
+            verify(publisherMock).publish(any());
+        }
+
+        @Test
+        @DisplayName("Publisher бросает исключение: не пробрасывается наружу")
+        void publishExceptionSwallowed() {
+            StatsStreamPublisher publisherMock = mock(StatsStreamPublisher.class);
+            doThrow(new RuntimeException("stats down")).when(publisherMock).publish(any());
+
+            @SuppressWarnings("unchecked")
+            ObjectProvider<StatsStreamPublisher> provider = mock(ObjectProvider.class);
+            when(provider.getIfAvailable()).thenReturn(publisherMock);
+
+            ExportBot botWithPublisher = buildBotWithPublisher(provider);
+            assertThatCode(() -> botWithPublisher.consume(createCallbackUpdate(123L, ExportBot.CB_EXPORT_ALL)))
+                    .doesNotThrowAnyException();
+        }
+
+        private ExportBot buildBotWithPublisher(ObjectProvider<StatsStreamPublisher> provider) {
+            BotKeyboards keyboards = new BotKeyboards(i18n);
+            BotSessionRegistry registry = new BotSessionRegistry();
+            QueueDisplayBuilder qdBuilder = new QueueDisplayBuilder(i18n);
+            ExportBotCommandHandler cmd = new ExportBotCommandHandler(
+                    jobProducerMock, messengerMock, i18n, keyboards, registry, userUpserterMock, qdBuilder);
+            ExportBotCallbackHandler cb = new ExportBotCallbackHandler(
+                    jobProducerMock, messengerMock, i18n, keyboards, registry,
+                    userUpserterMock, subscriptionServiceMock, cmd);
+            return new ExportBot("token", "https://test.example.com/dashboard/mini-app",
+                    messengerMock, i18n, provider,
+                    new io.micrometer.core.instrument.simple.SimpleMeterRegistry(),
+                    securityGateMock, cmd, cb);
         }
     }
 

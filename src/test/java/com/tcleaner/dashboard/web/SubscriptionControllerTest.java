@@ -4,10 +4,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tcleaner.core.TelegramExporter;
 import com.tcleaner.dashboard.DashboardTestUsers;
 import com.tcleaner.dashboard.auth.DashboardUserDetails;
+import com.tcleaner.dashboard.domain.BotUser;
 import com.tcleaner.dashboard.domain.Chat;
 import com.tcleaner.dashboard.domain.ChatSubscription;
 import com.tcleaner.dashboard.domain.SubscriptionStatus;
 import com.tcleaner.dashboard.dto.CreateSubscriptionRequest;
+import com.tcleaner.dashboard.repository.BotUserRepository;
 import com.tcleaner.dashboard.repository.ChatRepository;
 import com.tcleaner.dashboard.service.ingestion.ChatUpserter;
 import com.tcleaner.dashboard.service.subscription.SubscriptionService;
@@ -25,6 +27,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -62,6 +65,7 @@ class SubscriptionControllerTest {
     @MockitoBean private SubscriptionService subscriptionService;
     @MockitoBean private ChatUpserter chatUpserter;
     @MockitoBean private ChatRepository chatRepository;
+    @MockitoBean private BotUserRepository botUserRepository;
     @MockitoBean private TelegramExporter mockExporter;
 
     private static final DashboardUserDetails ADMIN   = DashboardTestUsers.admin();
@@ -94,6 +98,19 @@ class SubscriptionControllerTest {
 
     private static Chat stubChat(long id) {
         return Chat.builder().id(id).chatIdRaw(String.valueOf(id)).build();
+    }
+
+    private static Chat stubChatWithTitle(long id, String title) {
+        return Chat.builder().id(id).chatIdRaw(String.valueOf(id)).chatTitle(title).build();
+    }
+
+    private static BotUser stubBotUser(long botUserId, String username, String displayName) {
+        Instant now = Instant.parse("2026-04-23T12:00:00Z");
+        return BotUser.builder()
+                .botUserId(botUserId).username(username).displayName(displayName)
+                .firstSeen(now).lastSeen(now)
+                .totalExports(0).totalMessages(0L).totalBytes(0L)
+                .build();
     }
 
     // ─── LIST ────────────────────────────────────────────────────────────────
@@ -383,5 +400,208 @@ class SubscriptionControllerTest {
         mockMvc.perform(get("/dashboard/api/subscriptions")
                         .with(user(UNBOUND)))
                 .andExpect(status().isUnauthorized());
+    }
+
+    // ─── GET happy path ──────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("get: USER видит свою подписку → 200 + SubscriptionDto")
+    void getById_user_ownSubscription_200() throws Exception {
+        ChatSubscription sub = stubSubscription(10L, 1L);
+        when(subscriptionService.findById(10L)).thenReturn(Optional.of(sub));
+        when(chatRepository.findById(100L)).thenReturn(Optional.of(stubChatWithTitle(100L, "My Chat")));
+
+        mockMvc.perform(get("/dashboard/api/subscriptions/10")
+                        .with(user(USER_1)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(10))
+                .andExpect(jsonPath("$.chatDisplay").value("My Chat (100)"));
+    }
+
+    @Test
+    @DisplayName("get: chat не найден в repository → display = chatRefId как строка")
+    void getById_chatMissing_displayFallsBackToChatRefId() throws Exception {
+        ChatSubscription sub = stubSubscription(10L, 1L);
+        when(subscriptionService.findById(10L)).thenReturn(Optional.of(sub));
+        when(chatRepository.findById(100L)).thenReturn(Optional.empty());
+
+        mockMvc.perform(get("/dashboard/api/subscriptions/10")
+                        .with(user(USER_1)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.chatDisplay").value("100"));
+    }
+
+    // ─── CREATE: error paths не покрытые ──────────────────────────────────────
+
+    @Test
+    @DisplayName("create: невалидный chatIdentifier (не username, не числовой) → 400")
+    void create_invalidChatIdentifier_400() throws Exception {
+        CreateSubscriptionRequest req = new CreateSubscriptionRequest(
+                "bad chat id with spaces", 24, "09:00", Instant.parse("2026-04-23T09:00:00Z"));
+
+        mockMvc.perform(post("/dashboard/api/subscriptions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req))
+                        .with(user(USER_1)).with(csrf()))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("create: DataIntegrityViolationException → 409 (race на UNIQUE constraint)")
+    void create_dataIntegrityViolation_409() throws Exception {
+        Instant sinceDate = Instant.parse("2026-04-23T09:00:00Z");
+        CreateSubscriptionRequest req = new CreateSubscriptionRequest(
+                "100", 24, "09:00", sinceDate);
+
+        Chat chat = stubChat(100L);
+        when(chatUpserter.upsert(any(), eq("100"), any(), any(), any())).thenReturn(chat);
+        when(subscriptionService.create(anyLong(), anyLong(), anyInt(), anyString(), any()))
+                .thenThrow(new org.springframework.dao.DataIntegrityViolationException("duplicate"));
+
+        mockMvc.perform(post("/dashboard/api/subscriptions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req))
+                        .with(user(USER_1)).with(csrf()))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    @DisplayName("create: USER unbound (botUserId=null) → 401")
+    void create_unboundUser_401() throws Exception {
+        CreateSubscriptionRequest req = new CreateSubscriptionRequest(
+                "100", 24, "09:00", Instant.parse("2026-04-23T09:00:00Z"));
+
+        mockMvc.perform(post("/dashboard/api/subscriptions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req))
+                        .with(user(UNBOUND)).with(csrf()))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("create: username-чат (t.me/abc) — chatUpserter получает username")
+    void create_usernameChat_passesUsernameToUpserter() throws Exception {
+        Instant sinceDate = Instant.parse("2026-04-23T09:00:00Z");
+        CreateSubscriptionRequest req = new CreateSubscriptionRequest(
+                "@abc", 24, "09:00", sinceDate);
+
+        Chat chat = stubChat(100L);
+        when(chatUpserter.upsert(eq("abc"), eq("@abc"), any(), any(), any())).thenReturn(chat);
+        when(subscriptionService.create(anyLong(), anyLong(), anyInt(), anyString(), any()))
+                .thenReturn(stubSubscription(10L, 1L));
+
+        mockMvc.perform(post("/dashboard/api/subscriptions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req))
+                        .with(user(USER_1)).with(csrf()))
+                .andExpect(status().isCreated());
+
+        verify(chatUpserter).upsert(eq("abc"), eq("@abc"), any(), any(), any());
+    }
+
+    // ─── PAUSE/RESUME/DELETE: NoSuchElementException paths ────────────────────
+
+    @Test
+    @DisplayName("pause: subscriptionService.pause бросает NoSuchElementException → 404")
+    void pause_noSuchElement_404() throws Exception {
+        ChatSubscription sub = stubSubscription(10L, 1L);
+        when(subscriptionService.findById(10L)).thenReturn(Optional.of(sub));
+        when(subscriptionService.pause(10L))
+                .thenThrow(new NoSuchElementException("subscription disappeared"));
+
+        mockMvc.perform(patch("/dashboard/api/subscriptions/10/pause")
+                        .with(user(USER_1)).with(csrf()))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("resume: subscriptionService.resume бросает NoSuchElementException → 404")
+    void resume_noSuchElement_404() throws Exception {
+        ChatSubscription sub = stubSubscription(10L, 1L);
+        when(subscriptionService.findById(10L)).thenReturn(Optional.of(sub));
+        when(subscriptionService.resume(10L))
+                .thenThrow(new NoSuchElementException("subscription disappeared"));
+
+        mockMvc.perform(patch("/dashboard/api/subscriptions/10/resume")
+                        .with(user(USER_1)).with(csrf()))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("delete: subscriptionService.delete бросает NoSuchElementException → 404")
+    void delete_noSuchElement_404() throws Exception {
+        ChatSubscription sub = stubSubscription(10L, 1L);
+        when(subscriptionService.findById(10L)).thenReturn(Optional.of(sub));
+        org.mockito.Mockito.doThrow(new NoSuchElementException("gone"))
+                .when(subscriptionService).delete(10L);
+
+        mockMvc.perform(delete("/dashboard/api/subscriptions/10")
+                        .with(user(USER_1)).with(csrf()))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("pause: подписка не найдена → 404 (requireVisible перехватывает)")
+    void pause_subscriptionMissing_404() throws Exception {
+        when(subscriptionService.findById(99L)).thenReturn(Optional.empty());
+
+        mockMvc.perform(patch("/dashboard/api/subscriptions/99/pause")
+                        .with(user(ADMIN)).with(csrf()))
+                .andExpect(status().isNotFound());
+    }
+
+    // ─── toDtoList: formatChatDisplay + formatUserDisplay branches ────────────
+
+    @Test
+    @DisplayName("list ADMIN: chatTitle и username присутствуют — formatChatDisplay + formatUserDisplay покрыты")
+    void listAdmin_chatTitleAndUsername_formatBranches() throws Exception {
+        ChatSubscription sub = stubSubscription(10L, 1L);
+        Page<ChatSubscription> page = new PageImpl<>(List.of(sub));
+        when(subscriptionService.listAll(any(Pageable.class))).thenReturn(page);
+        when(chatRepository.findAllById(any())).thenReturn(List.of(stubChatWithTitle(100L, "Chat Title")));
+        when(botUserRepository.findAllById(any())).thenReturn(List.of(stubBotUser(1L, "alice", "Alice Smith")));
+
+        mockMvc.perform(get("/dashboard/api/subscriptions").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].chatDisplay").value("Chat Title (100)"))
+                .andExpect(jsonPath("$[0].userDisplay").value("@alice"));
+    }
+
+    @Test
+    @DisplayName("list ADMIN: username=null, displayName заполнен — userDisplay=displayName")
+    void listAdmin_displayNameOnly_formatUserDisplay() throws Exception {
+        ChatSubscription sub = stubSubscription(10L, 1L);
+        Page<ChatSubscription> page = new PageImpl<>(List.of(sub));
+        when(subscriptionService.listAll(any(Pageable.class))).thenReturn(page);
+        when(chatRepository.findAllById(any())).thenReturn(List.of(stubChat(100L)));
+        when(botUserRepository.findAllById(any())).thenReturn(List.of(stubBotUser(1L, null, "Alice Smith")));
+
+        mockMvc.perform(get("/dashboard/api/subscriptions").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].userDisplay").value("Alice Smith"));
+    }
+
+    @Test
+    @DisplayName("list ADMIN: username=null, displayName=null — userDisplay=botUserId как строка")
+    void listAdmin_noUsernameNoDisplay_userDisplayFromBotUserId() throws Exception {
+        ChatSubscription sub = stubSubscription(10L, 1L);
+        Page<ChatSubscription> page = new PageImpl<>(List.of(sub));
+        when(subscriptionService.listAll(any(Pageable.class))).thenReturn(page);
+        when(chatRepository.findAllById(any())).thenReturn(List.of(stubChat(100L)));
+        when(botUserRepository.findAllById(any())).thenReturn(List.of(stubBotUser(1L, null, null)));
+
+        mockMvc.perform(get("/dashboard/api/subscriptions").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].userDisplay").value("1"));
+    }
+
+    @Test
+    @DisplayName("list пустой результат → []")
+    void list_emptyResult_returnsEmptyArray() throws Exception {
+        when(subscriptionService.listForUser(1L)).thenReturn(List.of());
+
+        mockMvc.perform(get("/dashboard/api/subscriptions").with(user(USER_1)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
     }
 }

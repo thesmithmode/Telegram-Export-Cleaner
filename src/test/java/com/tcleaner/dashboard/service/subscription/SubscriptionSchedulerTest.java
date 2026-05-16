@@ -374,6 +374,152 @@ class SubscriptionSchedulerTest {
         assertThat(elapsed).isFalse();
     }
 
+    // ─── isInDesiredWindow: полуночный разворот (desired≈00:10) ─────────────────
+
+    @Test
+    @DisplayName("isInDesiredWindow: midnight crossover — currentMsk=23:50, desired=00:10 → в окне")
+    void isInDesiredWindow_midnightCrossover_beforeMidnight_inWindow() {
+        ChatSubscription sub = activeSub(200L, 1L, 1L, 24, "00:10",
+                Instant.now().minusSeconds(3600), null);
+        // 23:50 МСК — до полуночи, но после windowStart (23:40)
+        Instant now = ZonedDateTime.of(2026, 1, 15, 23, 50, 0, 0, MSK).toInstant();
+        assertThat(scheduler.isInDesiredWindow(sub, now)).isTrue();
+    }
+
+    @Test
+    @DisplayName("isInDesiredWindow: midnight crossover — currentMsk=04:00, desired=00:10 → в окне (до windowEnd 06:10)")
+    void isInDesiredWindow_midnightCrossover_afterMidnight_inWindow() {
+        ChatSubscription sub = activeSub(201L, 1L, 1L, 24, "00:10",
+                Instant.now().minusSeconds(3600), null);
+        Instant now = ZonedDateTime.of(2026, 1, 15, 4, 0, 0, 0, MSK).toInstant();
+        assertThat(scheduler.isInDesiredWindow(sub, now)).isTrue();
+    }
+
+    @Test
+    @DisplayName("isInDesiredWindow: midnight crossover — currentMsk=12:00, desired=00:10 → вне окна")
+    void isInDesiredWindow_midnightCrossover_midday_outOfWindow() {
+        ChatSubscription sub = activeSub(202L, 1L, 1L, 24, "00:10",
+                Instant.now().minusSeconds(3600), null);
+        Instant now = ZonedDateTime.of(2026, 1, 15, 12, 0, 0, 0, MSK).toInstant();
+        assertThat(scheduler.isInDesiredWindow(sub, now)).isFalse();
+    }
+
+    // ─── isInStrictFirstRunWindow через isPeriodElapsed (anchor=null) ────────
+
+    @Test
+    @DisplayName("isPeriodElapsed/firstRun: desired=00:10 midnight crossover, current=23:55 → в окне → true")
+    void isPeriodElapsed_firstRun_midnightCrossover_windowStart_inWindow() {
+        Instant now = ZonedDateTime.of(2026, 1, 15, 23, 55, 0, 0, MSK).toInstant();
+        Instant sinceDate = now.minusSeconds(3600);
+        ChatSubscription sub = ChatSubscription.builder()
+                .id(210L).botUserId(1L).chatRefId(1L)
+                .periodHours(24).desiredTimeMsk("00:10").sinceDate(sinceDate)
+                .status(SubscriptionStatus.ACTIVE).consecutiveFailures(0)
+                .lastConfirmAt(now).createdAt(now).updatedAt(now)
+                .build();
+        assertThat(scheduler.isPeriodElapsed(sub, now)).isTrue();
+    }
+
+    @Test
+    @DisplayName("isPeriodElapsed/firstRun: desired=00:10, current=04:00 (до windowEnd 06:10) → в окне → true")
+    void isPeriodElapsed_firstRun_midnightCrossover_windowEnd_inWindow() {
+        Instant now = ZonedDateTime.of(2026, 1, 15, 4, 0, 0, 0, MSK).toInstant();
+        Instant sinceDate = now.minusSeconds(3600);
+        ChatSubscription sub = ChatSubscription.builder()
+                .id(211L).botUserId(1L).chatRefId(1L)
+                .periodHours(24).desiredTimeMsk("00:10").sinceDate(sinceDate)
+                .status(SubscriptionStatus.ACTIVE).consecutiveFailures(0)
+                .lastConfirmAt(now).createdAt(now).updatedAt(now)
+                .build();
+        assertThat(scheduler.isPeriodElapsed(sub, now)).isTrue();
+    }
+
+    @Test
+    @DisplayName("isPeriodElapsed/firstRun: desired=00:10, current=12:00 → вне окна → false")
+    void isPeriodElapsed_firstRun_midnightCrossoverWindowStart_outOfWindow() {
+        Instant now = ZonedDateTime.of(2026, 1, 15, 12, 0, 0, 0, MSK).toInstant();
+        Instant sinceDate = now.minusSeconds(3600);
+        ChatSubscription sub = ChatSubscription.builder()
+                .id(212L).botUserId(1L).chatRefId(1L)
+                .periodHours(24).desiredTimeMsk("00:10").sinceDate(sinceDate)
+                .status(SubscriptionStatus.ACTIVE).consecutiveFailures(0)
+                .lastConfirmAt(now).createdAt(now).updatedAt(now)
+                .build();
+        assertThat(scheduler.isPeriodElapsed(sub, now)).isFalse();
+    }
+
+    @Test
+    @DisplayName("isPeriodElapsed/firstRun: desired=20:00 (windowEnd crosses midnight), current=21:00 → в окне → true")
+    void isPeriodElapsed_firstRun_windowEndCrossesMidnight_inWindow() {
+        // desired=20:00, windowStart=19:30, windowEnd=02:00
+        // windowEnd.isBefore(desired) → true (02:00 < 20:00)
+        Instant now = ZonedDateTime.of(2026, 1, 15, 21, 0, 0, 0, MSK).toInstant();
+        Instant sinceDate = now.minusSeconds(3600);
+        ChatSubscription sub = ChatSubscription.builder()
+                .id(213L).botUserId(1L).chatRefId(1L)
+                .periodHours(24).desiredTimeMsk("20:00").sinceDate(sinceDate)
+                .status(SubscriptionStatus.ACTIVE).consecutiveFailures(0)
+                .lastConfirmAt(now).createdAt(now).updatedAt(now)
+                .build();
+        assertThat(scheduler.isPeriodElapsed(sub, now)).isTrue();
+    }
+
+    @Test
+    @DisplayName("isPeriodElapsed/firstRun: desired=20:00 (windowEnd crosses midnight), current=01:00 → в окне → true")
+    void isPeriodElapsed_firstRun_windowEndCrossesMidnight_earlyMorning_inWindow() {
+        Instant now = ZonedDateTime.of(2026, 1, 15, 1, 0, 0, 0, MSK).toInstant();
+        Instant sinceDate = now.minusSeconds(3600);
+        ChatSubscription sub = ChatSubscription.builder()
+                .id(214L).botUserId(1L).chatRefId(1L)
+                .periodHours(24).desiredTimeMsk("20:00").sinceDate(sinceDate)
+                .status(SubscriptionStatus.ACTIVE).consecutiveFailures(0)
+                .lastConfirmAt(now).createdAt(now).updatedAt(now)
+                .build();
+        assertThat(scheduler.isPeriodElapsed(sub, now)).isTrue();
+    }
+
+    @Test
+    @DisplayName("isPeriodElapsed/firstRun: desired=20:00 (windowEnd crosses midnight), current=05:00 → вне окна → false")
+    void isPeriodElapsed_firstRun_windowEndCrossesMidnight_outOfWindow() {
+        Instant now = ZonedDateTime.of(2026, 1, 15, 5, 0, 0, 0, MSK).toInstant();
+        Instant sinceDate = now.minusSeconds(3600);
+        ChatSubscription sub = ChatSubscription.builder()
+                .id(215L).botUserId(1L).chatRefId(1L)
+                .periodHours(24).desiredTimeMsk("20:00").sinceDate(sinceDate)
+                .status(SubscriptionStatus.ACTIVE).consecutiveFailures(0)
+                .lastConfirmAt(now).createdAt(now).updatedAt(now)
+                .build();
+        assertThat(scheduler.isPeriodElapsed(sub, now)).isFalse();
+    }
+
+    @Test
+    @DisplayName("isPeriodElapsed/firstRun: normal desired=12:00, current=10:00 (before windowStart 11:30) → false")
+    void isPeriodElapsed_firstRun_normalCase_beforeWindow() {
+        Instant now = ZonedDateTime.of(2026, 1, 15, 10, 0, 0, 0, MSK).toInstant();
+        Instant sinceDate = now.minusSeconds(3600);
+        ChatSubscription sub = ChatSubscription.builder()
+                .id(216L).botUserId(1L).chatRefId(1L)
+                .periodHours(24).desiredTimeMsk("12:00").sinceDate(sinceDate)
+                .status(SubscriptionStatus.ACTIVE).consecutiveFailures(0)
+                .lastConfirmAt(now).createdAt(now).updatedAt(now)
+                .build();
+        assertThat(scheduler.isPeriodElapsed(sub, now)).isFalse();
+    }
+
+    @Test
+    @DisplayName("isPeriodElapsed/firstRun: normal desired=12:00, current=20:00 (past windowEnd 18:00) → false")
+    void isPeriodElapsed_firstRun_normalCase_afterWindow() {
+        Instant now = ZonedDateTime.of(2026, 1, 15, 20, 0, 0, 0, MSK).toInstant();
+        Instant sinceDate = now.minusSeconds(3600);
+        ChatSubscription sub = ChatSubscription.builder()
+                .id(217L).botUserId(1L).chatRefId(1L)
+                .periodHours(24).desiredTimeMsk("12:00").sinceDate(sinceDate)
+                .status(SubscriptionStatus.ACTIVE).consecutiveFailures(0)
+                .lastConfirmAt(now).createdAt(now).updatedAt(now)
+                .build();
+        assertThat(scheduler.isPeriodElapsed(sub, now)).isFalse();
+    }
+
     @Test
     @DisplayName("runDueSubscriptions: чат не найден в БД → recordFailure вызван, остальные подписки продолжают обрабатываться")
     void recordsFailureWhenChatNotFound() {

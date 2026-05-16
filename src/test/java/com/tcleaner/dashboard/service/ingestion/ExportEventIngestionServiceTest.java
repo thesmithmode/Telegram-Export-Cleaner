@@ -376,4 +376,102 @@ class ExportEventIngestionServiceTest {
                 .ts(TS)
                 .build();
     }
+
+    // ─── Edge-cases: null payload, null type, невалидные парсеры ─────────────
+
+    @Test
+    @DisplayName("ingest(null) — тихий пропуск без исключения")
+    void ingestNullPayloadIsSilent() {
+        service.ingest(null);
+
+        assertThat(events.count()).isZero();
+    }
+
+    @Test
+    @DisplayName("ingest payload без type — тихий пропуск (warn log)")
+    void ingestPayloadWithoutTypeIsSilent() {
+        service.ingest(StatsEventPayload.builder()
+                .taskId("orphan-no-type").botUserId(USER_ID).ts(TS).build());
+
+        assertThat(events.count()).isZero();
+    }
+
+    @Test
+    @DisplayName("BOT_USER_SEEN без bot_user_id — пропуск, BotUser не создаётся")
+    void botUserSeenWithoutBotUserIdSkipped() {
+        long before = users.count();
+
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.BOT_USER_SEEN)
+                .username("alice").displayName("Alice").ts(TS).build());
+
+        assertThat(users.count()).isEqualTo(before);
+    }
+
+    @Test
+    @DisplayName("fromDate в невалидном формате — событие создаётся, fromDate=null")
+    void invalidDateFormatResolvedToNull() {
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_STARTED)
+                .taskId(TASK).botUserId(USER_ID)
+                .chatIdRaw("@chat").canonicalChatId("-100777")
+                .chatTitle("Test Chat").source("bot").status("queued")
+                .fromDate("not-a-date-at-all")
+                .ts(TS).build());
+
+        ExportEvent ev = events.findByTaskId(TASK).orElseThrow();
+        assertThat(ev.getFromDate()).isNull();
+    }
+
+    @Test
+    @DisplayName("source=blank — резолвится в ExportSource.BOT")
+    void blankSourceResolvedToBot() {
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_STARTED)
+                .taskId(TASK).botUserId(USER_ID)
+                .chatIdRaw("@chat").canonicalChatId("-100777")
+                .chatTitle("Test Chat").source("   ").status("queued")
+                .ts(TS).build());
+
+        ExportEvent ev = events.findByTaskId(TASK).orElseThrow();
+        assertThat(ev.getSource()).isEqualTo(com.tcleaner.dashboard.domain.ExportSource.BOT);
+    }
+
+    @Test
+    @DisplayName("source=unknown_string — fallback к ExportSource.BOT")
+    void invalidSourceFallsBackToBot() {
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_STARTED)
+                .taskId(TASK).botUserId(USER_ID)
+                .chatIdRaw("@chat").canonicalChatId("-100777")
+                .chatTitle("Test Chat").source("VERY_UNKNOWN_SOURCE").status("queued")
+                .ts(TS).build());
+
+        ExportEvent ev = events.findByTaskId(TASK).orElseThrow();
+        assertThat(ev.getSource()).isEqualTo(com.tcleaner.dashboard.domain.ExportSource.BOT);
+    }
+
+    @Test
+    @DisplayName("первый event с bot_user_id, но без chat — пропуск (нет minimal fields)")
+    void firstEventWithBotUserIdButNoChatSkipped() {
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_STARTED)
+                .taskId(TASK).botUserId(USER_ID)
+                .status("queued").ts(TS).build());
+
+        assertThat(events.findByTaskId(TASK)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("CANCELLED первым событием — totalExports НЕ инкрементится (юзер отменил)")
+    void cancelledFirstEventDoesNotBumpUserTotals() {
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_CANCELLED)
+                .taskId(TASK).botUserId(USER_ID)
+                .chatIdRaw("@chat").canonicalChatId("-100777")
+                .status("cancelled").ts(TS).build());
+
+        BotUser user = users.findById(USER_ID).orElseThrow();
+        assertThat(user.getTotalExports()).isZero();
+    }
 }

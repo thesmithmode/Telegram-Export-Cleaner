@@ -126,6 +126,72 @@ class TelegramControllerBytesCountTest {
     }
 
     @Test
+    @DisplayName("POST /api/convert с пустым taskId='   ' — publish не вызывается")
+    void noPublishWhenBlankTaskId() throws Exception {
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "result.json", "application/json",
+                "{\"messages\":[]}".getBytes());
+
+        MvcResult asyncResult = mockMvc.perform(multipart("/api/convert")
+                        .file(file)
+                        .param("taskId", "   "))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+        mockMvc.perform(asyncDispatch(asyncResult)).andExpect(status().isOk());
+
+        verify(statsPublisher, org.mockito.Mockito.never()).publish(any());
+    }
+
+    @Test
+    @DisplayName("publisher.publish бросает exception при completed → ошибка проглатывается, response 200")
+    void publisherExceptionOnCompletedSwallowed() throws Exception {
+        // Эмулируем падение второго publish (после успешного bytes_measured)
+        doThrow(new RuntimeException("Redis down"))
+                .when(statsPublisher).publish(any(StatsEventPayload.class));
+
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "result.json", "application/json",
+                "{\"messages\":[]}".getBytes());
+
+        MvcResult asyncResult = mockMvc.perform(multipart("/api/convert")
+                        .file(file)
+                        .param("taskId", "task-pub-fail")
+                        .param("botUserId", "42"))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+
+        // Streaming должен завершиться успешно, даже если publish упал
+        mockMvc.perform(asyncDispatch(asyncResult)).andExpect(status().isOk());
+
+        // publish был хотя бы раз вызван (bytes_measured) перед exception
+        verify(statsPublisher, atLeastOnce()).publish(any(StatsEventPayload.class));
+    }
+
+    @Test
+    @DisplayName("publisher.publish бросает exception при failed → не падает наружу")
+    void publisherExceptionOnFailedSwallowed() throws Exception {
+        doThrow(new RuntimeException("simulated streaming failure"))
+                .when(mockExporter).processFileStreaming(any(), any(), any());
+        doThrow(new RuntimeException("Redis down on failed publish"))
+                .when(statsPublisher).publish(any(StatsEventPayload.class));
+
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "result.json", "application/json",
+                "{\"messages\":[]}".getBytes());
+
+        MvcResult asyncResult = mockMvc.perform(multipart("/api/convert")
+                        .file(file)
+                        .param("taskId", "task-double-fail"))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+
+        // Async dispatch не должен бросить наружу — publishFailed имеет catch(Exception)
+        mockMvc.perform(asyncDispatch(asyncResult));
+
+        verify(statsPublisher, atLeastOnce()).publish(any(StatsEventPayload.class));
+    }
+
+    @Test
     @DisplayName("POST /api/convert при ошибке стриминга — публикуется EXPORT_FAILED")
     void publishesFailedOnStreamingError() throws Exception {
         // Воспроизводим ошибку, которая возникает уже после старта streaming

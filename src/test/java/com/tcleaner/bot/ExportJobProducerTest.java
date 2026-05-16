@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.mockito.Mockito.doThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -378,6 +379,91 @@ class ExportJobProducerTest {
                     anyLong(),
                     any(TimeUnit.class)
             );
+        }
+    }
+
+    @Nested
+    @DisplayName("enqueue-оверлоады (делегирующие)")
+    class EnqueueOverloadTests {
+
+        @Test
+        @DisplayName("enqueue(long,long,long) делегирует во внутренний метод")
+        void enqueueWithLongChatId() {
+            when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class))).thenReturn(true);
+            String taskId = jobProducer.enqueue(1L, 1L, 100L);
+            assertTrue(taskId.startsWith("export_"));
+        }
+
+        @Test
+        @DisplayName("enqueue(long,long,long,String,String) делегирует во внутренний метод")
+        void enqueueWithLongChatIdAndDates() {
+            when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class))).thenReturn(true);
+            String taskId = jobProducer.enqueue(2L, 2L, 200L, "2026-01-01", "2026-01-31");
+            assertTrue(taskId.startsWith("export_"));
+        }
+
+        @Test
+        @DisplayName("enqueue(long,long,String) делегирует во внутренний метод")
+        void enqueueWithStringChatId() {
+            when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class))).thenReturn(true);
+            String taskId = jobProducer.enqueue(3L, 3L, "@chan");
+            assertTrue(taskId.startsWith("export_"));
+        }
+
+        @Test
+        @DisplayName("enqueue(long,long,String,String,String) делегирует во внутренний метод")
+        void enqueueWithStringChatIdAndDates() {
+            when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class))).thenReturn(true);
+            String taskId = jobProducer.enqueue(4L, 4L, "@chan2", "2026-02-01", "2026-02-28");
+            assertTrue(taskId.startsWith("export_"));
+        }
+    }
+
+    @Nested
+    @DisplayName("publishStats + enqueueSubscription с реальным publisher")
+    class StatsPublishTests {
+
+        private StatsStreamPublisher publisherMock;
+        private ExportJobProducer producerWithPublisher;
+
+        @BeforeEach
+        void setUpWithPublisher() {
+            publisherMock = mock(StatsStreamPublisher.class);
+            @SuppressWarnings("unchecked")
+            ObjectProvider<StatsStreamPublisher> provider = mock(ObjectProvider.class);
+            lenient().when(provider.getIfAvailable()).thenReturn(publisherMock);
+            producerWithPublisher = new ExportJobProducer(redis, new ObjectMapper(), "telegram_export", provider);
+        }
+
+        @Test
+        @DisplayName("cancelExport с publisher: publishStats вызывается с типом EXPORT_CANCELLED")
+        void cancelExportPublishesStats() {
+            String taskId = "export_stat_test";
+            when(valueOps.get("active_export:100")).thenReturn(taskId);
+            when(valueOps.get("job_json:" + taskId)).thenReturn(null);
+
+            producerWithPublisher.cancelExport(100L);
+
+            verify(publisherMock).publish(any());
+        }
+
+        @Test
+        @DisplayName("enqueueSubscription с publisher: publish вызывается, exception глотается")
+        void enqueueSubscriptionPublishesStats() {
+            producerWithPublisher.enqueueSubscription(
+                    200L, 200L, "@statchan", "2026-01-01", "2026-01-31", 10L);
+
+            verify(publisherMock).publish(any());
+        }
+
+        @Test
+        @DisplayName("publishStats: publisher.publish бросает exception — глотается, нет propagation")
+        void publishStatsSwallowsException() {
+            doThrow(new RuntimeException("stream down")).when(publisherMock).publish(any());
+            when(valueOps.get("active_export:101")).thenReturn("export_throw");
+            when(valueOps.get("job_json:export_throw")).thenReturn(null);
+
+            assertDoesNotThrow(() -> producerWithPublisher.cancelExport(101L));
         }
     }
 
