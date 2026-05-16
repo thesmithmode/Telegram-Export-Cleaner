@@ -399,6 +399,40 @@ class TestProcessJobErrorMapping:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# main._alert_admin_session_invalid — token leak protection
+# Regression-guard: httpx exception сообщение может содержать
+# `/bot<TOKEN>/sendMessage` URL. logger.warning должен redactить через _safe_err.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestAlertAdminSessionInvalidRedaction:
+
+    @pytest.mark.asyncio
+    async def test_httpx_exception_message_redacted_in_log(self, caplog, monkeypatch):
+        import logging
+        from main import ExportWorker
+        from config import settings as _cfg
+
+        monkeypatch.setattr(_cfg, "TELEGRAM_BOT_TOKEN", "123456789:ABCDEF_SECRET_TOKEN")
+        monkeypatch.setattr(_cfg, "ADMIN_TG_ID", 42)
+
+        w = ExportWorker()
+        leaky = Exception(
+            "Connection failed for https://api.telegram.org/bot"
+            "123456789:ABCDEF_SECRET_TOKEN/sendMessage"
+        )
+        with patch("httpx.AsyncClient") as mock_client:
+            instance = mock_client.return_value.__aenter__.return_value
+            instance.post = AsyncMock(side_effect=leaky)
+            with caplog.at_level(logging.WARNING, logger="main"):
+                await w._alert_admin_session_invalid()
+
+        joined = "\n".join(r.getMessage() for r in caplog.records)
+        assert "ABCDEF_SECRET_TOKEN" not in joined
+        assert "/bot<REDACTED>/" in joined
+        assert "Failed to alert admin about SESSION_INVALID" in joined
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # main.process_job — unexpected exception handler
 # Проверяем fallback на notify_user_failure если send_response упал.
 # ─────────────────────────────────────────────────────────────────────────────

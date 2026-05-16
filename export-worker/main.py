@@ -23,7 +23,7 @@ from pyrogram_client import (
 )
 from queue_consumer import QueueConsumer, create_queue_consumer
 from redis_ops import RedisKeys, RedisOps
-from java_client import JavaBotClient, ProgressTracker, create_java_client
+from java_client import JavaBotClient, ProgressTracker, _safe_err, create_java_client
 from message_cache import MessageCache
 from models import ExportRequest, ExportedMessage, SendResponsePayload
 from cache_stats import build_snapshot, publish_snapshot
@@ -310,7 +310,7 @@ class ExportWorker:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 await client.post(url, json={"chat_id": settings.ADMIN_TG_ID, "text": text})
         except Exception as e:
-            logger.warning(f"Failed to alert admin about SESSION_INVALID: {e}")
+            logger.warning(f"Failed to alert admin about SESSION_INVALID: {_safe_err(e)}")
 
     async def _setup_processing(self, job: ExportRequest) -> bool:
         """Маркирует job как processing + обновляет active_export + ранний cancel-check.
