@@ -55,6 +55,7 @@ services:
     read_only: true
     tmpfs:
       - /run
+      - /usr/local/etc/haproxy
     mem_limit: 32m
     cpus: '0.05'
     logging:
