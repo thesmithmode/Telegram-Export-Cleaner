@@ -600,6 +600,34 @@ class ExportBotTest {
         }
 
         @Test
+        @DisplayName("https://0.0.0.0/ — банлист non-routable")
+        void rejectsAnyAddress() {
+            assertThatThrownBy(() -> buildBot("https://0.0.0.0/dashboard/mini-app"))
+                    .isInstanceOf(IllegalStateException.class);
+        }
+
+        @Test
+        @DisplayName("URL без host (только path) — host==empty → reject")
+        void rejectsUrlWithoutHost() {
+            assertThatThrownBy(() -> buildBot("https:///dashboard/mini-app"))
+                    .isInstanceOf(IllegalStateException.class);
+        }
+
+        @Test
+        @DisplayName("URL без scheme (только path) — scheme==null branch → reject")
+        void rejectsUrlWithoutScheme() {
+            assertThatThrownBy(() -> buildBot("//example.com/dashboard"))
+                    .isInstanceOf(IllegalStateException.class);
+        }
+
+        @Test
+        @DisplayName("Полностью невалидный URI (не парсится) → IllegalStateException")
+        void rejectsUnparseableUri() {
+            assertThatThrownBy(() -> buildBot("not a uri at all"))
+                    .isInstanceOf(IllegalStateException.class);
+        }
+
+        @Test
         @DisplayName("Публичный HTTPS URL принимается")
         void acceptsPublicHttpsUrl() {
             assertThatCode(() -> buildBot("https://tec.searchingforgamesforever.online/dashboard/mini-app"))

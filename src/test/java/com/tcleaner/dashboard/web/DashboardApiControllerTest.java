@@ -240,6 +240,83 @@ class DashboardApiControllerTest {
                 .andExpect(status().isBadRequest());
     }
 
+    @Test
+    @DisplayName("/stats/timeseries?granularity=day — 200, явное day grouping")
+    void timeSeriesGranularityDay() throws Exception {
+        mockMvc.perform(get("/dashboard/api/stats/timeseries")
+                        .param("period", "custom")
+                        .param("from", "2026-04-08")
+                        .param("to", "2026-04-15")
+                        .param("granularity", "day")
+                        .with(user(ADMIN)))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("/stats/timeseries?granularity=week — 200, week grouping")
+    void timeSeriesGranularityWeek() throws Exception {
+        mockMvc.perform(get("/dashboard/api/stats/timeseries")
+                        .param("period", "custom")
+                        .param("from", "2026-04-08")
+                        .param("to", "2026-04-15")
+                        .param("granularity", "week")
+                        .with(user(ADMIN)))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("/stats/timeseries?granularity=month — 200, month grouping")
+    void timeSeriesGranularityMonth() throws Exception {
+        mockMvc.perform(get("/dashboard/api/stats/timeseries")
+                        .param("period", "custom")
+                        .param("from", "2026-04-08")
+                        .param("to", "2026-04-15")
+                        .param("granularity", "month")
+                        .with(user(ADMIN)))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("/stats/timeseries?granularity=auto — 200, дефолтная (base granularity сохранена)")
+    void timeSeriesGranularityAuto() throws Exception {
+        mockMvc.perform(get("/dashboard/api/stats/timeseries")
+                        .param("period", "custom")
+                        .param("from", "2026-04-08")
+                        .param("to", "2026-04-15")
+                        .param("granularity", "auto")
+                        .with(user(ADMIN)))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("/stats/timeseries?granularity= (пустая строка) — 200, ранний выход из overrideGranularity")
+    void timeSeriesGranularityBlank() throws Exception {
+        mockMvc.perform(get("/dashboard/api/stats/timeseries")
+                        .param("period", "custom")
+                        .param("from", "2026-04-08")
+                        .param("to", "2026-04-15")
+                        .param("granularity", "  ")
+                        .with(user(ADMIN)))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("/stats/users?period=all → topUsers (без period filter)")
+    void usersAllBranch() throws Exception {
+        mockMvc.perform(get("/dashboard/api/stats/users")
+                        .param("period", "all")
+                        .with(user(ADMIN)))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("/stats/users без period → topUsers (period==null branch)")
+    void usersNoPeriodBranch() throws Exception {
+        mockMvc.perform(get("/dashboard/api/stats/users")
+                        .with(user(ADMIN)))
+                .andExpect(status().isOk());
+    }
+
     // ─── /stats/status-breakdown ─────────────────────────────────────────────
 
     @Test

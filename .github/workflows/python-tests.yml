@@ -70,6 +70,7 @@ jobs:
             tests/test_entity_type_guard.py \
             tests/test_main_loop_circuit_breaker.py \
             tests/test_coverage_round3.py \
+            tests/test_coverage_round4.py \
             -v --cov=. --cov-report=term-missing --cov-fail-under=95 --cov-branch
 
   integration:
