@@ -584,11 +584,16 @@ class SubscriptionSchedulerTest {
     void recordFailureExceptionIsGraceful() {
         when(jobProducer.hasActiveProcessingJob()).thenReturn(false);
         when(jobProducer.getQueueLength()).thenReturn(0L);
-        // chat == null → попадаем в ветку errorsCounter + recordFailure
+        // chat есть → enqueueOne идёт → jobProducer.enqueueSubscription бросает → catch на 120
+        //   → recordFailure на 124 бросает → внутренний try/catch ловит (тестируемая ветка)
         ChatSubscription sub = activeSub(8L, 80L, 800L, 24, mskHhMm(12),
                 Instant.now().minusSeconds(25 * 3600L), null);
+        Chat chatStub = chat(800L, "@chat800");
         when(repository.findDueForRun(any())).thenReturn(List.of(sub));
-        when(chatRepository.findAllById(any())).thenReturn(List.of());  // нет chat для 800L
+        when(chatRepository.findAllById(any())).thenReturn(List.of(chatStub));
+        when(jobProducer.enqueueSubscription(anyLong(), anyLong(), anyString(),
+                anyString(), anyString(), anyLong()))
+                .thenThrow(new RuntimeException("Queue full"));
         org.mockito.Mockito.doThrow(new RuntimeException("DB write failed"))
                 .when(subscriptionService).recordFailure(8L);
 

@@ -483,10 +483,13 @@ class ExportEventIngestionServiceTest {
     @DisplayName("повторный chatTitle/canonicalChatId — chatUpserter вызван (мост обновления метаданных)")
     void secondIngestUpdatesChatMetadata() {
         service.ingest(started());
-        // bytes_measured + chatTitle → ветка `chatTitle != null || canonicalChatId != null` срабатывает
+        // bytes_measured + chatTitle + canonicalChatId → ветка `chatTitle != null || canonicalChatId != null`
+        // срабатывает; canonicalChatId обязателен NOT NULL constraint в chats
         service.ingest(StatsEventPayload.builder()
                 .type(StatsEventType.EXPORT_BYTES_MEASURED)
                 .taskId(TASK).bytesCount(2048L)
+                .canonicalChatId("-100777")
+                .chatIdRaw("@chat")
                 .chatTitle("Updated Title")
                 .ts(TS.plusSeconds(20)).build());
 
