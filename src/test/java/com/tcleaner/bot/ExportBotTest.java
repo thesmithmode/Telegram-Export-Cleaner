@@ -3,6 +3,8 @@ package com.tcleaner.bot;
 import com.tcleaner.core.BotLanguage;
 import com.tcleaner.dashboard.events.StatsStreamPublisher;
 import com.tcleaner.dashboard.service.ingestion.BotUserUpserter;
+import com.tcleaner.dashboard.service.subscription.SubscriptionService;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -42,7 +44,7 @@ class ExportBotTest {
     private ExportJobProducer jobProducerMock;
     private BotMessenger messengerMock;
     private BotUserUpserter userUpserterMock;
-    private com.tcleaner.dashboard.service.subscription.SubscriptionService subscriptionServiceMock;
+    private SubscriptionService subscriptionServiceMock;
     private BotSecurityGate securityGateMock;
     private BotI18n i18n;
     private ExportBot bot;
@@ -52,15 +54,13 @@ class ExportBotTest {
         jobProducerMock = mock(ExportJobProducer.class);
         messengerMock = mock(BotMessenger.class);
         userUpserterMock = mock(BotUserUpserter.class);
-        subscriptionServiceMock = mock(com.tcleaner.dashboard.service.subscription.SubscriptionService.class);
+        subscriptionServiceMock = mock(SubscriptionService.class);
         securityGateMock = mock(BotSecurityGate.class);
         when(securityGateMock.isBlocked(anyLong())).thenReturn(false);
         when(securityGateMock.isFlooded(anyLong())).thenReturn(false);
 
-        // По умолчанию — юзер уже выбрал русский (существующая проверка текстов в assertions
-        // построена под русский; тесты, специфичные для выбора языка, явно перекрывают).
         when(userUpserterMock.getLanguage(anyLong())).thenReturn(Optional.of("ru"));
-        when(userUpserterMock.resolveLanguage(anyLong())).thenReturn(com.tcleaner.core.BotLanguage.RU);
+        when(userUpserterMock.resolveLanguage(anyLong())).thenReturn(BotLanguage.RU);
 
         when(jobProducerMock.getActiveExport(anyLong())).thenReturn(null);
         when(jobProducerMock.enqueue(anyLong(), anyLong(), any(String.class), isNull(), isNull()))
@@ -77,15 +77,29 @@ class ExportBotTest {
         when(messengerMock.sendWithKeyboardGetId(anyLong(), anyString(), any())).thenReturn(42);
 
         i18n = new BotI18n(newTestMessageSource());
+        bot = buildBot("https://test.example.com/dashboard/mini-app");
+    }
+
+    private ExportBot buildBot(String miniAppUrl) {
+        BotKeyboards keyboards = new BotKeyboards(i18n);
+        BotSessionRegistry sessionRegistry = new BotSessionRegistry();
+        QueueDisplayBuilder qdBuilder = new QueueDisplayBuilder(i18n);
+
+        ExportBotCommandHandler cmdHandler = new ExportBotCommandHandler(
+                jobProducerMock, messengerMock, i18n, keyboards,
+                sessionRegistry, userUpserterMock, qdBuilder);
+
+        ExportBotCallbackHandler cbHandler = new ExportBotCallbackHandler(
+                jobProducerMock, messengerMock, i18n, keyboards,
+                sessionRegistry, userUpserterMock, subscriptionServiceMock, cmdHandler);
 
         @SuppressWarnings("unchecked")
         ObjectProvider<StatsStreamPublisher> noPublisher = mock(ObjectProvider.class);
         when(noPublisher.getIfAvailable()).thenReturn(null);
-        bot = new ExportBot("token", "https://test.example.com/dashboard/mini-app",
-                jobProducerMock, messengerMock, i18n, new BotKeyboards(i18n),
-                new BotSessionRegistry(), userUpserterMock, noPublisher, subscriptionServiceMock,
-                new io.micrometer.core.instrument.simple.SimpleMeterRegistry(),
-                new QueueDisplayBuilder(i18n), securityGateMock);
+
+        return new ExportBot("token", miniAppUrl, messengerMock, i18n,
+                noPublisher, new SimpleMeterRegistry(), securityGateMock,
+                cmdHandler, cbHandler);
     }
 
     private static ReloadableResourceBundleMessageSource newTestMessageSource() {
@@ -101,7 +115,6 @@ class ExportBotTest {
     @DisplayName("При старте регистрируются slash-команды для default + всех локалей")
     void testRegistersSlashCommandsOnStartup() {
         bot.registerBotCommands();
-        // 1 default + 10 per-locale
         verify(messengerMock, atLeast(11)).setMyCommands(any(), any());
     }
 
@@ -109,7 +122,6 @@ class ExportBotTest {
     @DisplayName("setMyCommands для PT_BR использует 2-буквенный ISO 639-1 (\"pt\"), а не \"pt-BR\"")
     void testPtBrUsesTwoLetterLanguageCodeForTelegramApi() {
         bot.registerBotCommands();
-        // Telegram Bot API requires ISO 639-1 (2 chars). "pt-BR" бы отклонился.
         verify(messengerMock).setMyCommands(any(), eq("pt"));
         verify(messengerMock, never()).setMyCommands(any(), eq("pt-BR"));
     }
@@ -337,7 +349,6 @@ class ExportBotTest {
             bot.consume(createTextMessageUpdate(123L, "@my_channel"));
             bot.consume(createCallbackUpdate(123L, ExportBot.CB_EXPORT_ALL));
 
-            // editMessageId from callback > 0, т.е. storeQueueMsgId вызовется с этим id
             verify(jobProducerMock, atLeast(1))
                     .storeQueueMsgId(eq("export_test_id"), eq(123L), anyInt());
         }
@@ -351,7 +362,7 @@ class ExportBotTest {
         @DisplayName("/start без выбранного языка → клавиатура выбора, не HELP")
         void startWithoutLanguageShowsChooser() {
             when(userUpserterMock.getLanguage(anyLong())).thenReturn(Optional.empty());
-            when(userUpserterMock.resolveLanguage(anyLong())).thenReturn(com.tcleaner.core.BotLanguage.EN);
+            when(userUpserterMock.resolveLanguage(anyLong())).thenReturn(BotLanguage.EN);
 
             bot.consume(createTextMessageUpdate(123L, "/start"));
 
@@ -366,7 +377,7 @@ class ExportBotTest {
         @DisplayName("callback lang:fa сохраняет fa и показывает фарси HELP")
         void callbackPersistsLanguageAndShowsHelp() {
             when(userUpserterMock.getLanguage(anyLong())).thenReturn(Optional.empty());
-            when(userUpserterMock.resolveLanguage(anyLong())).thenReturn(com.tcleaner.core.BotLanguage.EN);
+            when(userUpserterMock.resolveLanguage(anyLong())).thenReturn(BotLanguage.EN);
             bot.consume(createTextMessageUpdate(123L, "/start"));
 
             bot.consume(createCallbackUpdate(123L, ExportBot.CB_LANG_PREFIX + "fa"));
@@ -410,7 +421,7 @@ class ExportBotTest {
         @DisplayName("/start у юзера с en отправляет английский HELP")
         void startWithEnSendsEnglishHelp() {
             when(userUpserterMock.getLanguage(anyLong())).thenReturn(Optional.of("en"));
-            when(userUpserterMock.resolveLanguage(anyLong())).thenReturn(com.tcleaner.core.BotLanguage.EN);
+            when(userUpserterMock.resolveLanguage(anyLong())).thenReturn(BotLanguage.EN);
 
             bot.consume(createTextMessageUpdate(123L, "/start"));
 
@@ -558,26 +569,10 @@ class ExportBotTest {
     @DisplayName("Валидация dashboard.mini-app.url в конструкторе")
     class MiniAppUrlValidation {
 
-        @SuppressWarnings("unchecked")
-        private ObjectProvider<StatsStreamPublisher> emptyPublisher() {
-            ObjectProvider<StatsStreamPublisher> p = mock(ObjectProvider.class);
-            when(p.getIfAvailable()).thenReturn(null);
-            return p;
-        }
-
-        private void newBot(String url) {
-            new ExportBot("token", url, jobProducerMock, messengerMock,
-                    i18n, new BotKeyboards(i18n), new BotSessionRegistry(),
-                    userUpserterMock, emptyPublisher(),
-                    mock(com.tcleaner.dashboard.service.subscription.SubscriptionService.class),
-                    new io.micrometer.core.instrument.simple.SimpleMeterRegistry(),
-                    new QueueDisplayBuilder(i18n), securityGateMock);
-        }
-
         @Test
         @DisplayName("http://localhost/... падает — Telegram Mini App требует публичный HTTPS")
         void rejectsLocalhostUrl() {
-            assertThatThrownBy(() -> newBot("http://localhost/dashboard/mini-app"))
+            assertThatThrownBy(() -> buildBot("http://localhost/dashboard/mini-app"))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("dashboard.mini-app.url");
         }
@@ -585,28 +580,28 @@ class ExportBotTest {
         @Test
         @DisplayName("https://localhost:8080/... тоже падает — даже HTTPS с localhost не принимается")
         void rejectsHttpsLocalhostUrl() {
-            assertThatThrownBy(() -> newBot("https://localhost:8080/dashboard/mini-app"))
+            assertThatThrownBy(() -> buildBot("https://localhost:8080/dashboard/mini-app"))
                     .isInstanceOf(IllegalStateException.class);
         }
 
         @Test
         @DisplayName("https://127.0.0.1/... падает")
         void rejectsLoopbackIpUrl() {
-            assertThatThrownBy(() -> newBot("https://127.0.0.1/dashboard/mini-app"))
+            assertThatThrownBy(() -> buildBot("https://127.0.0.1/dashboard/mini-app"))
                     .isInstanceOf(IllegalStateException.class);
         }
 
         @Test
         @DisplayName("http:// (без TLS) падает — Telegram требует HTTPS")
         void rejectsPlainHttpUrl() {
-            assertThatThrownBy(() -> newBot("http://example.com/dashboard/mini-app"))
+            assertThatThrownBy(() -> buildBot("http://example.com/dashboard/mini-app"))
                     .isInstanceOf(IllegalStateException.class);
         }
 
         @Test
         @DisplayName("Публичный HTTPS URL принимается")
         void acceptsPublicHttpsUrl() {
-            assertThatCode(() -> newBot("https://tec.searchingforgamesforever.online/dashboard/mini-app"))
+            assertThatCode(() -> buildBot("https://tec.searchingforgamesforever.online/dashboard/mini-app"))
                     .doesNotThrowAnyException();
         }
     }
