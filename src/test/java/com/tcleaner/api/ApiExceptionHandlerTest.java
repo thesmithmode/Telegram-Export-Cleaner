@@ -1,16 +1,23 @@
 package com.tcleaner.api;
 
 import com.tcleaner.core.TelegramExporter;
+import com.tcleaner.core.TelegramExporterException;
+import jakarta.validation.ConstraintViolationException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.Collections;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -24,6 +31,9 @@ class ApiExceptionHandlerTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private ApiExceptionHandler handler;
 
     @MockitoBean
     private TelegramExporter mockExporter;
@@ -64,6 +74,16 @@ class ApiExceptionHandlerTest {
                     .andExpect(status().isBadRequest())
                     .andExpect(content().contentType("application/json"));
         }
+
+        @Test
+        @DisplayName("должен вернуть 400 при передаче нечислового botUserId (TypeMismatch)")
+        void shouldReturn400OnTypeMismatch() throws Exception {
+            mockMvc.perform(multipart("/api/convert")
+                    .file(dummyFile())
+                    .param("botUserId", "not-a-number"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.message").exists());
+        }
     }
 
     @Nested
@@ -75,8 +95,7 @@ class ApiExceptionHandlerTest {
         void shouldIncludeMessage() throws Exception {
             mockMvc.perform(multipart("/api/convert")
                     .file(dummyFile())
-                    .param("startDate", "bad-date")
-)
+                    .param("startDate", "bad-date"))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.message").exists());
         }
@@ -86,8 +105,7 @@ class ApiExceptionHandlerTest {
         void shouldNotIncludeType() throws Exception {
             mockMvc.perform(multipart("/api/convert")
                     .file(dummyFile())
-                    .param("startDate", "bad-date")
-)
+                    .param("startDate", "bad-date"))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.type").doesNotExist());
         }
@@ -97,8 +115,7 @@ class ApiExceptionHandlerTest {
         void shouldNotIncludeDetails() throws Exception {
             mockMvc.perform(multipart("/api/convert")
                     .file(dummyFile())
-                    .param("startDate", "bad-date")
-)
+                    .param("startDate", "bad-date"))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.details").doesNotExist());
         }
@@ -120,10 +137,48 @@ class ApiExceptionHandlerTest {
         void shouldReturn400OnBadRequest() throws Exception {
             mockMvc.perform(multipart("/api/convert")
                     .file(dummyFile())
-                    .param("startDate", "not-a-date")
-)
+                    .param("startDate", "not-a-date"))
                     .andExpect(status().isBadRequest());
         }
+    }
 
+    @Nested
+    @DisplayName("Прямой вызов хэндлеров (unit)")
+    class DirectHandlerTests {
+
+        @Test
+        @DisplayName("handleConstraintViolation → 400 + error=validation_failed")
+        void handleConstraintViolation_returns400WithValidationFailed() {
+            var ex = new ConstraintViolationException(Collections.emptySet());
+            var response = handler.handleConstraintViolation(ex);
+
+            assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+            assertNotNull(response.getBody());
+            assertEquals("validation_failed", response.getBody().get("error"));
+        }
+
+        @Test
+        @DisplayName("handleExporterException → 400 + error code из исключения")
+        void handleExporterException_returns400WithErrorCode() {
+            var ex = new TelegramExporterException("INVALID_FILE", "плохой формат файла");
+            var response = handler.handleExporterException(ex);
+
+            assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+            assertNotNull(response.getBody());
+            assertEquals("INVALID_FILE", response.getBody().get("error"));
+            assertEquals("плохой формат файла", response.getBody().get("message"));
+        }
+
+        @Test
+        @DisplayName("handleGenericException → 500 + generic message без деталей")
+        void handleGenericException_returns500WithoutDetails() {
+            var ex = new RuntimeException("crash: internal state corrupted");
+            var response = handler.handleGenericException(ex);
+
+            assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
+            assertNotNull(response.getBody());
+            assertEquals("Внутренняя ошибка сервера", response.getBody().get("message"));
+            assertEquals("InternalError", response.getBody().get("type"));
+        }
     }
 }
