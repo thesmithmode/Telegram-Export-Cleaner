@@ -465,8 +465,8 @@ class CoverageRound5Tests {
         @BeforeEach
         void init() {
             BotI18n i18n = mock(BotI18n.class);
-            when(i18n.msg(any(), anyString())).thenReturn("x");
-            when(i18n.msg(any(), anyString(), any())).thenReturn("x");
+            when(i18n.msg(any(BotLanguage.class), anyString())).thenReturn("x");
+            when(i18n.msg(any(BotLanguage.class), anyString(), any())).thenReturn("x");
             kb = new BotKeyboards(i18n);
         }
 
@@ -581,7 +581,7 @@ class CoverageRound5Tests {
             upserter = mock(BotUserUpserter.class);
             subs = mock(SubscriptionService.class);
             cmd = mock(ExportBotCommandHandler.class);
-            when(i18n.msg(any(), anyString())).thenReturn("ok");
+            when(i18n.msg(any(BotLanguage.class), anyString())).thenReturn("ok");
             when(upserter.resolveLanguage(anyLong())).thenReturn(BotLanguage.EN);
             when(registry.get(anyLong())).thenReturn(new UserSession());
             handler = new ExportBotCallbackHandler(jobProducer, messenger, i18n, keyboards,
@@ -671,7 +671,7 @@ class CoverageRound5Tests {
             i18n = mock(BotI18n.class);
             keyboards = mock(BotKeyboards.class);
             upserter = mock(BotUserUpserter.class);
-            when(i18n.msg(any(), anyString())).thenReturn("text");
+            when(i18n.msg(any(BotLanguage.class), anyString())).thenReturn("text");
             when(upserter.resolveLanguage(anyLong())).thenReturn(BotLanguage.EN);
             sched = new ConfirmationScheduler(repo, svc, messenger, i18n, keyboards, upserter, new SimpleMeterRegistry());
         }
@@ -699,7 +699,7 @@ class CoverageRound5Tests {
             ChatSubscription s = ChatSubscription.builder().id(1L).botUserId(10L).build();
             when(repo.findDueForConfirmation(any())).thenReturn(List.of(s));
             doThrow(new RuntimeException("err")).when(svc).markConfirmSent(eq(1L));
-            sched.sendConfirmationPrompts(Instant.now());
+            sched.tick();
             verify(messenger, never()).sendWithKeyboard(anyLong(), anyString(), any());
         }
 
@@ -709,7 +709,7 @@ class CoverageRound5Tests {
             ChatSubscription s = ChatSubscription.builder().id(2L).botUserId(11L).build();
             when(repo.findDueForConfirmation(any())).thenReturn(List.of(s));
             doThrow(new RuntimeException("send fail")).when(messenger).sendWithKeyboard(anyLong(), anyString(), any());
-            sched.sendConfirmationPrompts(Instant.now());
+            sched.tick();
         }
 
         @Test
@@ -717,7 +717,7 @@ class CoverageRound5Tests {
         void promptsOk() {
             ChatSubscription s = ChatSubscription.builder().id(3L).botUserId(12L).build();
             when(repo.findDueForConfirmation(any())).thenReturn(List.of(s));
-            sched.sendConfirmationPrompts(Instant.now());
+            sched.tick();
             verify(svc).markConfirmSent(3L);
             verify(messenger).sendWithKeyboard(eq(12L), anyString(), any());
         }
@@ -728,7 +728,7 @@ class CoverageRound5Tests {
             ChatSubscription s = ChatSubscription.builder().id(4L).botUserId(13L).build();
             when(repo.findDueForArchive(any())).thenReturn(List.of(s));
             doThrow(new RuntimeException("err")).when(svc).archive(eq(4L));
-            sched.archiveUnconfirmed(Instant.now());
+            sched.tick();
         }
 
         @Test
@@ -736,7 +736,7 @@ class CoverageRound5Tests {
         void archiveOk() {
             ChatSubscription s = ChatSubscription.builder().id(5L).botUserId(14L).build();
             when(repo.findDueForArchive(any())).thenReturn(List.of(s));
-            sched.archiveUnconfirmed(Instant.now());
+            sched.tick();
             verify(svc).archive(5L);
             verify(messenger).trySend(eq(14L), anyString());
         }
