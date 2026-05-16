@@ -688,12 +688,13 @@ class ExportBotTest {
     class StartExportErrorPaths {
 
         @Test
-        @DisplayName("Нет chatId в сессии (сессия истекла): сообщение об ошибке, нет enqueue")
+        @DisplayName("Нет chatId в сессии (сессия истекла): send 'session_expired', нет enqueue")
         void nullChatIdSendsSessionExpired() {
-            // CB_EXPORT_ALL без предварительного ввода username → chatId = null
+            // CB_EXPORT_ALL без предварительного ввода username → session.getChatId() == null
+            // → messenger.send (НЕ editMessage), session.reset()
             bot.consume(createCallbackUpdate(50L, ExportBot.CB_EXPORT_ALL));
 
-            verify(messengerMock).editMessage(eq(50L), anyInt(), anyString(), isNull());
+            verify(messengerMock).send(eq(50L), anyString());
             verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString(), any(), any(), any());
         }
 
@@ -702,10 +703,13 @@ class ExportBotTest {
         void activeExportExistsSendsError() {
             when(jobProducerMock.getActiveExport(51L)).thenReturn("existing_task_id");
 
+            // text → handleChatIdentifier → checkActiveExportAndNotify → send #1
             bot.consume(createTextMessageUpdate(51L, "@some_chat"));
+            // callback CB_EXPORT_ALL → startExport → checkActiveExportAndNotify → send #2
             bot.consume(createCallbackUpdate(51L, ExportBot.CB_EXPORT_ALL));
 
-            verify(messengerMock).send(eq(51L), anyString());
+            // Оба пути блокированы → enqueue ни разу не вызван
+            verify(messengerMock, org.mockito.Mockito.atLeastOnce()).send(eq(51L), anyString());
             verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString(), any(), any(), any());
         }
 

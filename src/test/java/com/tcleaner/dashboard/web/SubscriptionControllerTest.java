@@ -479,14 +479,15 @@ class SubscriptionControllerTest {
     }
 
     @Test
-    @DisplayName("create: username-чат (t.me/abc) — chatUpserter получает username")
+    @DisplayName("create: username-чат (@valid_chat) — chatUpserter получает username")
     void create_usernameChat_passesUsernameToUpserter() throws Exception {
+        // BotInputParser.USERNAME_PATTERN требует [a-zA-Z][a-zA-Z0-9_]{3,} — минимум 4 символа
         Instant sinceDate = Instant.parse("2026-04-23T09:00:00Z");
         CreateSubscriptionRequest req = new CreateSubscriptionRequest(
-                "@abc", 24, "09:00", sinceDate);
+                "@valid_chat", 24, "09:00", sinceDate);
 
         Chat chat = stubChat(100L);
-        when(chatUpserter.upsert(eq("abc"), eq("@abc"), any(), any(), any())).thenReturn(chat);
+        when(chatUpserter.upsert(eq("valid_chat"), eq("@valid_chat"), any(), any(), any())).thenReturn(chat);
         when(subscriptionService.create(anyLong(), anyLong(), anyInt(), anyString(), any()))
                 .thenReturn(stubSubscription(10L, 1L));
 
@@ -496,7 +497,7 @@ class SubscriptionControllerTest {
                         .with(user(USER_1)).with(csrf()))
                 .andExpect(status().isCreated());
 
-        verify(chatUpserter).upsert(eq("abc"), eq("@abc"), any(), any(), any());
+        verify(chatUpserter).upsert(eq("valid_chat"), eq("@valid_chat"), any(), any(), any());
     }
 
     // ─── PAUSE/RESUME/DELETE: NoSuchElementException paths ────────────────────
