@@ -274,7 +274,7 @@ services:
       redis-server
       --appendonly yes
       --appendfsync everysec
-      --maxmemory 128mb
+      --maxmemory 256mb
       --maxmemory-policy noeviction
       --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD обязателен}
     volumes:
@@ -287,7 +287,7 @@ services:
       timeout: 3s
       retries: 5
     restart: unless-stopped
-    mem_limit: 256m
+    mem_limit: 512m
     logging:
       driver: "json-file"
       options:
