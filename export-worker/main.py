@@ -275,6 +275,24 @@ class ExportWorker:
         await self.clear_active_processing_job()
         await self.clear_heartbeat(job.task_id)
 
+    async def _try_session_recovery(self) -> bool:
+        try:
+            raw = await self.control_redis.get(settings.REDIS_SESSION_VAULT_KEY)
+            if not raw:
+                logger.warning("SESSION_INVALID: vault key absent, cannot auto-recover")
+                return False
+            new_session = raw.decode() if isinstance(raw, bytes) else raw
+            logger.info("SESSION_INVALID: vault key found, attempting reconnect")
+            if await self.telegram_client.try_reconnect(new_session):
+                await self.control_redis.delete(settings.REDIS_SESSION_VAULT_KEY)
+                logger.info("SESSION_INVALID: auto-recovery succeeded, resuming worker")
+                return True
+            logger.warning("SESSION_INVALID: reconnect with vault session failed")
+            return False
+        except Exception as e:
+            logger.warning(f"SESSION_INVALID: vault recovery error: {e}")
+            return False
+
     async def _alert_admin_session_invalid(self) -> None:
         """Уведомляет администратора о невалидной MTProto-сессии напрямую через
         Bot API (httpx). Не зависит от Pyrogram и MTProto. Никогда не бросает —
@@ -373,10 +391,12 @@ class ExportWorker:
             await self.queue_consumer.mark_job_failed(job.task_id, error, job.subscription_id, job.user_id)
             await self._cleanup_job(job)
 
-            # SESSION_INVALID = permanent (юзер deauth'нулся, force-logout, превышен
-            # лимит сессий). Каждый последующий job тоже сфейлится. Не ждём
-            # consecutive_errors=10 — алертим админа и завершаемся, docker рестартанёт.
+            # SESSION_INVALID = permanent без recovery. Пробуем vault-ключ в Redis:
+            # если там лежит свежий session string — переподключаемся и продолжаем.
+            # При успехе текущий job уже зафейлен, но следующие пойдут нормально.
             if error_reason == "SESSION_INVALID":
+                if await self._try_session_recovery():
+                    return False, job, None, None
                 await self._alert_admin_session_invalid()
                 logger.critical("SESSION_INVALID — terminating worker, requires manual session refresh")
                 sys.exit(1)

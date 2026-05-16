@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     SESSION_NAME: str = "export_worker"  # Will be saved in session/ folder
     TELEGRAM_SESSION_STRING: Optional[str] = None  # Production: string session for stateless auth
     PYROGRAM_LOG_LEVEL: str = "ERROR"
+    REDIS_SESSION_VAULT_KEY: str = "telegram:session:vault"
 
     # Worker
     WORKER_NAME: str = "export-worker-1"

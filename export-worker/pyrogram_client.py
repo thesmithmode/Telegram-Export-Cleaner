@@ -184,6 +184,22 @@ class TelegramClient:
         except Exception as e:
             logger.error(f"Error during disconnect: {e}")
 
+    async def try_reconnect(self, new_session_string: str) -> bool:
+        await self.disconnect()
+        try:
+            self.client = Client(
+                name="export_worker",
+                session_string=new_session_string,
+                api_id=settings.TELEGRAM_API_ID,
+                api_hash=settings.TELEGRAM_API_HASH,
+                workers=settings.MAX_WORKERS,
+            )
+            self.is_connected = False
+            return await self.connect()
+        except Exception as e:
+            logger.error(f"Session vault reconnect failed: {type(e).__name__}: {e}")
+            return False
+
     async def get_chat_history(
         self,
         chat_id: Union[int, str],

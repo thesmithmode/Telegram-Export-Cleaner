@@ -327,6 +327,49 @@ class TestProcessJobErrorMapping:
         assert payload.error_code == "SESSION_INVALID"
 
     @pytest.mark.asyncio
+    async def test_session_invalid_vault_recovery_success(self, worker):
+        """SESSION_INVALID + vault key present + reconnect OK → no exit, job already failed."""
+        from unittest.mock import patch, AsyncMock as _AM
+        worker.telegram_client.verify_and_get_info = _AM(
+            return_value=(False, None, "SESSION_INVALID")
+        )
+        worker.telegram_client.try_reconnect = _AM(return_value=True)
+        worker.control_redis.get = _AM(return_value=b"NEW_SESSION_STRING")
+        worker.control_redis.delete = _AM()
+        worker._alert_admin_session_invalid = _AM()
+        job = ExportRequest(task_id="t1", user_id=1, chat_id=1, user_chat_id=1, limit=0)
+        worker.queue_consumer.mark_job_processing = _AM(return_value=True)
+        worker.queue_consumer.mark_job_failed = _AM(return_value=True)
+
+        with patch("main.sys.exit") as mock_exit:
+            await worker.process_job(job)
+
+        mock_exit.assert_not_called()
+        worker._alert_admin_session_invalid.assert_not_awaited()
+        worker.control_redis.delete.assert_awaited_once()
+        worker.telegram_client.try_reconnect.assert_awaited_once_with("NEW_SESSION_STRING")
+
+    @pytest.mark.asyncio
+    async def test_session_invalid_vault_recovery_reconnect_fails(self, worker):
+        """SESSION_INVALID + vault key present but reconnect fails → exits."""
+        from unittest.mock import patch, AsyncMock as _AM
+        worker.telegram_client.verify_and_get_info = _AM(
+            return_value=(False, None, "SESSION_INVALID")
+        )
+        worker.telegram_client.try_reconnect = _AM(return_value=False)
+        worker.control_redis.get = _AM(return_value=b"BAD_SESSION")
+        worker._alert_admin_session_invalid = _AM()
+        job = ExportRequest(task_id="t1", user_id=1, chat_id=1, user_chat_id=1, limit=0)
+        worker.queue_consumer.mark_job_processing = _AM(return_value=True)
+        worker.queue_consumer.mark_job_failed = _AM(return_value=True)
+
+        with patch("main.sys.exit") as mock_exit:
+            await worker.process_job(job)
+
+        mock_exit.assert_called_once_with(1)
+        worker._alert_admin_session_invalid.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_unknown_reason_falls_back_to_generic_text(self, worker):
         # Если verify_and_get_info вернул reason, которого нет в mapping
         worker.telegram_client.verify_and_get_info = AsyncMock(
