@@ -61,6 +61,11 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Gitleaks scan range BASE^..HEAD. На multi-commit push shallow checkout
+          # не подтягивает parent первого коммита push'а → range не строится →
+          # CI красный без реальных утечек. fetch-depth: 0 решает.
+          fetch-depth: 0
 
       - name: Trivy filesystem scan (CRITICAL — blocking)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0 (pin SHA — теги без префикса 'v' marketplace не резолвит)
