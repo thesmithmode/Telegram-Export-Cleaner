@@ -41,8 +41,12 @@ public class ApiKeyFilter extends OncePerRequestFilter {
             if (!isKeyValid(providedKey)) {
                 log.warn("Попытка доступа к API с неверным ключом: path={}, header_present={}",
                         path, providedKey != null);
-                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                response.getWriter().write("Invalid API Key");
+                ApiErrorWriter.writeJson(
+                    response,
+                    HttpServletResponse.SC_UNAUTHORIZED,
+                    "invalid_api_key",
+                    "Invalid API Key"
+                );
                 return;
             }
         }

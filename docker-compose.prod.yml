@@ -52,6 +52,15 @@ services:
     networks:
       - docker-proxy
     restart: unless-stopped
+    # ВНИМАНИЕ: НЕ ДОБАВЛЯТЬ read_only:true + tmpfs.
+    # Образ tecnativa/docker-socket-proxy на старте делает sed по
+    # /usr/local/etc/haproxy/haproxy.cfg.template и пишет .cfg в ту же папку.
+    # read_only:true блокирует запись → crash loop. tmpfs:/usr/local/etc/haproxy
+    # перекрывает шаблон из образа → `sed: ...template: No such file` → тоже crash.
+    # Каскад: socket-proxy crash → Traefik без docker provider → нет routes →
+    # 404 на ВСЁМ трафике. Health check (docker exec wget localhost:8080) этого
+    # не ловит — обходит Traefik. Деф-ин-депт даёт API-фильтры + docker-proxy сеть.
+    # История: коммиты 288a141 (ввёл read_only), 861ac37 (псевдо-фикс tmpfs), d6e4ef4 (откат).
     mem_limit: 32m
     cpus: '0.05'
     logging:
