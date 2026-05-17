@@ -10,6 +10,7 @@ import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -38,9 +39,12 @@ public class IdempotencyKeyFilter extends OncePerRequestFilter {
     private static final Set<String> MUTATING = Set.of("POST", "PUT", "PATCH", "DELETE");
 
     private final StringRedisTemplate redis;
+    private final boolean failOpen;
 
-    public IdempotencyKeyFilter(StringRedisTemplate redis) {
+    public IdempotencyKeyFilter(StringRedisTemplate redis,
+                                @Value("${api.idempotency.fail-open:true}") boolean failOpen) {
         this.redis = redis;
+        this.failOpen = failOpen;
     }
 
     @Override
@@ -60,9 +64,12 @@ public class IdempotencyKeyFilter extends OncePerRequestFilter {
 
         if (!VALID_KEY.matcher(key).matches()) {
             log.warn("Отклонён Idempotency-Key: невалидный формат, path={}", request.getRequestURI());
-            response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
-            response.setContentType("application/json");
-            response.getWriter().write("{\"error\":\"invalid_idempotency_key\"}");
+            ApiErrorWriter.writeJson(
+                response,
+                HttpServletResponse.SC_BAD_REQUEST,
+                "invalid_idempotency_key",
+                "Invalid Idempotency-Key format"
+            );
             return;
         }
 
@@ -71,16 +78,30 @@ public class IdempotencyKeyFilter extends OncePerRequestFilter {
         try {
             acquired = redis.opsForValue().setIfAbsent(redisKey, "1", TTL);
         } catch (DataAccessException ex) {
-            log.warn("Redis недоступен для Idempotency-Key check, fail-open: {}", ex.getMessage());
-            chain.doFilter(request, response);
+            if (failOpen) {
+                log.warn("Redis недоступен для Idempotency-Key check, fail-open: {}", ex.getMessage());
+                chain.doFilter(request, response);
+                return;
+            }
+            log.warn("Redis недоступен для Idempotency-Key check, fail-closed: {}", ex.getMessage());
+            response.setHeader("Retry-After", "5");
+            ApiErrorWriter.writeJson(
+                response,
+                HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+                "idempotency_backend_unavailable",
+                "Idempotency check backend is unavailable"
+            );
             return;
         }
 
         if (Boolean.FALSE.equals(acquired)) {
             log.info("Дублирующийся запрос отклонён по Idempotency-Key, path={}", request.getRequestURI());
-            response.setStatus(HttpServletResponse.SC_CONFLICT);
-            response.setContentType("application/json");
-            response.getWriter().write("{\"error\":\"duplicate_request\"}");
+            ApiErrorWriter.writeJson(
+                response,
+                HttpServletResponse.SC_CONFLICT,
+                "duplicate_request",
+                "Duplicate request"
+            );
             return;
         }
 

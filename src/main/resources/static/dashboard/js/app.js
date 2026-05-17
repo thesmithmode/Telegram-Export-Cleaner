@@ -340,6 +340,24 @@
         }
     }
 
+    function createElement(tag, props, ...children) {
+        const node = document.createElement(tag);
+        if (props) {
+            Object.entries(props).forEach(([k, v]) => {
+                if (k === "style") { node.style.cssText = v; }
+                else if (k === "text") { node.textContent = v; }
+                else if (k === "href") { node.href = v; }
+                else if (k === "colSpan") { node.colSpan = v; }
+                else { node.setAttribute(k, v); }
+            });
+        }
+        children.forEach(c => {
+            if (c == null || c === false) { return; }
+            node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+        });
+        return node;
+    }
+
     const STATUS_COLORS = {
         completed: "#2b8a3e",
         failed: "#d64545",
@@ -473,7 +491,7 @@
         renderSparkline, renderStatsBar, setCountBadge,
         renderStatusDoughnut, renderKpiSparkline,
         renderTimeseries, renderBarChart, onReady,
-        initSortableTable,
+        initSortableTable, createElement,
     };
 
     // bfcache restore → форсируем свежий запрос с актуальной JSESSIONID.

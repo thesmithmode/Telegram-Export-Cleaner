@@ -2,25 +2,9 @@
     "use strict";
 
     const { fetchJson, formatNumber, formatBytes, readPeriodFromUrl,
-            renderBarChart, setCountBadge, initSortableTable, onReady } = window.Dashboard || {};
+            renderBarChart, setCountBadge, initSortableTable, onReady, createElement } = window.Dashboard || {};
     if (!fetchJson) { return; }
-
-    function el(tag, props, ...children) {
-        const node = document.createElement(tag);
-        if (props) {
-            for (const [k, v] of Object.entries(props)) {
-                if (k === "style") { node.style.cssText = v; }
-                else if (k === "text") { node.textContent = v; }
-                else if (k === "colSpan") { node.colSpan = v; }
-                else { node.setAttribute(k, v); }
-            }
-        }
-        for (const c of children) {
-            if (c == null || c === false) continue;
-            node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
-        }
-        return node;
-    }
+    const el = createElement;
 
     function row(c) {
         const nameNode = c.chatTitle

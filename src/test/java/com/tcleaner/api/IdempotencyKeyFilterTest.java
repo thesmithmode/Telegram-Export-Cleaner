@@ -41,7 +41,7 @@ class IdempotencyKeyFilterTest {
         ops = mock(ValueOperations.class);
         when(redis.opsForValue()).thenReturn(ops);
 
-        filter = new IdempotencyKeyFilter(redis);
+        filter = new IdempotencyKeyFilter(redis, true);
 
         request = mock(HttpServletRequest.class);
         response = mock(HttpServletResponse.class);
@@ -126,6 +126,7 @@ class IdempotencyKeyFilterTest {
         verify(chain, never()).doFilter(request, response);
         verify(response).setStatus(HttpServletResponse.SC_CONFLICT);
         verify(response).setContentType("application/json");
+        verify(response).setCharacterEncoding("UTF-8");
         assertThat(responseContent.toString()).contains("duplicate_request");
     }
 
@@ -222,6 +223,25 @@ class IdempotencyKeyFilterTest {
 
         verify(chain).doFilter(request, response);
         verify(response, never()).setStatus(anyInt());
+    }
+
+    @Test
+    void redisFailureFailClosedReturns503() throws ServletException, IOException {
+        IdempotencyKeyFilter failClosedFilter = new IdempotencyKeyFilter(redis, false);
+        String key = "redis-failure-failclosed-123";
+        when(request.getMethod()).thenReturn("POST");
+        when(request.getRequestURI()).thenReturn("/api/convert");
+        when(request.getHeader("Idempotency-Key")).thenReturn(key);
+        when(ops.setIfAbsent(anyString(), anyString(), any(Duration.class)))
+                .thenThrow(new org.springframework.data.redis.RedisConnectionFailureException("redis down"));
+
+        failClosedFilter.doFilterInternal(request, response, chain);
+
+        verify(chain, never()).doFilter(request, response);
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        verify(response).setHeader("Retry-After", "5");
+        verify(response).setContentType("application/json");
+        assertThat(responseContent.toString()).contains("idempotency_backend_unavailable");
     }
 
     @Test

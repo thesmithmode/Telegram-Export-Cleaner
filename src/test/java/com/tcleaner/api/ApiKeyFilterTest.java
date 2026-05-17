@@ -78,6 +78,10 @@ class ApiKeyFilterTest {
 
         verify(filterChain, never()).doFilter(request, response);
         verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(response).setContentType("application/json");
+        assertThat(responseContent.toString())
+                .contains("\"code\":\"invalid_api_key\"")
+                .contains("\"message\":\"Invalid API Key\"");
     }
 
     @Test
