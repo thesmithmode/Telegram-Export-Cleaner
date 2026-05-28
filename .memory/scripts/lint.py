@@ -16,6 +16,7 @@ import asyncio
 from pathlib import Path
 
 from config import KNOWLEDGE_DIR, REPORTS_DIR, now_iso, today_iso
+from llm_backend import run_text_prompt
 from utils import (
     count_inbound_links,
     extract_wikilinks,
@@ -147,25 +148,21 @@ def check_sparse_articles() -> list[dict]:
 
 async def check_contradictions() -> list[dict]:
     """Use LLM to detect contradictions across articles."""
-    from claude_agent_sdk import (
-        AssistantMessage,
-        ClaudeAgentOptions,
-        ResultMessage,
-        TextBlock,
-        query,
+    article_paths = sorted(
+        str(p.relative_to(KNOWLEDGE_DIR)) for p in list_wiki_articles()
     )
-
-    wiki_content = read_all_wiki_content()
+    article_list = "\n".join(f"- knowledge/{p}" for p in article_paths)
 
     prompt = f"""Review this knowledge base for contradictions, inconsistencies, or
 conflicting claims across articles.
 
-## Knowledge Base
+## Knowledge Base (article paths)
 
-{wiki_content}
+{article_list}
 
 ## Instructions
 
+Read relevant files from the workspace before judging contradictions.
 Look for:
 - Direct contradictions (article A says X, article B says not-X)
 - Inconsistent recommendations (different articles recommend conflicting approaches)
@@ -179,20 +176,8 @@ If no issues found, output exactly: NO_ISSUES
 
 Do NOT output anything else - no preamble, no explanation, just the formatted lines."""
 
-    response = ""
     try:
-        async for message in query(
-            prompt=prompt,
-            options=ClaudeAgentOptions(
-                cwd=str(ROOT_DIR),
-                allowed_tools=[],
-                max_turns=2,
-            ),
-        ):
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        response += block.text
+        response = await run_text_prompt(prompt, ROOT_DIR)
     except Exception as e:
         return [{"severity": "error", "check": "contradiction", "file": "(system)", "detail": f"LLM check failed: {e}"}]
 

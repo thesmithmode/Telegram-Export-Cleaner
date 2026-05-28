@@ -97,7 +97,20 @@
       "Bash(pip show *)",
       "Bash(uv run *)",
       "Bash(uv pip *)",
-      "Bash(git rm *)"
+      "Bash(git rm *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" --max-time 10 https://23.95.166.119/dashboard/ --insecure)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" --max-time 10 http://23.95.166.119:8080/api/health)",
+      "Bash(gsd-sdk query *)",
+      "Bash(git stash *)",
+      "Bash(ssh *)",
+      "Bash(git ls-remote *)",
+      "Bash(git fetch *)",
+      "Bash(git cherry-pick *)",
+      "Bash(git restore *)",
+      "Bash(rm -f docs/CODE_REVIEW_codex-review.md)",
+      "Bash(git tag *)",
+      "Bash(gh release *)",
+      "Bash(xargs grep -l \"exclude\\\\|profile\")"
     ]
   }
 }
