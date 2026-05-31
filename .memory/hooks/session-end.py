@@ -1,17 +1,18 @@
 """
-SessionEnd hook - captures conversation transcript for memory extraction.
+Stop hook - captures conversation transcript for memory extraction.
 
-When a Claude Code session ends, this hook reads the transcript path from
-stdin, extracts conversation context, and spawns flush.py as a background
-process to extract knowledge into the daily log.
+Codex fires Stop when a turn finishes, not only when a session closes.
+This hook reads the transcript path from stdin, extracts conversation
+context, and spawns flush.py as a background process. flush.py throttles
+Stop-originated flushes so active sessions do not write memory on every turn.
 
 The hook itself does NO API calls - only local file I/O for speed (<10s).
 """
 
 from __future__ import annotations
 
-import json
 import logging
+import json
 import os
 import re
 import subprocess
@@ -19,15 +20,16 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Recursion guard: if we were spawned by flush.py (which calls Agent SDK,
-# which runs Claude Code, which would fire this hook again), exit immediately.
-if os.environ.get("CLAUDE_INVOKED_BY"):
-    sys.exit(0)
-
 ROOT = Path(__file__).resolve().parent.parent
 DAILY_DIR = ROOT / "daily"
 SCRIPTS_DIR = ROOT / "scripts"
 STATE_DIR = SCRIPTS_DIR
+sys.path.insert(0, str(SCRIPTS_DIR))
+
+from transcript import discover_codex_transcript, extract_conversation_context
+
+if os.environ.get("CODEX_INVOKED_BY"):
+    sys.exit(0)
 
 logging.basicConfig(
     filename=str(SCRIPTS_DIR / "flush.log"),
@@ -41,59 +43,9 @@ MAX_CONTEXT_CHARS = 15_000
 MIN_TURNS_TO_FLUSH = 1
 
 
-def extract_conversation_context(transcript_path: Path) -> tuple[str, int]:
-    """Read JSONL transcript and extract last ~N conversation turns as markdown."""
-    turns: list[str] = []
-
-    with open(transcript_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-
-            msg = entry.get("message", {})
-            if isinstance(msg, dict):
-                role = msg.get("role", "")
-                content = msg.get("content", "")
-            else:
-                role = entry.get("role", "")
-                content = entry.get("content", "")
-
-            if role not in ("user", "assistant"):
-                continue
-
-            if isinstance(content, list):
-                text_parts = []
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        text_parts.append(block.get("text", ""))
-                    elif isinstance(block, str):
-                        text_parts.append(block)
-                content = "\n".join(text_parts)
-
-            if isinstance(content, str) and content.strip():
-                label = "User" if role == "user" else "Assistant"
-                turns.append(f"**{label}:** {content.strip()}\n")
-
-    recent = turns[-MAX_TURNS:]
-    context = "\n".join(recent)
-
-    if len(context) > MAX_CONTEXT_CHARS:
-        context = context[-MAX_CONTEXT_CHARS:]
-        boundary = context.find("\n**")
-        if boundary > 0:
-            context = context[boundary + 1 :]
-
-    return context, len(recent)
-
-
 def main() -> None:
-    # Read hook input from stdin
-    # Claude Code on Windows may pass paths with unescaped backslashes
+    # Read hook input from stdin.
+    # Windows hook payloads may pass paths with unescaped backslashes.
     try:
         raw_input = sys.stdin.read()
         try:
@@ -108,21 +60,33 @@ def main() -> None:
     session_id = hook_input.get("session_id", "unknown")
     source = hook_input.get("source", "unknown")
     transcript_path_str = hook_input.get("transcript_path", "")
+    cwd = hook_input.get("cwd") or hook_input.get("workspace_root")
 
-    logging.info("SessionEnd fired: session=%s source=%s", session_id, source)
+    logging.info("Stop fired: session=%s source=%s", session_id, source)
 
     if not transcript_path_str or not isinstance(transcript_path_str, str):
-        logging.info("SKIP: no transcript path")
-        return
+        transcript_path = discover_codex_transcript(str(session_id), cwd if isinstance(cwd, str) else None)
+        if not transcript_path:
+            logging.info("SKIP: no transcript path")
+            return
+        logging.info("Resolved transcript: %s", transcript_path)
+    else:
+        transcript_path = Path(transcript_path_str)
 
-    transcript_path = Path(transcript_path_str)
     if not transcript_path.exists():
-        logging.info("SKIP: transcript missing: %s", transcript_path_str)
-        return
+        discovered = discover_codex_transcript(str(session_id), cwd if isinstance(cwd, str) else None)
+        if not discovered:
+            logging.info("SKIP: transcript missing: %s", transcript_path_str)
+            return
+        transcript_path = discovered
+        logging.info("Resolved transcript after missing path: %s", transcript_path)
 
-    # Extract conversation context in the hook (fast, no API calls)
     try:
-        context, turn_count = extract_conversation_context(transcript_path)
+        context, turn_count = extract_conversation_context(
+            transcript_path,
+            max_turns=MAX_TURNS,
+            max_context_chars=MAX_CONTEXT_CHARS,
+        )
     except Exception as e:
         logging.error("Context extraction failed: %s", e)
         return

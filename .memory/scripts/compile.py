@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 
 from config import AGENTS_FILE, CONCEPTS_DIR, CONNECTIONS_DIR, DAILY_DIR, KNOWLEDGE_DIR, now_iso
+from llm_backend import run_edit_prompt, selected_backend
 from utils import (
     file_hash,
     list_raw_files,
@@ -37,30 +38,21 @@ async def compile_daily_log(log_path: Path, state: dict) -> float:
 
     Returns the API cost of the compilation.
     """
-    from claude_agent_sdk import (
-        AssistantMessage,
-        ClaudeAgentOptions,
-        ResultMessage,
-        TextBlock,
-        query,
-    )
-
     log_content = log_path.read_text(encoding="utf-8")
     schema = AGENTS_FILE.read_text(encoding="utf-8")
     wiki_index = read_wiki_index()
 
-    # Read existing articles for context
-    existing_articles_context = ""
-    existing = {}
-    for article_path in list_wiki_articles():
-        rel = article_path.relative_to(KNOWLEDGE_DIR)
-        existing[str(rel)] = article_path.read_text(encoding="utf-8")
-
-    if existing:
-        parts = []
-        for rel_path, content in existing.items():
-            parts.append(f"### {rel_path}\n```markdown\n{content}\n```")
-        existing_articles_context = "\n\n".join(parts)
+    article_paths = sorted(
+        str(p.relative_to(KNOWLEDGE_DIR)) for p in list_wiki_articles()
+    )
+    if article_paths:
+        existing_articles_context = (
+            "The following articles already exist. Read any of them on demand "
+            "with the Read tool before updating; do not duplicate.\n\n"
+            + "\n".join(f"- knowledge/{p}" for p in article_paths)
+        )
+    else:
+        existing_articles_context = ""
 
     timestamp = now_iso()
 
@@ -75,7 +67,7 @@ and extract knowledge into structured wiki articles.
 
 {wiki_index}
 
-## Existing Wiki Articles
+## Existing Wiki Articles (paths only — Read on demand)
 
 {existing_articles_context if existing_articles_context else "(No existing articles yet)"}
 
@@ -124,28 +116,16 @@ Read the daily log above and compile it into wiki articles following the schema 
 - Details section should have 2+ paragraphs
 - Related Concepts section should have 2+ entries
 - Sources section should cite the daily log with specific claims extracted
+
+Make the file changes directly. Keep output concise.
 """
 
     cost = 0.0
 
     try:
-        async for message in query(
-            prompt=prompt,
-            options=ClaudeAgentOptions(
-                cwd=str(ROOT_DIR),
-                system_prompt={"type": "preset", "preset": "claude_code"},
-                allowed_tools=["Read", "Write", "Edit", "Glob", "Grep"],
-                permission_mode="acceptEdits",
-                max_turns=30,
-            ),
-        ):
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        pass  # compilation output - LLM writes files directly
-            elif isinstance(message, ResultMessage):
-                cost = message.total_cost_usd or 0.0
-                print(f"  Cost: ${cost:.4f}")
+        print(f"  Backend: {selected_backend()}")
+        cost = await run_edit_prompt(prompt, ROOT_DIR)
+        print(f"  Cost: ${cost:.4f}")
     except Exception as e:
         print(f"  Error: {e}")
         return 0.0

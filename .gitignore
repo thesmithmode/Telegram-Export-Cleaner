@@ -62,7 +62,6 @@ opencode
 .kilofiles/
 *.kilo.db
 .kilocode/
-AGENTS.md
 QWEN.md
 # Gemini CLI
 .gemini/

@@ -289,7 +289,7 @@ class ExportBotTest {
 
             verify(messengerMock).sendWithKeyboard(
                     eq(123L),
-                    contains("Этот бот экспортирует"),
+                    contains("Бот предназначен"),
                     any(InlineKeyboardMarkup.class));
         }
 
@@ -371,7 +371,7 @@ class ExportBotTest {
                     eq(123L),
                     contains("Please choose your language"),
                     any(InlineKeyboardMarkup.class));
-            verify(messengerMock, never()).send(eq(123L), contains("Этот бот экспортирует"));
+            verify(messengerMock, never()).send(eq(123L), contains("Бот предназначен"));
         }
 
         @Test
@@ -428,7 +428,7 @@ class ExportBotTest {
 
             verify(messengerMock).sendWithKeyboard(
                     eq(123L),
-                    contains("This bot exports"),
+                    contains("This bot is intended"),
                     any(InlineKeyboardMarkup.class));
         }
     }
