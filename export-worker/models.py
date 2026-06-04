@@ -208,6 +208,7 @@ class SendResponsePayload(BaseModel):
     user_chat_id: Optional[int] = Field(None, description="User chat ID to send result")
     user_id: Optional[int] = Field(None, description="Telegram bot user_id for stats (bot_user_id)")
     chat_title: Optional[str] = Field(None, description="Chat title for filename")
+    chat_username: Optional[str] = Field(None, description="Chat username for filename fallback")
     from_date: Optional[str] = Field(None, description="Date range filter start")
     to_date: Optional[str] = Field(None, description="Date range filter end")
     keywords: Optional[str] = Field(None, description="Keywords filter")
