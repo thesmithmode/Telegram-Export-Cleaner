@@ -536,7 +536,8 @@ class ExportWorker:
         chat_info: Optional[dict],
     ) -> None:
         """Отправка результата в Java + mark_completed/failed + counters."""
-        chat_title = chat_info.get('title') or chat_info.get('username') if chat_info else None
+        chat_title = chat_info.get('title') if chat_info else None
+        chat_username = chat_info.get('username') if chat_info else None
 
         # Subscription empty-export: вместо файла отправляем текстовое уведомление
         if job.source == "subscription" and msg_count == 0:
@@ -545,7 +546,7 @@ class ExportWorker:
                 f"sending text notification, skipping file send"
             )
             if job.user_chat_id:
-                chat_label = chat_title or str(job.chat_id)
+                chat_label = chat_title or chat_username or str(job.chat_id)
                 await self.java_client.notify_subscription_empty(
                     job.user_chat_id, chat_label, job.from_date, job.to_date
                 )
@@ -572,6 +573,7 @@ class ExportWorker:
                 actual_count=msg_count,
                 user_chat_id=job.user_chat_id,
                 chat_title=chat_title,
+                chat_username=chat_username,
                 from_date=job.from_date,
                 to_date=job.to_date,
                 keywords=job.keywords,

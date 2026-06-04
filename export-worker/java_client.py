@@ -138,7 +138,10 @@ class JavaBotClient:
         # 3. Deliver cleaned text to user
         if payload.user_chat_id and self.bot_token:
             filename = self._build_filename(
-                payload.chat_title, payload.from_date, payload.to_date
+                payload.chat_title,
+                payload.from_date,
+                payload.to_date,
+                payload.chat_username,
             )
             sent = await self._send_file_to_user(
                 payload.user_chat_id, payload.task_id, cleaned_text, filename=filename
@@ -290,8 +293,10 @@ class JavaBotClient:
         name = re.sub(r'[^\w\s\-.]', '', name, flags=re.ASCII)
         return re.sub(r'\s+', '_', name.strip())[:80] or "export"
 
-    def _build_filename(self, title, f_date, t_date) -> str:
+    def _build_filename(self, title, f_date, t_date, username=None) -> str:
         base = self._sanitize_filename(title) if title else "export"
+        if base == "export" and username:
+            base = self._sanitize_filename(username)
         if f_date and t_date: return f"{base}_{f_date[:10]}_{t_date[:10]}.txt"
         return f"{base}_all.txt"
 

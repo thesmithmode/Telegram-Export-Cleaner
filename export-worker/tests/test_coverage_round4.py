@@ -385,8 +385,11 @@ class TestSendCompletedResult:
         w = self._make()
         job = make_job(source="bot")
         await w._send_completed_result(job, msg_count=0, messages_for_send=[],
-                                       chat_info={"title": "Foo", "username": "@foo"})
+                                       chat_info={"title": "Foo", "username": "foo"})
         w.java_client.send_response.assert_awaited_once()
+        payload = w.java_client.send_response.await_args.args[0]
+        assert payload.chat_title == "Foo"
+        assert payload.chat_username == "foo"
         w.queue_consumer.mark_job_completed.assert_awaited()
         assert w.jobs_processed == 1
 
@@ -411,6 +414,7 @@ class TestSendCompletedResult:
                                        chat_info=None)
         payload = w.java_client.send_response.await_args.args[0]
         assert payload.chat_title is None
+        assert payload.chat_username is None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
