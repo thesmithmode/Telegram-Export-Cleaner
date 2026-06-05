@@ -1,6 +1,5 @@
 package com.tcleaner.api;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -18,11 +17,7 @@ final class ApiErrorWriter {
         response.setStatus(status);
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         response.setContentType("application/json");
-        try {
-            response.getWriter().write(OBJECT_MAPPER.writeValueAsString(new ApiError(code, message)));
-        } catch (JsonProcessingException ex) {
-            throw new IOException("Failed to serialize API error payload", ex);
-        }
+        response.getWriter().write(OBJECT_MAPPER.writeValueAsString(new ApiError(code, message)));
     }
 
     private record ApiError(String code, String message) {}
