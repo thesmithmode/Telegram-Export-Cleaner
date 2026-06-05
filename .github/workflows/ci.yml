@@ -139,7 +139,17 @@ jobs:
 
       - name: Start JAR in background
         run: |
-          java -jar target/telegram-cleaner-1.0.0.jar \
+          JAR_FILE="$(find target -maxdepth 1 -name 'telegram-cleaner-*.jar' \
+            ! -name '*.original' \
+            ! -name '*-sources.jar' \
+            ! -name '*-javadoc.jar' | sort | head -n 1)"
+          if [ -z "$JAR_FILE" ]; then
+            echo "No runnable JAR found in target/"
+            ls -la target || true
+            exit 1
+          fi
+
+          java -jar "$JAR_FILE" \
             --spring.profiles.active=smoke \
             > /tmp/smoke-app.log 2>&1 &
           echo $! > /tmp/smoke-app.pid
