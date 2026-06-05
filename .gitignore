@@ -136,5 +136,8 @@ export-worker/session/
 # GSD/planning scratch (per-session, not committed)
 .planning/
 
+# Local memory/tooling state
+.memory/
+
 # Daily memory logs are local tooling notes, not repo content
 .memory/daily/
