@@ -15,7 +15,7 @@ class ApiErrorWriterTest {
 
         assertThat(response.getStatus()).isEqualTo(400);
         assertThat(response.getCharacterEncoding()).isEqualTo("UTF-8");
-        assertThat(response.getContentType()).isEqualTo("application/json");
+        assertThat(response.getContentType()).isEqualTo("application/json;charset=UTF-8");
         assertThat(response.getContentAsString()).isEqualTo(
             "{\"code\":\"bad\\\"code\",\"message\":\"line1\\nline2\\\\tail\"}"
         );
