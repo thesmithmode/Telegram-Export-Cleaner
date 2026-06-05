@@ -139,10 +139,10 @@ jobs:
 
       - name: Start JAR in background
         run: |
-          JAR_FILE="$(find target -maxdepth 1 -name '*.jar' \
+          JAR_FILE="$(find target -maxdepth 1 -name 'telegram-cleaner-*.jar' \
             ! -name '*.original' \
             ! -name '*-sources.jar' \
-            ! -name '*-javadoc.jar' | head -n 1)"
+            ! -name '*-javadoc.jar' | sort | head -n 1)"
           if [ -z "$JAR_FILE" ]; then
             echo "No runnable JAR found in target/"
             ls -la target || true
