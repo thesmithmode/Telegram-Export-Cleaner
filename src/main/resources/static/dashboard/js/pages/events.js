@@ -38,6 +38,7 @@
 
     function userCell(e) {
         if (e.username) return el("td", null, el("code", { text: "@" + e.username }));
+        if (e.displayName) return el("td", null, el("code", { text: e.displayName }));
         if (e.botUserId) return el("td", null, el("code", { text: String(e.botUserId) }));
         return el("td", { text: "—" });
     }
@@ -68,7 +69,7 @@
     }
 
     function sortValue(e, key) {
-        if (key === "user") { return e.username || String(e.botUserId || ""); }
+        if (key === "user") { return e.username || e.displayName || String(e.botUserId || ""); }
         if (key === "chat") { return e.chatTitle || String(e.canonicalChatId || ""); }
         return e[key];
     }

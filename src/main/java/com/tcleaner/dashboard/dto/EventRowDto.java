@@ -8,6 +8,7 @@ public record EventRowDto(
         String taskId,
         Long botUserId,
         String username,
+        String displayName,
         String chatTitle,
         String canonicalChatId,
         String startedAt,
