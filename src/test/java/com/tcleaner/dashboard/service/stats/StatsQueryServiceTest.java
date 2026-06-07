@@ -311,7 +311,26 @@ class StatsQueryServiceTest {
         if (expectedSize > 0) {
             assertThat(rows).extracting(com.tcleaner.dashboard.dto.EventRowDto::status)
                     .containsOnly(status.toUpperCase(java.util.Locale.ROOT));
+            assertThat(rows).allSatisfy(row -> assertThat(row.displayName()).isNotBlank());
         }
+    }
+
+    @Test
+    @DisplayName("recentEvents: отдаёт displayName, если у пользователя нет username")
+    void recentEventsIncludesDisplayNameWithoutUsername() {
+        botUserRepo.save(BotUser.builder()
+                .botUserId(3L).displayName("Charlie")
+                .firstSeen(Instant.parse("2026-04-14T00:00:00Z"))
+                .lastSeen(Instant.parse("2026-04-14T00:00:00Z"))
+                .totalExports(1).totalMessages(0L).totalBytes(0L).build());
+        eventRepo.save(makeEvent("t4", 3L, chatId,
+                Instant.parse("2026-04-14T13:00:00Z"), ExportStatus.FAILED, 0L, 0L));
+
+        List<com.tcleaner.dashboard.dto.EventRowDto> rows = svc.recentEvents(3L, null, "failed", 10);
+
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).username()).isNull();
+        assertThat(rows.get(0).displayName()).isEqualTo("Charlie");
     }
 
     // ─── userDetail ───────────────────────────────────────────────────────────

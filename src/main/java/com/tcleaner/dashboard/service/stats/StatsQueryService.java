@@ -294,7 +294,7 @@ public class StatsQueryService {
     public List<EventRowDto> recentEvents(Long botUserId, Long chatRefId,
                                           String status, int limit) {
         StringBuilder sql = new StringBuilder(
-                "SELECT e.task_id, e.bot_user_id, u.username, "
+                "SELECT e.task_id, e.bot_user_id, u.username, u.display_name, "
                 + "c.chat_title, c.canonical_chat_id, "
                 + "e.started_at, e.finished_at, e.status, "
                 + "e.messages_count, e.bytes_count, e.source, e.error_message "
@@ -326,7 +326,8 @@ public class StatsQueryService {
         return jdbc.query(sql.toString(),
                 (rs, n) -> new EventRowDto(
                         rs.getString("task_id"), rs.getLong("bot_user_id"),
-                        rs.getString("username"), rs.getString("chat_title"),
+                        rs.getString("username"), rs.getString("display_name"),
+                        rs.getString("chat_title"),
                         rs.getString("canonical_chat_id"),
                         toIso(rs.getString("started_at")), toIso(rs.getString("finished_at")),
                         rs.getString("status"),
