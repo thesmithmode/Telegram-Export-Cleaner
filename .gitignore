@@ -69,7 +69,6 @@ GEMINI.md
 # Claude Code
 .claude/*
 !.claude/settings.json
-!.claude/settings.local.json
 !.claude/autoresearch/
 Index.md
 # Serena MCP
