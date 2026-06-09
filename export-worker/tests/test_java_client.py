@@ -828,6 +828,17 @@ class TestBuildFilename:
         finally:
             p.stop()
 
+    def test_non_ascii_title_sanitizes_username_fallback(self):
+        _, p = _patch_settings()
+        try:
+            client = JavaBotClient()
+            assert (
+                client._build_filename("Александр Гурулев", None, None, "@agurulev")
+                == "agurulev_all.txt"
+            )
+        finally:
+            p.stop()
+
     def test_only_from_date_falls_back_to_all(self):
         _, p = _patch_settings()
         try:
