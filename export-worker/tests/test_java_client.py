@@ -5,6 +5,7 @@ import tempfile
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
+import java_client
 from models import ExportedMessage, SendResponsePayload
 from java_client import JavaBotClient, ProgressTracker, _safe_err
 
@@ -18,6 +19,8 @@ def _patch_settings(**overrides):
     mock.RETRY_BASE_DELAY = overrides.get("RETRY_BASE_DELAY", 0.0)
     mock.RETRY_MAX_DELAY = overrides.get("RETRY_MAX_DELAY", 60.0)
     mock.JAVA_API_KEY = overrides.get("JAVA_API_KEY", "")
+    mock.EXPORT_TEMP_DIR = overrides.get("EXPORT_TEMP_DIR", None)
+    mock.EXPORT_MIN_FREE_DISK_MB = overrides.get("EXPORT_MIN_FREE_DISK_MB", 0)
     return patcher, mock
 
 def _make_client(**overrides):
@@ -28,9 +31,9 @@ def _make_client(**overrides):
 
 
 class _StreamResponse:
-    def __init__(self, status_code: int, body: str):
+    def __init__(self, status_code: int, body: str = "", chunks: list[bytes] | None = None):
         self.status_code = status_code
-        self._body = body.encode("utf-8")
+        self._chunks = chunks if chunks is not None else [body.encode("utf-8")]
 
     async def __aenter__(self):
         return self
@@ -39,7 +42,14 @@ class _StreamResponse:
         return False
 
     async def aiter_bytes(self):
-        yield self._body
+        for chunk in self._chunks:
+            yield chunk
+
+
+class _FailingStreamResponse(_StreamResponse):
+    async def aiter_bytes(self):
+        yield b"partial"
+        raise OSError("disk/network stream failed")
 
 
 class _StreamSideEffect:
@@ -56,6 +66,13 @@ class _StreamSideEffect:
 def _make_temp_json(content: bytes = b'{"test": "data"}') -> str:
     fd, path = tempfile.mkstemp(suffix=".json")
     with os.fdopen(fd, "wb") as f:
+        f.write(content)
+    return path
+
+
+def _make_temp_text(content: str) -> str:
+    fd, path = tempfile.mkstemp(suffix=".txt")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(content)
     return path
 
@@ -148,6 +165,75 @@ class TestUploadFileToJava:
                 assert stream.call_count == 1
             finally:
                 os.unlink(path)
+        finally:
+            p.stop()
+
+    async def test_stream_response_has_no_total_output_cap(self):
+        assert not hasattr(java_client, "MAX_CONVERTED_OUTPUT_BYTES")
+
+        client, p = _make_client(max_retries=0)
+        try:
+            path = _make_temp_json()
+            try:
+                client._http_client.stream = _StreamSideEffect(
+                    _StreamResponse(200, chunks=[b"a" * (1024 * 1024), b"\n##OK##"])
+                )
+                result = await client._upload_file_to_java(path)
+                assert os.path.getsize(result) == 1024 * 1024
+                os.unlink(result)
+            finally:
+                os.unlink(path)
+        finally:
+            p.stop()
+
+    async def test_sentinel_split_between_chunks_is_accepted(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            response = _StreamResponse(
+                200,
+                chunks=[b"hello", b"\n#", b"#OK", b"##"],
+            )
+            result = await client._stream_convert_response_to_file(response, task_id="split")
+            with open(result, "rb") as f:
+                assert f.read() == b"hello"
+            os.unlink(result)
+        finally:
+            p.stop()
+
+    async def test_missing_sentinel_removes_partial_output(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            result = await client._stream_convert_response_to_file(
+                _StreamResponse(200, "partial without sentinel"),
+                task_id="truncated",
+            )
+            assert result is None
+            assert list(tmp_path.glob("tg_cleaned_*")) == []
+        finally:
+            p.stop()
+
+    async def test_stream_exception_removes_partial_output(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            result = await client._stream_convert_response_to_file(
+                _FailingStreamResponse(200),
+                task_id="boom",
+            )
+            assert result is None
+            assert list(tmp_path.glob("tg_cleaned_*")) == []
+        finally:
+            p.stop()
+
+    async def test_low_disk_reserve_fails_and_removes_output(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path), EXPORT_MIN_FREE_DISK_MB=1)
+        try:
+            with patch("java_client.shutil.disk_usage", return_value=MagicMock(free=0)):
+                result = await client._stream_convert_response_to_file(
+                    _StreamResponse(200, "hello\n##OK##"),
+                    task_id="low-disk",
+                )
+            assert result is None
+            assert list(tmp_path.glob("tg_cleaned_*")) == []
         finally:
             p.stop()
 
@@ -328,9 +414,10 @@ class TestSendResponse:
             with patch.object(
                 client, "_upload_file_to_java", new_callable=AsyncMock
             ) as mock_upload, patch.object(
-                client, "_send_file_to_user", new_callable=AsyncMock
+                client, "_send_file_path_to_user", new_callable=AsyncMock
             ) as mock_send:
-                mock_upload.return_value = "cleaned text"
+                cleaned_path = _make_temp_text("cleaned text")
+                mock_upload.return_value = cleaned_path
                 mock_send.return_value = True
 
                 result = await client.send_response(
@@ -347,6 +434,7 @@ class TestSendResponse:
             assert result is True
             mock_upload.assert_called_once()
             mock_send.assert_called_once()
+            assert not os.path.exists(cleaned_path)
         finally:
             p.stop()
 
@@ -359,11 +447,12 @@ class TestSendResponse:
             with patch.object(
                 client, "_upload_file_to_java", new_callable=AsyncMock
             ) as mock_upload, patch.object(
-                client, "_send_file_to_user", new_callable=AsyncMock
+                client, "_send_file_path_to_user", new_callable=AsyncMock
             ) as mock_send, patch.object(
                 client, "notify_user_failure", new_callable=AsyncMock
             ) as mock_notify:
-                mock_upload.return_value = "cleaned text"
+                cleaned_path = _make_temp_text("cleaned text")
+                mock_upload.return_value = cleaned_path
                 mock_send.return_value = False  # delivery failed
 
                 result = await client.send_response(
@@ -378,6 +467,7 @@ class TestSendResponse:
 
             assert result is False
             mock_notify.assert_called_once()
+            assert not os.path.exists(cleaned_path)
         finally:
             p.stop()
 
@@ -418,7 +508,7 @@ class TestSendResponse:
             ) as mock_stream, patch.object(
                 client, "_upload_file_to_java", new_callable=AsyncMock
             ) as mock_upload, patch.object(
-                client, "_send_file_to_user", new_callable=AsyncMock
+                client, "_send_file_path_to_user", new_callable=AsyncMock
             ) as mock_send, patch.object(
                 client, "notify_user_failure", new_callable=AsyncMock
             ) as mock_notify_failure:
@@ -836,6 +926,63 @@ class TestSendFileToUser:
         finally:
             p.stop()
 
+    async def test_file_path_larger_than_part_limit_streams_parts_and_cleans_temp_parts(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            source = tmp_path / "cleaned.txt"
+            source.write_text("line-1\nline-2\nline-3\nline-4\n", encoding="utf-8")
+
+            with patch("java_client.TELEGRAM_MAX_FILE_SIZE_BYTES", 10), \
+                 patch.object(client, "_send_single_file", new_callable=AsyncMock) as send:
+                send.return_value = True
+                result = await client._send_file_path_to_user(123, "task_1", str(source), "big.txt")
+
+            assert result is True
+            assert send.call_count >= 3
+            assert all(not isinstance(call.args[2], (bytes, bytearray)) for call in send.call_args_list)
+            assert list(tmp_path.glob("tg_part_*")) == []
+
+        finally:
+            p.stop()
+
+    async def test_file_part_removed_when_telegram_upload_fails(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            source = tmp_path / "cleaned.txt"
+            source.write_text("line-1\nline-2\nline-3\n", encoding="utf-8")
+
+            with patch("java_client.TELEGRAM_MAX_FILE_SIZE_BYTES", 10), \
+                 patch.object(client, "_send_single_file", new_callable=AsyncMock) as send:
+                send.return_value = False
+                result = await client._send_file_path_to_user(123, "task_1", str(source), "big.txt")
+
+            assert result is False
+            assert send.call_count == 1
+            assert list(tmp_path.glob("tg_part_*")) == []
+
+        finally:
+            p.stop()
+
+    async def test_file_split_keeps_utf8_boundaries(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            content = "😀😀😀😀"
+            source = tmp_path / "unicode.txt"
+            source.write_text(content, encoding="utf-8")
+
+            parts = []
+            async for part_path in client._split_file_by_size(str(source), 5):
+                with open(part_path, "rb") as f:
+                    data = f.read()
+                data.decode("utf-8")
+                parts.append(data)
+                os.unlink(part_path)
+
+            assert b"".join(parts).decode("utf-8") == content
+
+        finally:
+            p.stop()
+
 # ---------- _notify_user_failure ----------------------------------------
 
 @pytest.mark.asyncio
@@ -1247,13 +1394,12 @@ class TestEmptyCleanedTextFromJava:
             messages = [ExportedMessage(id=1, type="message", date="2025-01-01T00:00:00", text="/pin")]
             with patch.object(client, "_stream_to_temp_json", new_callable=AsyncMock) as mock_stream, \
                  patch.object(client, "_upload_file_to_java", new_callable=AsyncMock) as mock_upload, \
-                 patch.object(client, "_send_file_to_user", new_callable=AsyncMock) as mock_send, \
+                 patch.object(client, "_send_file_path_to_user", new_callable=AsyncMock) as mock_send, \
                  patch.object(client, "notify_empty_export", new_callable=AsyncMock) as mock_notify_empty, \
-                 patch.object(client, "notify_user_failure", new_callable=AsyncMock) as mock_notify_fail, \
-                 patch("java_client.os.unlink"), \
-                 patch("java_client.os.path.getsize", return_value=100):
-                mock_stream.return_value = "/tmp/fake.json"
-                mock_upload.return_value = ""  # Java вернула пусто
+                 patch.object(client, "notify_user_failure", new_callable=AsyncMock) as mock_notify_fail:
+                mock_stream.return_value = _make_temp_json()
+                cleaned_path = _make_temp_text("")
+                mock_upload.return_value = cleaned_path
 
                 result = await client.send_response(SendResponsePayload(
                     task_id="durov_bug",
@@ -1269,6 +1415,7 @@ class TestEmptyCleanedTextFromJava:
             mock_notify_empty.assert_called_once()
             mock_send.assert_not_called(), "sendDocument НЕ должен вызываться с пустым текстом"
             mock_notify_fail.assert_not_called(), "Это не failure — не шлём 'Ошибка'"
+            assert not os.path.exists(cleaned_path)
         finally:
             p.stop()
 
@@ -1279,12 +1426,11 @@ class TestEmptyCleanedTextFromJava:
             messages = [ExportedMessage(id=1, type="message", date="2025-01-01T00:00:00", text="x")]
             with patch.object(client, "_stream_to_temp_json", new_callable=AsyncMock) as mock_stream, \
                  patch.object(client, "_upload_file_to_java", new_callable=AsyncMock) as mock_upload, \
-                 patch.object(client, "_send_file_to_user", new_callable=AsyncMock) as mock_send, \
-                 patch.object(client, "notify_empty_export", new_callable=AsyncMock) as mock_notify_empty, \
-                 patch("java_client.os.unlink"), \
-                 patch("java_client.os.path.getsize", return_value=100):
-                mock_stream.return_value = "/tmp/fake.json"
-                mock_upload.return_value = "   \n\t  \n  "
+                 patch.object(client, "_send_file_path_to_user", new_callable=AsyncMock) as mock_send, \
+                 patch.object(client, "notify_empty_export", new_callable=AsyncMock) as mock_notify_empty:
+                mock_stream.return_value = _make_temp_json()
+                cleaned_path = _make_temp_text("   \n\t  \n  ")
+                mock_upload.return_value = cleaned_path
 
                 result = await client.send_response(SendResponsePayload(
                     task_id="t1", status="completed", messages=messages,
@@ -1294,6 +1440,7 @@ class TestEmptyCleanedTextFromJava:
             assert result is True
             mock_notify_empty.assert_called_once()
             mock_send.assert_not_called()
+            assert not os.path.exists(cleaned_path)
         finally:
             p.stop()
 
@@ -1305,12 +1452,11 @@ class TestEmptyCleanedTextFromJava:
             messages = [ExportedMessage(id=1, type="message", date="2025-01-01T00:00:00", text="x")]
             with patch.object(client, "_stream_to_temp_json", new_callable=AsyncMock) as mock_stream, \
                  patch.object(client, "_upload_file_to_java", new_callable=AsyncMock) as mock_upload, \
-                 patch.object(client, "_send_file_to_user", new_callable=AsyncMock) as mock_send, \
-                 patch.object(client, "notify_empty_export", new_callable=AsyncMock) as mock_notify_empty, \
-                 patch("java_client.os.unlink"), \
-                 patch("java_client.os.path.getsize", return_value=100):
-                mock_stream.return_value = "/tmp/fake.json"
-                mock_upload.return_value = "\ufeff\u200b\u200d\u00a0 \n"
+                 patch.object(client, "_send_file_path_to_user", new_callable=AsyncMock) as mock_send, \
+                 patch.object(client, "notify_empty_export", new_callable=AsyncMock) as mock_notify_empty:
+                mock_stream.return_value = _make_temp_json()
+                cleaned_path = _make_temp_text("\ufeff\u200b\u200d\u00a0 \n")
+                mock_upload.return_value = cleaned_path
 
                 result = await client.send_response(SendResponsePayload(
                     task_id="t1", status="completed", messages=messages,
@@ -1320,6 +1466,7 @@ class TestEmptyCleanedTextFromJava:
             assert result is True
             mock_notify_empty.assert_called_once()
             mock_send.assert_not_called()
+            assert not os.path.exists(cleaned_path)
         finally:
             p.stop()
 
@@ -1330,12 +1477,11 @@ class TestEmptyCleanedTextFromJava:
             messages = [ExportedMessage(id=1, type="message", date="2025-01-01T00:00:00", text="hi")]
             with patch.object(client, "_stream_to_temp_json", new_callable=AsyncMock) as mock_stream, \
                  patch.object(client, "_upload_file_to_java", new_callable=AsyncMock) as mock_upload, \
-                 patch.object(client, "_send_file_to_user", new_callable=AsyncMock) as mock_send, \
-                 patch.object(client, "notify_empty_export", new_callable=AsyncMock) as mock_notify_empty, \
-                 patch("java_client.os.unlink"), \
-                 patch("java_client.os.path.getsize", return_value=100):
-                mock_stream.return_value = "/tmp/fake.json"
-                mock_upload.return_value = "Hello, world!"
+                 patch.object(client, "_send_file_path_to_user", new_callable=AsyncMock) as mock_send, \
+                 patch.object(client, "notify_empty_export", new_callable=AsyncMock) as mock_notify_empty:
+                mock_stream.return_value = _make_temp_json()
+                cleaned_path = _make_temp_text("Hello, world!")
+                mock_upload.return_value = cleaned_path
                 mock_send.return_value = True
 
                 result = await client.send_response(SendResponsePayload(
@@ -1346,6 +1492,7 @@ class TestEmptyCleanedTextFromJava:
             assert result is True
             mock_send.assert_called_once()
             mock_notify_empty.assert_not_called()
+            assert not os.path.exists(cleaned_path)
         finally:
             p.stop()
 
@@ -1356,11 +1503,10 @@ class TestEmptyCleanedTextFromJava:
             messages = [ExportedMessage(id=1, type="message", date="2025-01-01T00:00:00", text="x")]
             with patch.object(client, "_stream_to_temp_json", new_callable=AsyncMock) as mock_stream, \
                  patch.object(client, "_upload_file_to_java", new_callable=AsyncMock) as mock_upload, \
-                 patch.object(client, "notify_empty_export", new_callable=AsyncMock) as mock_notify_empty, \
-                 patch("java_client.os.unlink"), \
-                 patch("java_client.os.path.getsize", return_value=100):
-                mock_stream.return_value = "/tmp/fake.json"
-                mock_upload.return_value = ""
+                 patch.object(client, "notify_empty_export", new_callable=AsyncMock) as mock_notify_empty:
+                mock_stream.return_value = _make_temp_json()
+                cleaned_path = _make_temp_text("")
+                mock_upload.return_value = cleaned_path
 
                 result = await client.send_response(SendResponsePayload(
                     task_id="t1", status="completed", messages=messages,
@@ -1369,6 +1515,7 @@ class TestEmptyCleanedTextFromJava:
 
             assert result is True
             mock_notify_empty.assert_not_called()
+            assert not os.path.exists(cleaned_path)
         finally:
             p.stop()
 

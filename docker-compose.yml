@@ -131,6 +131,8 @@ services:
       - WORKER_NAME=${WORKER_NAME:-export-worker-docker}
       - MAX_WORKERS=${MAX_WORKERS:-1}
       - JOB_TIMEOUT=${JOB_TIMEOUT:-1800}
+      - EXPORT_TEMP_DIR=/data/cache/tmp
+      - EXPORT_MIN_FREE_DISK_MB=${EXPORT_MIN_FREE_DISK_MB:-512}
       - MAX_RETRIES=${MAX_RETRIES:-3}
       - RETRY_BASE_DELAY=${RETRY_BASE_DELAY:-1.0}
       - RETRY_MAX_DELAY=${RETRY_MAX_DELAY:-32.0}

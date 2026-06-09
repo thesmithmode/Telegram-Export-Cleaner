@@ -576,6 +576,8 @@ def _patch_jc_settings(**ov):
     m.RETRY_BASE_DELAY = ov.get("RETRY_BASE_DELAY", 0.0)
     m.RETRY_MAX_DELAY = ov.get("RETRY_MAX_DELAY", 60.0)
     m.JAVA_API_KEY = ov.get("JAVA_API_KEY", "")
+    m.EXPORT_TEMP_DIR = ov.get("EXPORT_TEMP_DIR", None)
+    m.EXPORT_MIN_FREE_DISK_MB = ov.get("EXPORT_MIN_FREE_DISK_MB", 0)
     return p, m
 
 

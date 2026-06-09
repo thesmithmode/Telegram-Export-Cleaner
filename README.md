@@ -111,6 +111,8 @@ Java API (POST /api/convert)
 |---|---|
 | `TELEGRAM_SESSION_STRING` | Pyrogram session для стабильной авторизации |
 | `CACHE_MAX_DISK_GB` | Лимит SQLite-кэша (по умолчанию 25 GB) |
+| `EXPORT_TEMP_DIR` | Каталог временных файлов больших экспортов |
+| `EXPORT_MIN_FREE_DISK_MB` | Минимальный резерв свободного диска для streaming export |
 
 Полный список переменных и значения по умолчанию — [`.env.example`](.env.example).
 Описание установки и настройки — [docs/SETUP.md](docs/SETUP.md).

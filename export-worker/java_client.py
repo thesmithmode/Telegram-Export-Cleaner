@@ -5,6 +5,7 @@ import asyncio
 import codecs
 import re
 import os
+import shutil
 import tempfile
 import time
 import unicodedata
@@ -19,7 +20,6 @@ from models import ExportedMessage, SendResponsePayload
 logger = logging.getLogger(__name__)
 
 TELEGRAM_MAX_FILE_SIZE_BYTES = 45 * 1024 * 1024
-MAX_CONVERTED_OUTPUT_BYTES = 256 * 1024 * 1024
 _CONVERT_SENTINEL = b"\n##OK##"
 
 _BOT_TOKEN_RE = re.compile(r'/bot[^/]+/')
@@ -121,14 +121,6 @@ class JavaBotClient:
                 )
             return False
 
-        # Test doubles in older unit tests returned the cleaned text directly.
-        # Production _upload_file_to_java returns an existing temp path.
-        if not os.path.exists(cleaned_path):
-            fd, legacy_path = tempfile.mkstemp(suffix=".txt", prefix="tg_cleaned_legacy_")
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(cleaned_path)
-            cleaned_path = legacy_path
-
         try:
             # Защита от невидимых non-whitespace символов (BOM, ZWSP, ZWJ, форматирование):
             # Java-фильтр пропускает их, Telegram отклоняет sendDocument с пустым телом.
@@ -155,7 +147,7 @@ class JavaBotClient:
                     payload.to_date,
                     payload.chat_username,
                 )
-                sent = await self._send_file_to_user(
+                sent = await self._send_file_path_to_user(
                     payload.user_chat_id, payload.task_id, cleaned_path, filename=filename
                 )
                 if not sent:
@@ -177,7 +169,7 @@ class JavaBotClient:
         messages: Union[list[ExportedMessage], AsyncIterator[ExportedMessage]],
         count: int
     ) -> str:
-        fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="tg_stream_")
+        fd, tmp_path = self._mkstemp(suffix=".json", prefix="tg_stream_")
         try:
             with os.fdopen(fd, "wb") as f:
                 f.write(f'{{"type":"personal_chat","name":"Export","message_count":{count},"messages":['.encode("utf-8"))
@@ -204,6 +196,38 @@ class JavaBotClient:
                 logger.warning(f"Failed to clean up temp file {tmp_path}: {cleanup_err}")
             raise
         return tmp_path
+
+    def _mkstemp(self, suffix: str, prefix: str) -> tuple[int, str]:
+        temp_dir = settings.EXPORT_TEMP_DIR
+        if temp_dir:
+            os.makedirs(temp_dir, exist_ok=True)
+        return tempfile.mkstemp(suffix=suffix, prefix=prefix, dir=temp_dir or None)
+
+    @staticmethod
+    def _min_free_disk_bytes() -> int:
+        return max(0, int(settings.EXPORT_MIN_FREE_DISK_MB)) * 1024 * 1024
+
+    def _has_free_disk_for_write(self, path: str, bytes_to_write: int = 0) -> bool:
+        required = self._min_free_disk_bytes() + max(0, bytes_to_write)
+        if required <= 0:
+            return True
+
+        directory = os.path.dirname(path) or "."
+        try:
+            free = shutil.disk_usage(directory).free
+        except OSError as e:
+            logger.error("Cannot check free disk space for %s: %s", directory, _safe_err(e))
+            return False
+
+        if free < required:
+            logger.error(
+                "Not enough free disk space for export temp file: free=%dMB required=%dMB dir=%s",
+                free // (1024 * 1024),
+                required // (1024 * 1024),
+                directory,
+            )
+            return False
+        return True
 
     async def _iter_list(self, lst):
         for item in lst: yield item
@@ -287,26 +311,27 @@ class JavaBotClient:
         response: httpx.Response,
         task_id: Optional[str] = None,
     ) -> Optional[str]:
-        fd, output_path = tempfile.mkstemp(suffix=".txt", prefix="tg_cleaned_")
+        fd, output_path = self._mkstemp(suffix=".txt", prefix="tg_cleaned_")
         total_size = 0
         tail = b""
+        success = False
         try:
+            if not self._has_free_disk_for_write(output_path):
+                os.close(fd)
+                return None
+
             with os.fdopen(fd, "wb") as out:
                 async for chunk in response.aiter_bytes():
                     if not chunk:
                         continue
                     total_size += len(chunk)
-                    if total_size > MAX_CONVERTED_OUTPUT_BYTES:
-                        logger.error(
-                            "Java /api/convert response exceeded %dMB cap for task %s",
-                            MAX_CONVERTED_OUTPUT_BYTES // (1024 * 1024),
-                            task_id,
-                        )
-                        return None
 
                     buffered = tail + chunk
                     if len(buffered) > len(_CONVERT_SENTINEL):
                         write_len = len(buffered) - len(_CONVERT_SENTINEL)
+                        if not self._has_free_disk_for_write(output_path, write_len):
+                            logger.error("Export temp disk reserve exhausted for task %s", task_id)
+                            return None
                         out.write(buffered[:write_len])
                         tail = buffered[write_len:]
                     else:
@@ -321,9 +346,13 @@ class JavaBotClient:
                     )
                     return None
 
+            success = True
             return output_path
+        except Exception as e:
+            logger.error("Java /api/convert response stream failed for task %s: %s", task_id, _safe_err(e))
+            return None
         finally:
-            if total_size > MAX_CONVERTED_OUTPUT_BYTES or tail != _CONVERT_SENTINEL:
+            if not success:
                 try:
                     os.unlink(output_path)
                 except FileNotFoundError:
@@ -373,9 +402,6 @@ class JavaBotClient:
         return f"{base}_all.txt"
 
     async def _send_file_to_user(self, chat_id, task_id, text, filename) -> bool:
-        if os.path.exists(text):
-            return await self._send_file_path_to_user(chat_id, task_id, text, filename)
-
         text_bytes = text.encode("utf-8")
         if len(text_bytes) <= TELEGRAM_MAX_FILE_SIZE_BYTES:
             return await self._send_single_file(
@@ -407,7 +433,7 @@ class JavaBotClient:
                 return await self._send_single_file(
                     chat_id,
                     task_id,
-                    f.read(),
+                    f,
                     filename,
                     "✅ Экспорт завершен",
                 )
@@ -421,7 +447,7 @@ class JavaBotClient:
                     success = await self._send_single_file(
                         chat_id,
                         task_id,
-                        f.read(),
+                        f,
                         f"part{part_no}_{filename}",
                         f"✅ Часть {part_no}/{total_parts}",
                     )
@@ -435,35 +461,39 @@ class JavaBotClient:
         return True
 
     async def _split_file_by_size(self, file_path: str, max_bytes: int):
-        fd, part_path = tempfile.mkstemp(suffix=".txt", prefix="tg_part_")
+        fd, part_path = self._mkstemp(suffix=".txt", prefix="tg_part_")
         current_size = 0
+        part = None
         try:
             part = os.fdopen(fd, "wb")
             with open(file_path, "rb") as src:
                 for line in src:
-                    if current_size and current_size + len(line) > max_bytes:
-                        part.close()
-                        yield part_path
-                        fd, part_path = tempfile.mkstemp(suffix=".txt", prefix="tg_part_")
-                        part = os.fdopen(fd, "wb")
-                        current_size = 0
+                    start = 0
+                    while start < len(line):
+                        remaining = max_bytes - current_size
+                        if remaining == 0:
+                            part.close()
+                            yield part_path
+                            fd, part_path = self._mkstemp(suffix=".txt", prefix="tg_part_")
+                            part = os.fdopen(fd, "wb")
+                            current_size = 0
+                            remaining = max_bytes
 
-                    if len(line) > max_bytes:
-                        start = 0
-                        while start < len(line):
-                            if current_size == max_bytes:
+                        take = min(remaining, len(line) - start)
+                        take = self._safe_utf8_cut(line[start:], take)
+                        if take == 0:
+                            if current_size:
                                 part.close()
                                 yield part_path
-                                fd, part_path = tempfile.mkstemp(suffix=".txt", prefix="tg_part_")
+                                fd, part_path = self._mkstemp(suffix=".txt", prefix="tg_part_")
                                 part = os.fdopen(fd, "wb")
                                 current_size = 0
-                            take = min(max_bytes - current_size, len(line) - start)
-                            part.write(line[start:start + take])
-                            current_size += take
-                            start += take
-                    else:
-                        part.write(line)
-                        current_size += len(line)
+                                continue
+                            take = min(remaining, len(line) - start)
+
+                        part.write(line[start:start + take])
+                        current_size += take
+                        start += take
 
             part.close()
             if current_size:
@@ -480,6 +510,13 @@ class JavaBotClient:
             except FileNotFoundError:
                 pass
             raise
+
+    @staticmethod
+    def _safe_utf8_cut(data: bytes, max_len: int) -> int:
+        cut = min(max_len, len(data))
+        while cut > 0 and cut < len(data) and (data[cut] & 0b1100_0000) == 0b1000_0000:
+            cut -= 1
+        return cut
 
     def _split_text_by_size(self, text: str, max_bytes: int) -> list[str]:
         parts, current_part, current_size = [], [], 0
@@ -518,13 +555,13 @@ class JavaBotClient:
         )
 
 
-    async def _send_single_file(self, chat_id, task_id, file_bytes, filename, caption) -> bool:
+    async def _send_single_file(self, chat_id, task_id, document, filename, caption) -> bool:
         url = f"https://api.telegram.org/bot{self.bot_token}/sendDocument"
         try:
             response = await self._http_client.post(
                 url,
                 data={"chat_id": chat_id, "caption": caption},
-                files={"document": (filename, file_bytes, "text/plain")},
+                files={"document": (filename, document, "text/plain")},
                 timeout=self._tg_timeout,
             )
             return response.status_code == 200
