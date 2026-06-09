@@ -24,6 +24,8 @@ def _patch_settings(**overrides):
     mock.RETRY_BASE_DELAY = overrides.get("RETRY_BASE_DELAY", 0.0)
     mock.RETRY_MAX_DELAY = overrides.get("RETRY_MAX_DELAY", 60.0)
     mock.JAVA_API_KEY = overrides.get("JAVA_API_KEY", "")
+    mock.EXPORT_TEMP_DIR = overrides.get("EXPORT_TEMP_DIR", None)
+    mock.EXPORT_MIN_FREE_DISK_MB = overrides.get("EXPORT_MIN_FREE_DISK_MB", 0)
     return patcher, mock
 
 
@@ -116,21 +118,21 @@ class TestUploadErrorPaths:
     async def test_file_not_found_returns_none_no_retry(self):
         client, patcher = _make_client(max_retries=3)
         try:
-            client._http_client.post = AsyncMock()
+            client._http_client.stream = MagicMock()
             # FileNotFoundError бросит open()
             result = await client._upload_file_to_java(
                 file_path="/nonexistent/path/result.json"
             )
             assert result is None
-            # No retry — post вызывался 0 раз
-            client._http_client.post.assert_not_called()
+            # No retry — stream вызывался 0 раз
+            client._http_client.stream.assert_not_called()
         finally:
             patcher.stop()
 
     async def test_generic_network_error_retries_and_exhausts(self):
         client, patcher = _make_client(max_retries=2)
         try:
-            client._http_client.post.side_effect = RuntimeError("conn reset")
+            client._http_client.stream = MagicMock(side_effect=RuntimeError("conn reset"))
             fd, tmp = tempfile.mkstemp(suffix=".json")
             os.close(fd)
             with open(tmp, "wb") as f:
@@ -139,7 +141,7 @@ class TestUploadErrorPaths:
                 result = await client._upload_file_to_java(file_path=tmp)
                 assert result is None
                 # retried max_retries+1 раз
-                assert client._http_client.post.await_count == 3
+                assert client._http_client.stream.call_count == 3
             finally:
                 try:
                     os.unlink(tmp)

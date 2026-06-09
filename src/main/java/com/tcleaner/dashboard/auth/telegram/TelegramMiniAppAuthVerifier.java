@@ -16,12 +16,16 @@ public class TelegramMiniAppAuthVerifier {
     private final Clock clock;
 
     public TelegramMiniAppAuthVerifier(String botToken, Clock clock) {
-        try {
-            Mac mac = Mac.getInstance("HmacSHA256");
-            mac.init(new SecretKeySpec("WebAppData".getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
-            this.secretKey = mac.doFinal(botToken.getBytes(StandardCharsets.UTF_8));
-        } catch (Exception e) {
-            throw new IllegalStateException("HmacSHA256 unavailable", e);
+        if (botToken == null || botToken.isBlank()) {
+            this.secretKey = null;
+        } else {
+            try {
+                Mac mac = Mac.getInstance("HmacSHA256");
+                mac.init(new SecretKeySpec("WebAppData".getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+                this.secretKey = mac.doFinal(botToken.getBytes(StandardCharsets.UTF_8));
+            } catch (Exception e) {
+                throw new IllegalStateException("HmacSHA256 unavailable", e);
+            }
         }
         this.clock = clock;
     }
@@ -37,6 +41,10 @@ public class TelegramMiniAppAuthVerifier {
      * Replay в пределах окна закрывается отдельно nonce'ом в {@code TelegramAuthController}.
      */
     public void verify(TelegramMiniAppLoginData data) {
+        if (secretKey == null) {
+            throw new TelegramAuthenticationException(
+                    "Telegram Mini App auth is disabled: bot token is not configured");
+        }
         if (data.hash() == null || data.hash().isBlank()) {
             throw new TelegramAuthenticationException("Отсутствует hash");
         }

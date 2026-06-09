@@ -2,8 +2,10 @@
 import json
 import logging
 import asyncio
+import codecs
 import re
 import os
+import shutil
 import tempfile
 import time
 import unicodedata
@@ -16,6 +18,9 @@ from config import settings
 from models import ExportedMessage, SendResponsePayload
 
 logger = logging.getLogger(__name__)
+
+TELEGRAM_MAX_FILE_SIZE_BYTES = 45 * 1024 * 1024
+_CONVERT_SENTINEL = b"\n##OK##"
 
 _BOT_TOKEN_RE = re.compile(r'/bot[^/]+/')
 
@@ -88,8 +93,9 @@ class JavaBotClient:
             file_size_mb = os.path.getsize(tmp_path) / (1024 * 1024)
             logger.info(f"📤 Streaming {file_size_mb:.2f} MB from disk (task {payload.task_id})")
 
-            # 2. Upload using httpx streaming capabilities
-            cleaned_text = await self._upload_file_to_java(
+            # 2. Upload using httpx streaming capabilities and keep the converted
+            # response on disk. Do not materialize large exports in worker memory.
+            cleaned_path = await self._upload_file_to_java(
                 tmp_path,
                 from_date=payload.from_date,
                 to_date=payload.to_date,
@@ -107,7 +113,7 @@ class JavaBotClient:
             except FileNotFoundError:
                 pass
 
-        if cleaned_text is None:
+        if cleaned_path is None:
             logger.error(f"❌ Java API processing failed for task {payload.task_id}")
             if payload.user_chat_id and self.bot_token:
                 await self.notify_user_failure(
@@ -115,52 +121,55 @@ class JavaBotClient:
                 )
             return False
 
-        # Защита от невидимых non-whitespace символов (BOM, ZWSP, ZWJ, форматирование):
-        # Java-фильтр пропускает их, Telegram отклоняет sendDocument с пустым телом.
-        if not cleaned_text or all(
-            unicodedata.category(c) in ("Cc", "Cf", "Zs", "Zl", "Zp")
-            for c in cleaned_text
-        ):
-            logger.info(
-                f"ℹ️ Task {payload.task_id}: Java returned empty text "
-                f"(actual_count={payload.actual_count}) — notifying user "
-                f"instead of uploading empty document"
-            )
+        try:
+            # Защита от невидимых non-whitespace символов (BOM, ZWSP, ZWJ, форматирование):
+            # Java-фильтр пропускает их, Telegram отклоняет sendDocument с пустым телом.
+            if await self._file_is_effectively_empty(cleaned_path):
+                logger.info(
+                    f"ℹ️ Task {payload.task_id}: Java returned empty text "
+                    f"(actual_count={payload.actual_count}) — notifying user "
+                    f"instead of uploading empty document"
+                )
+                if payload.user_chat_id and self.bot_token:
+                    await self.notify_empty_export(
+                        payload.user_chat_id,
+                        payload.task_id,
+                        payload.from_date,
+                        payload.to_date,
+                    )
+                return True
+
+            # 3. Deliver cleaned text to user
             if payload.user_chat_id and self.bot_token:
-                await self.notify_empty_export(
-                    payload.user_chat_id,
-                    payload.task_id,
+                filename = self._build_filename(
+                    payload.chat_title,
                     payload.from_date,
                     payload.to_date,
+                    payload.chat_username,
                 )
+                sent = await self._send_file_path_to_user(
+                    payload.user_chat_id, payload.task_id, cleaned_path, filename=filename
+                )
+                if not sent:
+                    await self.notify_user_failure(
+                        payload.user_chat_id, payload.task_id,
+                        "Не удалось отправить файл. Попробуйте снова."
+                    )
+                    return False
+
             return True
-
-        # 3. Deliver cleaned text to user
-        if payload.user_chat_id and self.bot_token:
-            filename = self._build_filename(
-                payload.chat_title,
-                payload.from_date,
-                payload.to_date,
-                payload.chat_username,
-            )
-            sent = await self._send_file_to_user(
-                payload.user_chat_id, payload.task_id, cleaned_text, filename=filename
-            )
-            if not sent:
-                await self.notify_user_failure(
-                    payload.user_chat_id, payload.task_id,
-                    "Не удалось отправить файл. Попробуйте снова."
-                )
-                return False
-
-        return True
+        finally:
+            try:
+                os.unlink(cleaned_path)
+            except FileNotFoundError:
+                pass
 
     async def _stream_to_temp_json(
         self,
         messages: Union[list[ExportedMessage], AsyncIterator[ExportedMessage]],
         count: int
     ) -> str:
-        fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="tg_stream_")
+        fd, tmp_path = self._mkstemp(suffix=".json", prefix="tg_stream_")
         try:
             with os.fdopen(fd, "wb") as f:
                 f.write(f'{{"type":"personal_chat","name":"Export","message_count":{count},"messages":['.encode("utf-8"))
@@ -188,6 +197,38 @@ class JavaBotClient:
             raise
         return tmp_path
 
+    def _mkstemp(self, suffix: str, prefix: str) -> tuple[int, str]:
+        temp_dir = settings.EXPORT_TEMP_DIR
+        if temp_dir:
+            os.makedirs(temp_dir, exist_ok=True)
+        return tempfile.mkstemp(suffix=suffix, prefix=prefix, dir=temp_dir or None)
+
+    @staticmethod
+    def _min_free_disk_bytes() -> int:
+        return max(0, int(settings.EXPORT_MIN_FREE_DISK_MB)) * 1024 * 1024
+
+    def _has_free_disk_for_write(self, path: str, bytes_to_write: int = 0) -> bool:
+        required = self._min_free_disk_bytes() + max(0, bytes_to_write)
+        if required <= 0:
+            return True
+
+        directory = os.path.dirname(path) or "."
+        try:
+            free = shutil.disk_usage(directory).free
+        except OSError as e:
+            logger.error("Cannot check free disk space for %s: %s", directory, _safe_err(e))
+            return False
+
+        if free < required:
+            logger.error(
+                "Not enough free disk space for export temp file: free=%dMB required=%dMB dir=%s",
+                free // (1024 * 1024),
+                required // (1024 * 1024),
+                directory,
+            )
+            return False
+        return True
+
     async def _iter_list(self, lst):
         for item in lst: yield item
 
@@ -204,6 +245,7 @@ class JavaBotClient:
         messages_count: Optional[int] = None,
         subscription_id: Optional[int] = None,
     ) -> Optional[str]:
+        """Upload JSON to Java and stream the cleaned text into a temp file."""
         url = f"{self.base_url}/api/convert"
 
         data = {}
@@ -219,39 +261,30 @@ class JavaBotClient:
 
         retry_count = 0
         while retry_count <= self.max_retries:
+            output_path = None
+            keep_output = False
             try:
                 with open(file_path, "rb") as f:
                     files = {"file": ("result.json", f, "application/json")}
-                    response = await self._http_client.post(
+                    async with self._http_client.stream(
+                        "POST",
                         url,
                         files=files,
                         data=data,
-                    )
-
-                if response.status_code == 200:
-                    text = response.text
-                    # Sentinel-проверка: Java пишет "##OK##" в конец stream
-                    # после успешного flush. HTTP 200 + headers уходят ДО
-                    # фактической записи body, поэтому status_code=200 не
-                    # гарантирует целостность. Без sentinel truncated content
-                    # уходил юзеру как успешный экспорт.
-                    sentinel = "\n##OK##"
-                    if not text.endswith(sentinel):
-                        logger.error(
-                            f"Java /api/convert response truncated — sentinel "
-                            f"missing, got {len(text)} bytes ending with "
-                            f"...{text[-50:]!r}"
-                        )
-                        retry_count += 1
-                        if retry_count <= self.max_retries:
-                            await asyncio.sleep(settings.RETRY_BASE_DELAY * retry_count)
-                        continue
-                    # Sentinel найден — отрезаем и возвращаем чистый контент
-                    return text[: -len(sentinel)]
-
-                logger.error(f"Java API error {response.status_code}: {response.text[:200]}")
-                if response.status_code == 400:
-                    return None
+                    ) as response:
+                        if response.status_code == 200:
+                            output_path = await self._stream_convert_response_to_file(
+                                response,
+                                task_id=task_id,
+                            )
+                            if output_path is not None:
+                                keep_output = True
+                                return output_path
+                        else:
+                            err = await self._read_response_preview(response)
+                            logger.error(f"Java API error {response.status_code}: {err}")
+                            if response.status_code == 400:
+                                return None
 
             except (FileNotFoundError, PermissionError) as fs_err:
                 # Файл пропал или /tmp read-only — ретрай бесполезен.
@@ -259,13 +292,81 @@ class JavaBotClient:
                 return None
             except Exception as e:
                 # Прочие OSError (disk full, transient FS issue) и сетевые ошибки → retry.
-                logger.error(f"Upload to Java failed (attempt {retry_count + 1}): {e}")
+                logger.error(f"Upload to Java failed (attempt {retry_count + 1}): {_safe_err(e)}")
+            finally:
+                if output_path is not None and not keep_output:
+                    try:
+                        os.unlink(output_path)
+                    except FileNotFoundError:
+                        pass
 
             retry_count += 1
             if retry_count <= self.max_retries:
                 await asyncio.sleep(settings.RETRY_BASE_DELAY * retry_count)
 
         return None
+
+    async def _stream_convert_response_to_file(
+        self,
+        response: httpx.Response,
+        task_id: Optional[str] = None,
+    ) -> Optional[str]:
+        fd, output_path = self._mkstemp(suffix=".txt", prefix="tg_cleaned_")
+        total_size = 0
+        tail = b""
+        success = False
+        try:
+            if not self._has_free_disk_for_write(output_path):
+                os.close(fd)
+                return None
+
+            with os.fdopen(fd, "wb") as out:
+                async for chunk in response.aiter_bytes():
+                    if not chunk:
+                        continue
+                    total_size += len(chunk)
+
+                    buffered = tail + chunk
+                    if len(buffered) > len(_CONVERT_SENTINEL):
+                        write_len = len(buffered) - len(_CONVERT_SENTINEL)
+                        if not self._has_free_disk_for_write(output_path, write_len):
+                            logger.error("Export temp disk reserve exhausted for task %s", task_id)
+                            return None
+                        out.write(buffered[:write_len])
+                        tail = buffered[write_len:]
+                    else:
+                        tail = buffered
+
+                if tail != _CONVERT_SENTINEL:
+                    logger.error(
+                        "Java /api/convert response truncated — sentinel missing, "
+                        "got %d bytes ending with ...%r",
+                        total_size,
+                        tail[-50:],
+                    )
+                    return None
+
+            success = True
+            return output_path
+        except Exception as e:
+            logger.error("Java /api/convert response stream failed for task %s: %s", task_id, _safe_err(e))
+            return None
+        finally:
+            if not success:
+                try:
+                    os.unlink(output_path)
+                except FileNotFoundError:
+                    pass
+
+    @staticmethod
+    async def _read_response_preview(response: httpx.Response, limit: int = 200) -> str:
+        body = bytearray()
+        async for chunk in response.aiter_bytes():
+            remaining = limit - len(body)
+            if remaining <= 0:
+                break
+            body.extend(chunk[:remaining])
+        return body.decode("utf-8", errors="replace")
 
     @staticmethod
     def _transform_entities(text: str, entities: list[dict]) -> list[dict]:
@@ -300,44 +401,147 @@ class JavaBotClient:
         if f_date and t_date: return f"{base}_{f_date[:10]}_{t_date[:10]}.txt"
         return f"{base}_all.txt"
 
-    async def _send_file_to_user(self, chat_id, task_id, text, filename) -> bool:
-        text_bytes = text.encode("utf-8")
-        
-        # Max 45MB for Telegram Bot API
-        if len(text_bytes) <= 45 * 1024 * 1024:
-            return await self._send_single_file(chat_id, task_id, text_bytes, filename, "✅ Экспорт завершен")
-        
-        parts = self._split_text_by_size(text, 45 * 1024 * 1024)
-        for i, part in enumerate(parts, 1):
-            success = await self._send_single_file(chat_id, task_id, part.encode("utf-8"), f"part{i}_{filename}", f"✅ Часть {i}/{len(parts)}")
-            if not success: return False
+    async def _send_file_path_to_user(self, chat_id, task_id, file_path, filename) -> bool:
+        file_size = os.path.getsize(file_path)
+
+        if file_size <= TELEGRAM_MAX_FILE_SIZE_BYTES:
+            with open(file_path, "rb") as f:
+                return await self._send_single_file(
+                    chat_id,
+                    task_id,
+                    f,
+                    filename,
+                    "✅ Экспорт завершен",
+                )
+
+        part_no = 0
+        async for part_path in self._split_file_by_size(file_path, TELEGRAM_MAX_FILE_SIZE_BYTES):
+            part_no += 1
+            try:
+                with open(part_path, "rb") as f:
+                    success = await self._send_single_file(
+                        chat_id,
+                        task_id,
+                        f,
+                        f"part{part_no}_{filename}",
+                        f"✅ Часть {part_no}",
+                    )
+                if not success:
+                    return False
+            finally:
+                try:
+                    os.unlink(part_path)
+                except FileNotFoundError:
+                    pass
         return True
 
-    async def _send_single_file(self, chat_id, task_id, file_bytes, filename, caption) -> bool:
+    async def _split_file_by_size(self, file_path: str, max_bytes: int):
+        fd, part_path = self._mkstemp(suffix=".txt", prefix="tg_part_")
+        current_size = 0
+        part = None
+        try:
+            part = os.fdopen(fd, "wb")
+            with open(file_path, "rb") as src:
+                for line in src:
+                    start = 0
+                    while start < len(line):
+                        remaining = max_bytes - current_size
+                        if remaining == 0:
+                            part.close()
+                            yield part_path
+                            fd, part_path = self._mkstemp(suffix=".txt", prefix="tg_part_")
+                            part = os.fdopen(fd, "wb")
+                            current_size = 0
+                            remaining = max_bytes
+
+                        take = min(remaining, len(line) - start)
+                        take = self._safe_utf8_cut(line[start:], take)
+                        if take == 0:
+                            if current_size:
+                                part.close()
+                                yield part_path
+                                fd, part_path = self._mkstemp(suffix=".txt", prefix="tg_part_")
+                                part = os.fdopen(fd, "wb")
+                                current_size = 0
+                                continue
+                            take = min(self._utf8_char_width(line[start]), len(line) - start)
+
+                        part.write(line[start:start + take])
+                        current_size += take
+                        start += take
+
+            part.close()
+            if current_size:
+                yield part_path
+            else:
+                os.unlink(part_path)
+        except Exception:
+            try:
+                part.close()
+            except Exception:
+                pass
+            try:
+                os.unlink(part_path)
+            except FileNotFoundError:
+                pass
+            raise
+
+    @staticmethod
+    def _safe_utf8_cut(data: bytes, max_len: int) -> int:
+        cut = min(max_len, len(data))
+        while cut > 0 and cut < len(data) and (data[cut] & 0b1100_0000) == 0b1000_0000:
+            cut -= 1
+        return cut
+
+    @staticmethod
+    def _utf8_char_width(first_byte: int) -> int:
+        if first_byte < 0b1000_0000:
+            return 1
+        if (first_byte & 0b1110_0000) == 0b1100_0000:
+            return 2
+        if (first_byte & 0b1111_0000) == 0b1110_0000:
+            return 3
+        if (first_byte & 0b1111_1000) == 0b1111_0000:
+            return 4
+        return 1
+
+    async def _file_is_effectively_empty(self, file_path: str) -> bool:
+        if os.path.getsize(file_path) == 0:
+            return True
+
+        decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        with open(file_path, "rb") as f:
+            while True:
+                chunk = f.read(1024 * 1024)
+                if not chunk:
+                    break
+                text = decoder.decode(chunk)
+                if any(
+                    unicodedata.category(c) not in ("Cc", "Cf", "Zs", "Zl", "Zp")
+                    for c in text
+                ):
+                    return False
+
+        tail = decoder.decode(b"", final=True)
+        return not any(
+            unicodedata.category(c) not in ("Cc", "Cf", "Zs", "Zl", "Zp")
+            for c in tail
+        )
+
+
+    async def _send_single_file(self, chat_id, task_id, document, filename, caption) -> bool:
         url = f"https://api.telegram.org/bot{self.bot_token}/sendDocument"
         try:
             response = await self._http_client.post(
                 url,
                 data={"chat_id": chat_id, "caption": caption},
-                files={"document": (filename, file_bytes, "text/plain")},
+                files={"document": (filename, document, "text/plain")},
                 timeout=self._tg_timeout,
             )
             return response.status_code == 200
         except Exception as e:
             logger.error(f"Telegram upload failed: {_safe_err(e)}")
             return False
-
-    def _split_text_by_size(self, text: str, max_bytes: int) -> list[str]:
-        parts, lines, current_part, current_size = [], text.split("\n"), [], 0
-        for line in lines:
-            line_bytes = len(line.encode("utf-8")) + 1
-            if current_size + line_bytes > max_bytes and current_part:
-                parts.append("\n".join(current_part))
-                current_part, current_size = [], 0
-            current_part.append(line)
-            current_size += line_bytes
-        if current_part: parts.append("\n".join(current_part))
-        return parts
 
     async def verify_connectivity(self) -> bool:
         try:

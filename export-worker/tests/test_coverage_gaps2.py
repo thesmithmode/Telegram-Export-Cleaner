@@ -7,10 +7,10 @@
 - queue_consumer: connect/disconnect error paths, mark_job_* exception tolerance,
   staging helpers best-effort поведение, get_queue_stats, get_pending_jobs paths,
   recover_staging_jobs, push_job error
-- java_client: _transform_entities, _format_period, _split_text_by_size,
+- java_client: _transform_entities, _format_period,
   _build_filename, _sanitize_filename, _build_progress_bar, _format_eta,
   update_queue_position no-token, notify_empty_export period branches,
-  _send_file_to_user size-based split, verify_connectivity
+  verify_connectivity
 - pyrogram_client: _build_chat_info, disconnect exception, get_topic_name cache,
   get_chat_messages_count error, get_date_range_count paths
 """
@@ -745,21 +745,6 @@ class TestJavaClientUtilities:
         assert _format_eta(3660) == "1 ч 1 мин"
 
 
-class TestSplitTextBySize:
-
-    def test_short_text_single_part(self):
-        client = JavaBotClient.__new__(JavaBotClient)
-        parts = client._split_text_by_size("hello\nworld", max_bytes=1024)
-        assert len(parts) == 1
-
-    def test_long_text_splits(self):
-        client = JavaBotClient.__new__(JavaBotClient)
-        # Ровно 100 строк по ~10 байт, max 50 байт → >= 2 частей
-        text = "\n".join([f"line{i}" for i in range(100)])
-        parts = client._split_text_by_size(text, max_bytes=50)
-        assert len(parts) >= 2
-
-
 class TestBuildFilename:
 
     def test_with_dates(self):
@@ -905,26 +890,6 @@ class TestJavaClientAsyncMethods:
         client._http_client.post = AsyncMock(side_effect=RuntimeError("boom"))
         ok = await client._send_single_file(123, "t1", b"content", "f.txt", "✅")
         assert ok is False
-
-    @pytest.mark.asyncio
-    async def test_send_file_to_user_small_text(self):
-        client = _make_java_client()
-        with patch.object(client, "_send_single_file", AsyncMock(return_value=True)):
-            ok = await client._send_file_to_user(123, "t1", "small text", "f.txt")
-            assert ok is True
-
-    @pytest.mark.asyncio
-    async def test_send_file_to_user_large_text_splits(self):
-        client = _make_java_client()
-        large_text = "line\n" * 100_000  # много строк
-        with patch.object(client, "_split_text_by_size",
-                         return_value=["part1", "part2", "part3"]), \
-             patch.object(client, "_send_single_file", AsyncMock(return_value=True)) as send:
-            # Принудительно превысить порог 45MB
-            huge_text = "x" * (50 * 1024 * 1024)
-            ok = await client._send_file_to_user(123, "t1", huge_text, "f.txt")
-            assert ok is True
-            assert send.call_count == 3
 
     @pytest.mark.asyncio
     async def test_aclose_closes_client(self):

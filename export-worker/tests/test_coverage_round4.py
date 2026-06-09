@@ -17,8 +17,7 @@
   ExportCancelled путь (733-751).
 - java_client: send_response failed-status w/ user notify, actual_count=0 path +
   aclose error swallowing (52-82), Java sentinel mismatch retry (236-247),
-  400-status no-retry (250-251), _send_file_to_user exception 322-323,
-  _split_text_by_size, _send_single_file >45MB split (305-309), verify_connectivity
+  400-status no-retry (250-251), _send_single_file errors, verify_connectivity
   fail (340-343), update_queue_position position=0 vs >0 (440-457), send_progress_update
   edit fail / send fail (520-522), ProgressTracker seed, on_floodwait, finalize.
 - queue_consumer: connect fail (60-62), _reconnect exhaust (82-85), get_job DLQ paths
@@ -30,6 +29,7 @@
 from __future__ import annotations
 
 import json
+import os
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -575,6 +575,8 @@ def _patch_jc_settings(**ov):
     m.RETRY_BASE_DELAY = ov.get("RETRY_BASE_DELAY", 0.0)
     m.RETRY_MAX_DELAY = ov.get("RETRY_MAX_DELAY", 60.0)
     m.JAVA_API_KEY = ov.get("JAVA_API_KEY", "")
+    m.EXPORT_TEMP_DIR = ov.get("EXPORT_TEMP_DIR", None)
+    m.EXPORT_MIN_FREE_DISK_MB = ov.get("EXPORT_MIN_FREE_DISK_MB", 0)
     return p, m
 
 
@@ -654,6 +656,31 @@ class TestJavaClientSendResponse:
             p.stop()
 
 
+class _StreamResponse:
+    def __init__(self, status_code: int, body: str):
+        self.status_code = status_code
+        self._body = body.encode("utf-8")
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def aiter_bytes(self):
+        yield self._body
+
+
+class _StreamSideEffect:
+    def __init__(self, *responses):
+        self.responses = list(responses)
+        self.call_count = 0
+
+    def __call__(self, *args, **kwargs):
+        self.call_count += 1
+        return self.responses.pop(0)
+
+
 @pytest.mark.asyncio
 class TestUploadSentinelAnd400:
 
@@ -662,16 +689,17 @@ class TestUploadSentinelAnd400:
         try:
             jc = JavaBotClient(max_retries=1)
             jc._http_client = AsyncMock()
-            resp = MagicMock()
-            resp.status_code = 200
-            resp.text = "no sentinel here"
-            jc._http_client.post.return_value = resp
+            stream = _StreamSideEffect(
+                _StreamResponse(200, "no sentinel here"),
+                _StreamResponse(200, "no sentinel here"),
+            )
+            jc._http_client.stream = stream
             f = tmp_path / "result.json"
             f.write_bytes(b'{"x":1}')
             result = await jc._upload_file_to_java(file_path=str(f))
             assert result is None
             # max_retries=1 → first try + 1 retry = 2 calls total
-            assert jc._http_client.post.await_count == 2
+            assert stream.call_count == 2
         finally:
             p.stop()
 
@@ -680,14 +708,15 @@ class TestUploadSentinelAnd400:
         try:
             jc = JavaBotClient(max_retries=0)
             jc._http_client = AsyncMock()
-            resp = MagicMock()
-            resp.status_code = 200
-            resp.text = "Hello world\n##OK##"
-            jc._http_client.post.return_value = resp
+            jc._http_client.stream = _StreamSideEffect(
+                _StreamResponse(200, "Hello world\n##OK##")
+            )
             f = tmp_path / "result.json"
             f.write_bytes(b'{"x":1}')
             result = await jc._upload_file_to_java(file_path=str(f))
-            assert result == "Hello world"
+            with open(result, "r", encoding="utf-8") as out:
+                assert out.read() == "Hello world"
+            os.unlink(result)
         finally:
             p.stop()
 
@@ -696,39 +725,14 @@ class TestUploadSentinelAnd400:
         try:
             jc = JavaBotClient(max_retries=3)
             jc._http_client = AsyncMock()
-            resp = MagicMock()
-            resp.status_code = 400
-            resp.text = "Bad request"
-            jc._http_client.post.return_value = resp
+            stream = _StreamSideEffect(_StreamResponse(400, "Bad request"))
+            jc._http_client.stream = stream
             f = tmp_path / "result.json"
             f.write_bytes(b'{"x":1}')
             result = await jc._upload_file_to_java(file_path=str(f))
             assert result is None
             # 400 → break immediately, без retry
-            assert jc._http_client.post.await_count == 1
-        finally:
-            p.stop()
-
-
-class TestSplitTextBySize:
-
-    def test_split_below_threshold_returns_single_chunk(self):
-        p, _ = _patch_jc_settings()
-        try:
-            jc = JavaBotClient()
-            chunks = jc._split_text_by_size("a\nb\nc", 1024)
-            assert chunks == ["a\nb\nc"]
-        finally:
-            p.stop()
-
-    def test_split_above_threshold_creates_multiple(self):
-        p, _ = _patch_jc_settings()
-        try:
-            jc = JavaBotClient()
-            text = "x" * 100 + "\n" + "y" * 100 + "\n" + "z" * 100
-            chunks = jc._split_text_by_size(text, 150)
-            assert len(chunks) >= 2
-
+            assert stream.call_count == 1
         finally:
             p.stop()
 

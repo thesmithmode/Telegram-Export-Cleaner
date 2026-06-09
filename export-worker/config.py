@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     WORKER_NAME: str = "export-worker-1"
     MAX_WORKERS: int = 1
     JOB_TIMEOUT: int = 1800  # 30 minutes (optimized for weak server)
+    EXPORT_TEMP_DIR: Optional[str] = None
+    EXPORT_MIN_FREE_DISK_MB: int = 512
 
     # Main loop circuit breaker: после стольких подряд неудачных итераций
     # ExportWorker.run() делает sys.exit(1), супервизор контейнера перезапускает.
