@@ -795,32 +795,35 @@ class TestBuildFilename:
         finally:
             p.stop()
 
-    def test_non_ascii_title_falls_back_to_username(self):
+    def test_username_has_priority_over_mixed_unicode_title(self):
         _, p = _patch_settings()
         try:
             client = JavaBotClient()
             assert (
-                client._build_filename("Александр Гурулев", None, None, "agurulev")
-                == "agurulev_all.txt"
+                client._build_filename("MIX КИБЕРПОРТАЛ", None, None, "strbypass")
+                == "strbypass_all.txt"
             )
         finally:
             p.stop()
 
-    def test_non_ascii_title_without_username_uses_export_fallback(self):
-        _, p = _patch_settings()
-        try:
-            client = JavaBotClient()
-            assert client._build_filename("Александр Гурулев", None, None) == "export_all.txt"
-        finally:
-            p.stop()
-
-    def test_non_ascii_title_sanitizes_username_fallback(self):
+    def test_unicode_title_without_username_is_preserved(self):
         _, p = _patch_settings()
         try:
             client = JavaBotClient()
             assert (
-                client._build_filename("Александр Гурулев", None, None, "@agurulev")
-                == "agurulev_all.txt"
+                client._build_filename("Александр Гурулев", None, None)
+                == "Александр_Гурулев_all.txt"
+            )
+        finally:
+            p.stop()
+
+    def test_username_priority_strips_at_prefix(self):
+        _, p = _patch_settings()
+        try:
+            client = JavaBotClient()
+            assert (
+                client._build_filename("MIX КИБЕРПОРТАЛ", None, None, "@strbypass")
+                == "strbypass_all.txt"
             )
         finally:
             p.stop()
@@ -850,6 +853,7 @@ class TestBuildFilename:
             result = client._build_filename("Chat/Name: (test)", None, None)
             assert "/" not in result
             assert ":" not in result
+            assert result == "ChatName_test_all.txt"
         finally:
             p.stop()
 
@@ -929,6 +933,26 @@ class TestSendFileToUser:
 
         finally:
             p.stop()
+
+    async def test_large_file_parts_use_resolved_username_filename(self, tmp_path):
+        client = JavaBotClient.__new__(JavaBotClient)
+        source = tmp_path / "cleaned.txt"
+        source.write_bytes(b"abcdef")
+
+        with patch("java_client.TELEGRAM_MAX_FILE_SIZE_BYTES", 5), \
+             patch("java_client.settings.EXPORT_TEMP_DIR", str(tmp_path)), \
+             patch.object(client, "_send_single_file", new_callable=AsyncMock) as send:
+            send.return_value = True
+            result = await client._send_file_path_to_user(
+                123,
+                "task_1",
+                str(source),
+                "strbypass_all.txt",
+            )
+
+        assert result is True
+        filenames = [call.args[3] for call in send.call_args_list]
+        assert filenames == ["part1_strbypass_all.txt", "part2_strbypass_all.txt"]
 
     async def test_file_part_removed_when_telegram_upload_fails(self, tmp_path):
         client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))

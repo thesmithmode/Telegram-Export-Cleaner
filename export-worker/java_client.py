@@ -391,13 +391,12 @@ class JavaBotClient:
 
     @staticmethod
     def _sanitize_filename(name: str) -> str:
-        name = re.sub(r'[^\w\s\-.]', '', name, flags=re.ASCII)
+        name = re.sub(r'[^\w\s\-.]', '', name)
         return re.sub(r'\s+', '_', name.strip())[:80] or "export"
 
     def _build_filename(self, title, f_date, t_date, username=None) -> str:
-        base = self._sanitize_filename(title) if title else "export"
-        if base == "export" and username:
-            base = self._sanitize_filename(username)
+        base_source = username or title or "export"
+        base = self._sanitize_filename(base_source)
         if f_date and t_date: return f"{base}_{f_date[:10]}_{t_date[:10]}.txt"
         return f"{base}_all.txt"
 
