@@ -731,6 +731,127 @@ class TestSendResponse:
         finally:
             p.stop()
 
+class TestDirectCachedResponse:
+
+    def test_format_cached_message_line_matches_java_shape(self):
+        msg = ExportedMessage(
+            id=1,
+            type="message",
+            date="2026-06-09T12:34:56",
+            text="hello\r\nworld",
+        )
+
+        line = JavaBotClient._format_cached_message_line(msg)
+
+        assert line == "20260609 hello world"
+        assert JavaBotClient._format_java_export_date("2026-06-09T12:00:00+00:00") == ""
+
+    @pytest.mark.parametrize(
+        "msg",
+        [
+            ExportedMessage(id=1, type="service", date="2026-06-09T12:00:00", text="x"),
+            ExportedMessage(id=2, type="message", date="", text="x"),
+            ExportedMessage(id=3, type="message", date="not-a-date", text="x"),
+            ExportedMessage(id=4, type="message", date="2026-06-09T12:00:00", text="   "),
+        ],
+    )
+    def test_format_cached_message_line_skips_java_skipped_messages(self, msg):
+        assert JavaBotClient._format_cached_message_line(msg) is None
+
+    def test_format_cached_message_line_applies_keywords(self):
+        msg = ExportedMessage(
+            id=1,
+            type="message",
+            date="2026-06-09T12:00:00",
+            text="Alpha beta gamma",
+        )
+
+        assert JavaBotClient._format_cached_message_line(
+            msg, include_keywords=["beta"], exclude_keywords=[]
+        ) == "20260609 Alpha beta gamma"
+        assert JavaBotClient._format_cached_message_line(
+            msg, include_keywords=["missing"], exclude_keywords=[]
+        ) is None
+        assert JavaBotClient._format_cached_message_line(
+            msg, include_keywords=[], exclude_keywords=["gamma"]
+        ) is None
+
+    @pytest.mark.asyncio
+    async def test_direct_cached_response_writes_txt_and_skips_java_upload(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            messages = [
+                ExportedMessage(id=1, type="message", date="2026-06-09T12:00:00", text="Keep"),
+                ExportedMessage(id=2, type="message", date="2026-06-09T12:01:00", text="Drop"),
+            ]
+            captured = {}
+
+            async def fake_send(chat_id, task_id, file_path, filename):
+                captured["chat_id"] = chat_id
+                captured["filename"] = filename
+                with open(file_path, encoding="utf-8") as f:
+                    captured["content"] = f.read()
+                return True
+
+            with patch.object(
+                client, "_upload_file_to_java", new_callable=AsyncMock
+            ) as mock_upload, patch.object(
+                client, "_send_file_path_to_user", side_effect=fake_send
+            ) as mock_send:
+                success, bytes_count = await client.send_cached_response_direct(
+                    SendResponsePayload(
+                        task_id="direct_1",
+                        status="completed",
+                        messages=messages,
+                        actual_count=2,
+                        user_chat_id=42,
+                        chat_title="Direct Chat",
+                        keywords="keep",
+                    )
+                )
+
+            assert success is True
+            assert bytes_count == len("20260609 Keep\n".encode("utf-8"))
+            assert captured["chat_id"] == 42
+            assert captured["filename"] == "Direct_Chat_all.txt"
+            assert captured["content"] == "20260609 Keep\n"
+            mock_upload.assert_not_called()
+            mock_send.assert_called_once()
+            assert list(tmp_path.glob("tg_direct_*")) == []
+        finally:
+            p.stop()
+
+    @pytest.mark.asyncio
+    async def test_direct_cached_response_empty_after_filter_notifies_without_upload(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            messages = [
+                ExportedMessage(id=1, type="message", date="2026-06-09T12:00:00", text="Drop"),
+            ]
+            with patch.object(
+                client, "_send_file_path_to_user", new_callable=AsyncMock
+            ) as mock_send, patch.object(
+                client, "notify_empty_export", new_callable=AsyncMock
+            ) as mock_notify:
+                success, bytes_count = await client.send_cached_response_direct(
+                    SendResponsePayload(
+                        task_id="direct_empty",
+                        status="completed",
+                        messages=messages,
+                        actual_count=1,
+                        user_chat_id=42,
+                        keywords="missing",
+                    )
+                )
+
+            assert success is True
+            assert bytes_count == 0
+            mock_notify.assert_called_once()
+            mock_send.assert_not_called()
+            assert list(tmp_path.glob("tg_direct_*")) == []
+        finally:
+            p.stop()
+
 # ---------- _transform_entities (static) --------------------------------
 
 class TestEntityTransformation:

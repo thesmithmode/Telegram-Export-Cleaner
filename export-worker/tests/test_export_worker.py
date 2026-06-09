@@ -12,6 +12,7 @@ from models import ExportRequest, ExportedMessage
 def _make_mock_java_client():
     client = AsyncMock()
     client.send_progress_update = AsyncMock(return_value=12345)
+    client.send_cached_response_direct = AsyncMock(return_value=(True, 123))
     client.create_progress_tracker = lambda uid, tid, topic_name=None: ProgressTracker(client, uid, tid, topic_name=topic_name)
     return client
 
@@ -409,8 +410,9 @@ class TestThreePathCaching:
         )
 
         # Java получил ответ с 10 сообщениями
-        worker.java_client.send_response.assert_called_once()
-        payload = worker.java_client.send_response.call_args[0][0]
+        worker.java_client.send_cached_response_direct.assert_awaited_once()
+        worker.java_client.send_response.assert_not_called()
+        payload = worker.java_client.send_cached_response_direct.await_args.args[0]
         assert payload.status == "completed"
         assert payload.task_id == "date_hit_task"
 
@@ -550,7 +552,48 @@ class TestThreePathCaching:
 
         # Ranges смерджились в один непрерывный [1, 60]
         id_ranges = await worker.message_cache.get_cached_ranges(CHAT_ID)
+        worker.java_client.send_cached_response_direct.assert_awaited_once()
+        worker.java_client.send_response.assert_not_called()
+        completed_kwargs = worker.queue_consumer.mark_job_completed.call_args.kwargs
+        assert completed_kwargs["bot_user_id"] == 1
+        assert completed_kwargs["messages_count"] == 60
+        assert completed_kwargs["bytes_count"] == 123
         assert id_ranges == [[1, 60]], f"Ranges должны смерджиться в [[1,60]], получено: {id_ranges}"
+
+    @pytest.mark.asyncio
+    async def test_direct_cache_export_flag_off_uses_java_path(self, worker_with_cache):
+        worker = worker_with_cache
+        CHAT_ID = 555099
+        await worker.message_cache.store_messages(
+            CHAT_ID,
+            [ExportedMessage(id=1, date="2025-01-01T10:00:00", text="cached")],
+        )
+
+        async def empty_history(*args, **kwargs):
+            if False:  # pragma: no cover
+                yield None
+
+        worker.telegram_client.get_chat_history = empty_history
+        worker.telegram_client.verify_and_get_info = AsyncMock(
+            return_value=(True, {"id": CHAT_ID, "title": "Cached Chat", "type": "supergroup"}, None)
+        )
+        worker.telegram_client.get_messages_count = AsyncMock(return_value=1)
+
+        job = ExportRequest(
+            task_id="direct_off_task",
+            user_id=1,
+            user_chat_id=1,
+            chat_id=CHAT_ID,
+            limit=0,
+            offset_id=0,
+        )
+
+        with patch("main.settings.WORKER_DIRECT_CACHE_EXPORT", False):
+            result = await worker.process_job(job)
+
+        assert result is True
+        worker.java_client.send_cached_response_direct.assert_not_called()
+        worker.java_client.send_response.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_id_path_full_miss_triggers_full_fetch(self, worker_with_cache):

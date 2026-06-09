@@ -50,6 +50,7 @@ class ExportWorker:
         self.running = False
         self.jobs_processed = 0
         self.jobs_failed = 0
+        self._last_export_direct_cache_eligible = False
         self._cache_stats_task: Optional[asyncio.Task] = None
 
     @property
@@ -478,6 +479,7 @@ class ExportWorker:
         messages_for_send = None
         msg_count = 0
         cache_was_tried = False
+        self._last_export_direct_cache_eligible = False
 
         if self.message_cache and self.message_cache.enabled:
             cache_was_tried = True
@@ -487,6 +489,7 @@ class ExportWorker:
                 result = await self._export_with_id_cache(job, topic_name)
             if result is not None:
                 msg_count, messages_for_send = result
+                self._last_export_direct_cache_eligible = True
 
         # Если кэш вернул None — сначала проверяем отмену (не гоним в fallback зря)
         if messages_for_send is None and cache_was_tried:
@@ -565,8 +568,7 @@ class ExportWorker:
         # Heartbeat перед Java-стадией: fetch закончен, cancel-poll больше
         # не тикает, а /api/convert на 300k сообщений может жить минутами.
         await self.heartbeat(job.task_id, stage="convert")
-        success = await self.java_client.send_response(
-            SendResponsePayload(
+        payload = SendResponsePayload(
                 task_id=job.task_id,
                 status="completed",
                 messages=messages_for_send,
@@ -579,8 +581,20 @@ class ExportWorker:
                 keywords=job.keywords,
                 exclude_keywords=job.exclude_keywords,
                 subscription_id=job.subscription_id,
-            )
+                user_id=job.user_id,
         )
+        direct_cache_export = bool(
+            settings.WORKER_DIRECT_CACHE_EXPORT
+            and self._last_export_direct_cache_eligible
+            and self.message_cache
+            and self.message_cache.enabled
+            and msg_count > 0
+        )
+        direct_bytes_count = None
+        if direct_cache_export:
+            success, direct_bytes_count = await self.java_client.send_cached_response_direct(payload)
+        else:
+            success = await self.java_client.send_response(payload)
 
         if success:
             logger.info(f"✅ Job {job.task_id} completed ({msg_count} messages)")
@@ -588,8 +602,14 @@ class ExportWorker:
             # поэтому TelegramController не публикует export.completed в stats:events.
             # Передаём bot_user_id чтобы queue_consumer сам опубликовал событие
             # и дашборд сменил статус QUEUED → COMPLETED.
-            bot_user_id_for_event = job.user_id if msg_count == 0 else None
-            await self.queue_consumer.mark_job_completed(job.task_id, bot_user_id=bot_user_id_for_event)
+            bot_user_id_for_event = job.user_id if (msg_count == 0 or direct_cache_export) else None
+            await self.queue_consumer.mark_job_completed(
+                job.task_id,
+                bot_user_id=bot_user_id_for_event,
+                subscription_id=job.subscription_id if direct_cache_export else None,
+                messages_count=msg_count if direct_cache_export else None,
+                bytes_count=direct_bytes_count if direct_cache_export else None,
+            )
             self.jobs_processed += 1
             self.log_memory_usage("JOB_DONE")
         else:
