@@ -17,8 +17,7 @@
   ExportCancelled путь (733-751).
 - java_client: send_response failed-status w/ user notify, actual_count=0 path +
   aclose error swallowing (52-82), Java sentinel mismatch retry (236-247),
-  400-status no-retry (250-251), _send_file_to_user exception 322-323,
-  _split_text_by_size, _send_single_file >45MB split (305-309), verify_connectivity
+  400-status no-retry (250-251), _send_single_file errors, verify_connectivity
   fail (340-343), update_queue_position position=0 vs >0 (440-457), send_progress_update
   edit fail / send fail (520-522), ProgressTracker seed, on_floodwait, finalize.
 - queue_consumer: connect fail (60-62), _reconnect exhaust (82-85), get_job DLQ paths
@@ -734,29 +733,6 @@ class TestUploadSentinelAnd400:
             assert result is None
             # 400 → break immediately, без retry
             assert stream.call_count == 1
-        finally:
-            p.stop()
-
-
-class TestSplitTextBySize:
-
-    def test_split_below_threshold_returns_single_chunk(self):
-        p, _ = _patch_jc_settings()
-        try:
-            jc = JavaBotClient()
-            chunks = jc._split_text_by_size("a\nb\nc", 1024)
-            assert chunks == ["a\nb\nc"]
-        finally:
-            p.stop()
-
-    def test_split_above_threshold_creates_multiple(self):
-        p, _ = _patch_jc_settings()
-        try:
-            jc = JavaBotClient()
-            text = "x" * 100 + "\n" + "y" * 100 + "\n" + "z" * 100
-            chunks = jc._split_text_by_size(text, 150)
-            assert len(chunks) >= 2
-
         finally:
             p.stop()
 

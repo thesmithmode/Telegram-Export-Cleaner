@@ -401,30 +401,6 @@ class JavaBotClient:
         if f_date and t_date: return f"{base}_{f_date[:10]}_{t_date[:10]}.txt"
         return f"{base}_all.txt"
 
-    async def _send_file_to_user(self, chat_id, task_id, text, filename) -> bool:
-        text_bytes = text.encode("utf-8")
-        if len(text_bytes) <= TELEGRAM_MAX_FILE_SIZE_BYTES:
-            return await self._send_single_file(
-                chat_id,
-                task_id,
-                text_bytes,
-                filename,
-                "✅ Экспорт завершен",
-            )
-
-        parts = self._split_text_by_size(text, TELEGRAM_MAX_FILE_SIZE_BYTES)
-        for i, part in enumerate(parts, 1):
-            success = await self._send_single_file(
-                chat_id,
-                task_id,
-                part.encode("utf-8"),
-                f"part{i}_{filename}",
-                f"✅ Часть {i}/{len(parts)}",
-            )
-            if not success:
-                return False
-        return True
-
     async def _send_file_path_to_user(self, chat_id, task_id, file_path, filename) -> bool:
         file_size = os.path.getsize(file_path)
 
@@ -438,7 +414,6 @@ class JavaBotClient:
                     "✅ Экспорт завершен",
                 )
 
-        total_parts = (file_size + TELEGRAM_MAX_FILE_SIZE_BYTES - 1) // TELEGRAM_MAX_FILE_SIZE_BYTES
         part_no = 0
         async for part_path in self._split_file_by_size(file_path, TELEGRAM_MAX_FILE_SIZE_BYTES):
             part_no += 1
@@ -449,7 +424,7 @@ class JavaBotClient:
                         task_id,
                         f,
                         f"part{part_no}_{filename}",
-                        f"✅ Часть {part_no}/{total_parts}",
+                        f"✅ Часть {part_no}",
                     )
                 if not success:
                     return False
@@ -489,7 +464,7 @@ class JavaBotClient:
                                 part = os.fdopen(fd, "wb")
                                 current_size = 0
                                 continue
-                            take = min(remaining, len(line) - start)
+                            take = min(self._utf8_char_width(line[start]), len(line) - start)
 
                         part.write(line[start:start + take])
                         current_size += take
@@ -518,18 +493,17 @@ class JavaBotClient:
             cut -= 1
         return cut
 
-    def _split_text_by_size(self, text: str, max_bytes: int) -> list[str]:
-        parts, current_part, current_size = [], [], 0
-        for line in text.split("\n"):
-            line_bytes = len(line.encode("utf-8")) + 1
-            if current_size + line_bytes > max_bytes and current_part:
-                parts.append("\n".join(current_part))
-                current_part, current_size = [], 0
-            current_part.append(line)
-            current_size += line_bytes
-        if current_part:
-            parts.append("\n".join(current_part))
-        return parts
+    @staticmethod
+    def _utf8_char_width(first_byte: int) -> int:
+        if first_byte < 0b1000_0000:
+            return 1
+        if (first_byte & 0b1110_0000) == 0b1100_0000:
+            return 2
+        if (first_byte & 0b1111_0000) == 0b1110_0000:
+            return 3
+        if (first_byte & 0b1111_1000) == 0b1111_0000:
+            return 4
+        return 1
 
     async def _file_is_effectively_empty(self, file_path: str) -> bool:
         if os.path.getsize(file_path) == 0:

@@ -863,90 +863,10 @@ class TestBuildFilename:
         finally:
             p.stop()
 
-# ---------- _split_text_by_size -----------------------------------------
-
-class TestSplitTextBySize:
-
-    def test_small_text_single_part(self):
-        _, p = _patch_settings()
-        try:
-            client = JavaBotClient()
-            parts = client._split_text_by_size("Hello\nWorld\n", 1000)
-            assert len(parts) == 1
-            assert parts[0] == "Hello\nWorld\n"
-        finally:
-            p.stop()
-
-    def test_split_on_line_boundaries(self):
-        _, p = _patch_settings()
-        try:
-            client = JavaBotClient()
-            lines = [f"Line {i:04d}" for i in range(100)]
-            text = "\n".join(lines)
-            parts = client._split_text_by_size(text, 50)
-            assert len(parts) > 1
-            assert "\n".join(parts) == text
-        finally:
-            p.stop()
-
-    def test_empty_text(self):
-        _, p = _patch_settings()
-        try:
-            client = JavaBotClient()
-            parts = client._split_text_by_size("", 100)
-            assert len(parts) == 1
-        finally:
-            p.stop()
-
-    def test_single_long_line_exceeds_limit(self):
-        _, p = _patch_settings()
-        try:
-            client = JavaBotClient()
-            text = "A" * 200
-            parts = client._split_text_by_size(text, 100)
-            # unsplittable single line stays whole
-            assert len(parts) == 1
-            assert parts[0] == text
-        finally:
-            p.stop()
-
-    def test_exact_boundary_no_empty_parts(self):
-        _, p = _patch_settings()
-        try:
-            client = JavaBotClient()
-            text = "12345\n12345\n12345"
-            parts = client._split_text_by_size(text, 12)
-            assert all(len(part) > 0 for part in parts)
-            assert "\n".join(parts) == text
-        finally:
-            p.stop()
-
-    def test_utf8_multibyte_characters(self):
-        _, p = _patch_settings()
-        try:
-            client = JavaBotClient()
-            lines = ["Привет"] * 10
-            text = "\n".join(lines)
-            parts = client._split_text_by_size(text, 30)
-            assert len(parts) > 1
-            assert "\n".join(parts) == text
-        finally:
-            p.stop()
-
-# ---------- _send_file_to_user ------------------------------------------
+# ---------- file-path delivery ------------------------------------------
 
 @pytest.mark.asyncio
 class TestSendFileToUser:
-
-    async def test_small_file_sent_as_single_document(self):
-        client, p = _make_client()
-        try:
-            client._http_client.post = AsyncMock(return_value=MagicMock(status_code=200))
-            result = await client._send_file_to_user(123, "task_1", "small text", "file.txt")
-            assert result is True
-            assert client._http_client.post.call_count == 1
-        finally:
-            p.stop()
 
     async def test_response_preview_stops_at_limit(self):
         response = _StreamResponse(500, chunks=[b"abc", b"def"])
@@ -956,52 +876,6 @@ class TestSendFileToUser:
     async def test_transform_entities_invalid_entity_returns_original(self):
         original = [None]
         assert JavaBotClient._transform_entities("text", original) is original
-
-    async def test_split_text_first_line_over_limit_stays_whole(self):
-        client, p = _make_client()
-        try:
-            parts = client._split_text_by_size("abcdef\nx", 3)
-            assert parts == ["abcdef", "x"]
-        finally:
-            p.stop()
-
-    async def test_large_file_splits_into_multiple_parts(self):
-        client, p = _make_client()
-        try:
-            client._http_client.post = AsyncMock(return_value=MagicMock(status_code=200))
-
-            # ~47MB text (just over 45MB threshold) with newlines so it's splittable
-            line = "A" * 999 + "\n"  # 1000 bytes per line
-            big_text = line * 50_000  # ~50MB, ~50k lines → splits into ≥ 2 parts
-            result = await client._send_file_to_user(123, "task_1", big_text, "big.txt")
-
-            assert result is True
-            assert client._http_client.post.call_count >= 2
-        finally:
-            p.stop()
-
-    async def test_delivery_failure_returns_false(self):
-        client, p = _make_client()
-        try:
-            # Telegram returns non-200 → _send_single_file returns False
-            client._http_client.post = AsyncMock(return_value=MagicMock(status_code=500))
-            result = await client._send_file_to_user(123, "task_1", "text", "file.txt")
-            assert result is False
-        finally:
-            p.stop()
-
-    async def test_large_text_delivery_failure_returns_false(self):
-        client, p = _make_client()
-        try:
-            with patch.object(client, "_split_text_by_size", return_value=["part1", "part2"]), \
-                 patch.object(client, "_send_single_file", new_callable=AsyncMock) as send:
-                send.side_effect = [True, False]
-                result = await client._send_file_to_user(123, "task_1", "x" * (50 * 1024 * 1024), "big.txt")
-
-            assert result is False
-            assert send.call_count == 2
-        finally:
-            p.stop()
 
     async def test_small_file_path_sent_as_stream(self, tmp_path):
         client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
@@ -1016,6 +890,24 @@ class TestSendFileToUser:
             assert result is True
             send.assert_called_once()
             assert not isinstance(send.call_args.args[2], (bytes, bytearray))
+        finally:
+            p.stop()
+
+    async def test_part_caption_does_not_use_precomputed_total(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            source = tmp_path / "cleaned.txt"
+            source.write_text("aa😀", encoding="utf-8")
+
+            with patch("java_client.TELEGRAM_MAX_FILE_SIZE_BYTES", 5), \
+                 patch.object(client, "_send_single_file", new_callable=AsyncMock) as send:
+                send.return_value = True
+                result = await client._send_file_path_to_user(123, "task_1", str(source), "big.txt")
+
+            assert result is True
+            captions = [call.args[4] for call in send.call_args_list]
+            assert captions == ["✅ Часть 1", "✅ Часть 2"]
+            assert all("/" not in caption for caption in captions)
         finally:
             p.stop()
 
@@ -1137,6 +1029,32 @@ class TestSendFileToUser:
             assert b"".join(parts).decode("utf-8") == content
         finally:
             p.stop()
+
+    async def test_file_split_keeps_single_utf8_char_intact_when_limit_is_tiny(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            content = "😀"
+            source = tmp_path / "tiny-limit.txt"
+            source.write_text(content, encoding="utf-8")
+
+            parts = []
+            async for part_path in client._split_file_by_size(str(source), 1):
+                with open(part_path, "rb") as f:
+                    data = f.read()
+                data.decode("utf-8")
+                parts.append(data)
+                os.unlink(part_path)
+
+            assert b"".join(parts).decode("utf-8") == content
+        finally:
+            p.stop()
+
+    async def test_utf8_char_width_detects_sequence_length(self):
+        assert JavaBotClient._utf8_char_width("A".encode("utf-8")[0]) == 1
+        assert JavaBotClient._utf8_char_width("é".encode("utf-8")[0]) == 2
+        assert JavaBotClient._utf8_char_width("€".encode("utf-8")[0]) == 3
+        assert JavaBotClient._utf8_char_width("😀".encode("utf-8")[0]) == 4
+        assert JavaBotClient._utf8_char_width(0b1000_0000) == 1
 
 # ---------- _notify_user_failure ----------------------------------------
 
