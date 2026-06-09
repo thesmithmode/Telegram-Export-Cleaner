@@ -20,6 +20,7 @@ from models import ExportedMessage, SendResponsePayload
 logger = logging.getLogger(__name__)
 
 TELEGRAM_MAX_FILE_SIZE_BYTES = 45 * 1024 * 1024
+_DISK_FREE_CHECK_INTERVAL_BYTES = 16 * 1024 * 1024
 _CONVERT_SENTINEL = b"\n##OK##"
 
 _BOT_TOKEN_RE = re.compile(r'/bot[^/]+/')
@@ -313,6 +314,7 @@ class JavaBotClient:
     ) -> Optional[str]:
         fd, output_path = self._mkstemp(suffix=".txt", prefix="tg_cleaned_")
         total_size = 0
+        bytes_since_disk_check = 0
         tail = b""
         success = False
         try:
@@ -329,9 +331,12 @@ class JavaBotClient:
                     buffered = tail + chunk
                     if len(buffered) > len(_CONVERT_SENTINEL):
                         write_len = len(buffered) - len(_CONVERT_SENTINEL)
-                        if not self._has_free_disk_for_write(output_path, write_len):
-                            logger.error("Export temp disk reserve exhausted for task %s", task_id)
-                            return None
+                        bytes_since_disk_check += write_len
+                        if bytes_since_disk_check >= _DISK_FREE_CHECK_INTERVAL_BYTES:
+                            if not self._has_free_disk_for_write(output_path, write_len):
+                                logger.error("Export temp disk reserve exhausted for task %s", task_id)
+                                return None
+                            bytes_since_disk_check = 0
                         out.write(buffered[:write_len])
                         tail = buffered[write_len:]
                     else:
@@ -690,9 +695,10 @@ class JavaBotClient:
         elif total is not None:
             # total может быть 0 (Telegram ещё не посчитал) — показываем 0% вместо спиннера.
             # "N из M" вместо "N/M" чтобы Telegram не превращал в ссылку на телефон.
-            pct = min(message_count * 100 // total, 100) if total > 0 else 0
+            display_total = max(total, message_count) if total > 0 else total
+            pct = min(message_count * 100 // display_total, 100) if display_total > 0 else 0
             bar = self._build_progress_bar(pct)
-            text = f"📊 {bar} {pct}% ({message_count} из {total})"
+            text = f"📊 {bar} {pct}% ({message_count} из {display_total})"
             if eta_text:
                 text += f"   ~{eta_text}"
         elif started:
@@ -761,6 +767,19 @@ class ProgressTracker:
         self._start_time = 0.0
         self._baseline_count = 0
         self._last_count: int = 0
+        self._total_adjustment_logged = False
+
+    def _raise_total_to_observed(self, count: int) -> None:
+        if self._total is not None and count > self._total:
+            if not self._total_adjustment_logged:
+                logger.info(
+                    "Progress total estimate adjusted for task %s: total=%d observed=%d",
+                    self._task_id,
+                    self._total,
+                    count,
+                )
+                self._total_adjustment_logged = True
+            self._total = count
 
     async def start(self, total=None):
         self._total = total
@@ -793,12 +812,13 @@ class ProgressTracker:
                 )
             return
         self._total = total
+        self._raise_total_to_observed(max(self._baseline_count, self._last_count))
         if self._message_id:
             await self._client.send_progress_update(
                 self._user_chat_id,
                 self._task_id,
                 message_count=self._baseline_count,
-                total=total,
+                total=self._total,
                 progress_message_id=self._message_id,
                 topic_name=self._topic_name,
             )
@@ -806,6 +826,7 @@ class ProgressTracker:
     async def seed(self, cached_count: int) -> None:
         if not self._total or cached_count <= 0:
             return
+        self._raise_total_to_observed(cached_count)
         self._baseline_count = cached_count
         self._start_time = time.time()  # ETA timer starts fresh from "now"
         self._last_reported_at = self._start_time
@@ -825,6 +846,7 @@ class ProgressTracker:
         self._last_count = count
         if not self._total:
             return
+        self._raise_total_to_observed(count)
         now = time.time()
         pct = min(count * 100 // self._total, 100) if self._total > 0 else 0
 
@@ -888,6 +910,7 @@ class ProgressTracker:
     async def on_floodwait(self, wait_seconds: int) -> None:
         if not self._message_id:
             return
+        self._raise_total_to_observed(self._last_count)
         await self._client.send_progress_update(
             self._user_chat_id,
             self._task_id,
