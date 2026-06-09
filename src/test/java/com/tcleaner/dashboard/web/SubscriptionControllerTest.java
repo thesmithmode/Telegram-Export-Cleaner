@@ -36,6 +36,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
@@ -196,10 +197,10 @@ class SubscriptionControllerTest {
     void create_user_ownSubscription_201() throws Exception {
         Instant sinceDate = Instant.parse("2026-04-23T09:00:00Z");
         CreateSubscriptionRequest req = new CreateSubscriptionRequest(
-                "100", 24, "09:00", sinceDate);
+                "@valid_chat", 24, "09:00", sinceDate);
 
         Chat chat = stubChat(100L);
-        when(chatUpserter.upsert(any(), eq("100"), any(), any(), any())).thenReturn(chat);
+        when(chatUpserter.upsert(eq("valid_chat"), eq("@valid_chat"), any(), any(), any())).thenReturn(chat);
         when(chatRepository.findById(100L)).thenReturn(Optional.of(chat));
 
         ChatSubscription created = stubSubscription(10L, 1L);
@@ -236,10 +237,10 @@ class SubscriptionControllerTest {
     void create_alreadyActiveSubscription_409() throws Exception {
         Instant sinceDate = Instant.parse("2026-04-23T09:00:00Z");
         CreateSubscriptionRequest req = new CreateSubscriptionRequest(
-                "100", 24, "09:00", sinceDate);
+                "@valid_chat", 24, "09:00", sinceDate);
 
         Chat chat = stubChat(100L);
-        when(chatUpserter.upsert(any(), eq("100"), any(), any(), any())).thenReturn(chat);
+        when(chatUpserter.upsert(eq("valid_chat"), eq("@valid_chat"), any(), any(), any())).thenReturn(chat);
         when(subscriptionService.create(anyLong(), anyLong(), anyInt(), anyString(), any()))
                 .thenThrow(new IllegalStateException("user already has an active subscription"));
 
@@ -255,10 +256,10 @@ class SubscriptionControllerTest {
     void create_invalidPeriod_400() throws Exception {
         Instant sinceDate = Instant.parse("2026-04-23T09:00:00Z");
         CreateSubscriptionRequest req = new CreateSubscriptionRequest(
-                "100", 999, "09:00", sinceDate);
+                "@valid_chat", 999, "09:00", sinceDate);
 
         Chat chat = stubChat(100L);
-        when(chatUpserter.upsert(any(), eq("100"), any(), any(), any())).thenReturn(chat);
+        when(chatUpserter.upsert(eq("valid_chat"), eq("@valid_chat"), any(), any(), any())).thenReturn(chat);
         when(subscriptionService.create(anyLong(), anyLong(), anyInt(), anyString(), any()))
                 .thenThrow(new IllegalArgumentException("period_hours must be 24/48/72/168"));
 
@@ -434,7 +435,7 @@ class SubscriptionControllerTest {
     // ─── CREATE: error paths не покрытые ──────────────────────────────────────
 
     @Test
-    @DisplayName("create: невалидный chatIdentifier (не username, не числовой) → 400")
+    @DisplayName("create: невалидный chatIdentifier (не публичный username/link) → 400")
     void create_invalidChatIdentifier_400() throws Exception {
         CreateSubscriptionRequest req = new CreateSubscriptionRequest(
                 "bad chat id with spaces", 24, "09:00", Instant.parse("2026-04-23T09:00:00Z"));
@@ -447,14 +448,29 @@ class SubscriptionControllerTest {
     }
 
     @Test
+    @DisplayName("create: числовой chatIdentifier → 400")
+    void create_numericChatIdentifier_400() throws Exception {
+        CreateSubscriptionRequest req = new CreateSubscriptionRequest(
+                "100", 24, "09:00", Instant.parse("2026-04-23T09:00:00Z"));
+
+        mockMvc.perform(post("/dashboard/api/subscriptions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req))
+                        .with(user(USER_1)).with(csrf()))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(chatUpserter);
+    }
+
+    @Test
     @DisplayName("create: DataIntegrityViolationException → 409 (race на UNIQUE constraint)")
     void create_dataIntegrityViolation_409() throws Exception {
         Instant sinceDate = Instant.parse("2026-04-23T09:00:00Z");
         CreateSubscriptionRequest req = new CreateSubscriptionRequest(
-                "100", 24, "09:00", sinceDate);
+                "@valid_chat", 24, "09:00", sinceDate);
 
         Chat chat = stubChat(100L);
-        when(chatUpserter.upsert(any(), eq("100"), any(), any(), any())).thenReturn(chat);
+        when(chatUpserter.upsert(eq("valid_chat"), eq("@valid_chat"), any(), any(), any())).thenReturn(chat);
         when(subscriptionService.create(anyLong(), anyLong(), anyInt(), anyString(), any()))
                 .thenThrow(new org.springframework.dao.DataIntegrityViolationException("duplicate"));
 

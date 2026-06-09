@@ -38,6 +38,7 @@ RBAC поверх — `BotUserAccessPolicy.effectiveUserId()`.
 Регулярный экспорт чата с периодом 24/48/72/168 ч.
 
 - **Уникальность активной:** на пользователя одна подписка ACTIVE-или-PAUSED (partial unique index `uk_subscriptions_one_active_per_user`). При создании новой PAUSED auto-архивируется (смена чата без ручного удаления).
+- **Цель экспорта:** подписку можно создать только по публичному `@username` или `https://t.me/...`; произвольные числовые Telegram ID не принимаются.
 - **Окно запуска:** открывается за 30 мин до `desired_time_msk` и остаётся открытым до конца суток (catch-up если воркер был занят). Повтор в тех же сутках исключён через `last_success_at + period - 30min`.
 - **Confirmation:** раз в 7 дней бот спрашивает актуальность; нет ответа 48 ч → ARCHIVED.
 - **Auto-pause:** 2 подряд failure → PAUSED.
