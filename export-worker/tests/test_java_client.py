@@ -237,6 +237,24 @@ class TestUploadFileToJava:
         finally:
             p.stop()
 
+    async def test_disk_reserve_check_is_not_per_chunk_for_small_chunks(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path), EXPORT_MIN_FREE_DISK_MB=1)
+        try:
+            chunks = [b"x" * 1024 for _ in range(100)] + [b"\n##OK##"]
+            with patch.object(client, "_has_free_disk_for_write", return_value=True) as guard:
+                result = await client._stream_convert_response_to_file(
+                    _StreamResponse(200, chunks=chunks),
+                    task_id="many-small-chunks",
+                )
+            try:
+                assert result is not None
+                assert guard.call_count == 1
+            finally:
+                if result:
+                    os.unlink(result)
+        finally:
+            p.stop()
+
     async def test_temp_helper_uses_configured_directory(self, tmp_path):
         client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path / "exports"))
         try:
@@ -262,7 +280,10 @@ class TestUploadFileToJava:
     async def test_disk_reserve_exhausted_during_stream_removes_output(self, tmp_path):
         client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path), EXPORT_MIN_FREE_DISK_MB=1)
         try:
-            with patch.object(client, "_has_free_disk_for_write", side_effect=[True, False]):
+            with (
+                patch("java_client._DISK_FREE_CHECK_INTERVAL_BYTES", 1),
+                patch.object(client, "_has_free_disk_for_write", side_effect=[True, False]),
+            ):
                 result = await client._stream_convert_response_to_file(
                     _StreamResponse(200, chunks=[b"payload", b"\n##OK##"]),
                     task_id="mid-stream-low-disk",
@@ -1278,6 +1299,8 @@ class TestProgressTracker:
             text = client._http_client.post.call_args[1]["data"]["text"]
             assert "100%" in text
             assert "103%" not in text
+            assert text.count("253432") == 2
+            assert "244143" not in text
         finally:
             p.stop()
 
@@ -1306,6 +1329,23 @@ class TestProgressTracker:
         last_call = mock_java_client.send_progress_update.call_args_list[-1]
         assert last_call.args[2] == 110
         assert last_call.args[3] == 110  # max(100, 110) = 110
+
+    async def test_seed_raises_underestimated_total_to_cached_count(self):
+        mock_java_client = AsyncMock()
+        mock_java_client.send_progress_update = AsyncMock(return_value=777)
+
+        tracker = ProgressTracker(
+            client=mock_java_client,
+            user_chat_id=123,
+            task_id="task_1",
+        )
+
+        await tracker.start(total=344355)
+        await tracker.seed(cached_count=389129)
+
+        seed_call = mock_java_client.send_progress_update.call_args_list[-1]
+        assert seed_call.args[2] == 389129
+        assert seed_call.args[3] == 389129
 
     async def test_send_progress_update_with_zero_total_shows_progress_bar(self):
         client, p = _make_client()
