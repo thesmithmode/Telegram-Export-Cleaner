@@ -10,9 +10,13 @@
 
 Subscription iteration с `messages_count == 0`: `notify_subscription_empty(chat_id, chat_label, from_date, to_date)` вместо файла.
 
+### Streaming `/api/convert` response (java_client.py)
+
+`JavaBotClient` не читает ответ `/api/convert` через `response.text`: очищенный текст стримится во временный `.txt` на диске, sentinel `##OK##` проверяется на лету, а общий размер ответа ограничен `MAX_CONVERTED_OUTPUT_BYTES`. Telegram-доставка тоже идет из файла; части больше лимита Bot API режутся последовательно во временные part-файлы, без списка всех частей в памяти.
+
 ### Invisible-unicode защита (java_client.py)
 
-После `/api/convert` проверяет `cleaned_text` на Unicode categories `Cc/Cf/Zs/Zl/Zp`. Если весь текст — только invisible символы → `notify_empty_export()`. Защита от технически непустого, но визуально пустого ответа.
+После `/api/convert` проверяет временный файл с очищенным текстом на Unicode categories `Cc/Cf/Zs/Zl/Zp` потоково. Если весь текст — только invisible символы → `notify_empty_export()`. Защита от технически непустого, но визуально пустого ответа.
 
 ### Отмена и ExportCancelled
 

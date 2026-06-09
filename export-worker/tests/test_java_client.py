@@ -26,6 +26,33 @@ def _make_client(**overrides):
     client._http_client = AsyncMock()
     return client, patcher
 
+
+class _StreamResponse:
+    def __init__(self, status_code: int, body: str):
+        self.status_code = status_code
+        self._body = body.encode("utf-8")
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def aiter_bytes(self):
+        yield self._body
+
+
+class _StreamSideEffect:
+    def __init__(self, *responses):
+        self.responses = list(responses)
+        self.call_count = 0
+
+    def __call__(self, *args, **kwargs):
+        self.call_count += 1
+        response = self.responses.pop(0) if self.responses else self.last_response
+        self.last_response = response
+        return response
+
 def _make_temp_json(content: bytes = b'{"test": "data"}') -> str:
     fd, path = tempfile.mkstemp(suffix=".json")
     with os.fdopen(fd, "wb") as f:
@@ -102,19 +129,23 @@ class TestStreamToTempJson:
 @pytest.mark.asyncio
 class TestUploadFileToJava:
 
-    async def test_success_returns_cleaned_text(self):
+    @staticmethod
+    def _read_and_unlink(path):
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+        os.unlink(path)
+        return text
+
+    async def test_success_returns_cleaned_text_file(self):
         client, p = _make_client()
         try:
             path = _make_temp_json()
             try:
-                # T23: Java дописывает sentinel "\n##OK##" в конце. Python
-                # отрезает его перед return.
-                client._http_client.post = AsyncMock(
-                    return_value=MagicMock(status_code=200, text="cleaned markdown\n##OK##")
-                )
+                stream = _StreamSideEffect(_StreamResponse(200, "cleaned markdown\n##OK##"))
+                client._http_client.stream = stream
                 result = await client._upload_file_to_java(path)
-                assert result == "cleaned markdown"
-                client._http_client.post.assert_called_once()
+                assert self._read_and_unlink(result) == "cleaned markdown"
+                assert stream.call_count == 1
             finally:
                 os.unlink(path)
         finally:
@@ -126,31 +157,30 @@ class TestUploadFileToJava:
         try:
             path = _make_temp_json()
             try:
-                # Все 3 попытки — truncated (нет sentinel) → result=None
-                truncated = MagicMock(status_code=200, text="partial content without sentinel")
-                client._http_client.post = AsyncMock(return_value=truncated)
+                stream = _StreamSideEffect(
+                    _StreamResponse(200, "partial content without sentinel"),
+                    _StreamResponse(200, "partial content without sentinel"),
+                    _StreamResponse(200, "partial content without sentinel"),
+                )
+                client._http_client.stream = stream
                 with patch("java_client.asyncio.sleep", new_callable=AsyncMock):
                     result = await client._upload_file_to_java(path)
                 assert result is None
-                # initial + 2 retries = 3 attempts (как у 500-error retry)
-                assert client._http_client.post.call_count == 3
+                assert stream.call_count == 3
             finally:
                 os.unlink(path)
         finally:
             p.stop()
 
     async def test_200_sentinel_without_newline_treated_as_truncated(self):
-        """T23 regression: sentinel должен быть точно \\n##OK## (с newline).
-        '##OK##' в конце текста БЕЗ \\n — это случайное совпадение или
-        половинная запись (write дошёл до 6 байт но не успел newline сначала).
-        Защита от false-positive — bug перешёл бы как валидный."""
+        """T23 regression: sentinel должен быть точно \n##OK## (с newline)."""
         client, p = _make_client(max_retries=0)
         try:
             path = _make_temp_json()
             try:
-                # endswith("\n##OK##") = False, хотя endswith("##OK##") = True
-                bad = MagicMock(status_code=200, text="some content##OK##")
-                client._http_client.post = AsyncMock(return_value=bad)
+                client._http_client.stream = _StreamSideEffect(
+                    _StreamResponse(200, "some content##OK##")
+                )
                 with patch("java_client.asyncio.sleep", new_callable=AsyncMock):
                     result = await client._upload_file_to_java(path)
                 assert result is None, "должен быть None (truncated), а не 'some content'"
@@ -165,8 +195,7 @@ class TestUploadFileToJava:
         try:
             path = _make_temp_json()
             try:
-                empty = MagicMock(status_code=200, text="")
-                client._http_client.post = AsyncMock(return_value=empty)
+                client._http_client.stream = _StreamSideEffect(_StreamResponse(200, ""))
                 with patch("java_client.asyncio.sleep", new_callable=AsyncMock):
                     result = await client._upload_file_to_java(path)
                 assert result is None
@@ -175,18 +204,15 @@ class TestUploadFileToJava:
         finally:
             p.stop()
 
-    async def test_200_only_sentinel_strips_to_empty_string(self):
-        """T23 boundary: ровно '\\n##OK##' (нет контента) → strip → ''.
-        Это происходит когда filter исключил все сообщения. Upper-layer
-        (send_response) обрабатывает empty как notify_empty_export."""
+    async def test_200_only_sentinel_strips_to_empty_file(self):
+        """T23 boundary: ровно '\n##OK##' (нет контента) → empty file."""
         client, p = _make_client(max_retries=0)
         try:
             path = _make_temp_json()
             try:
-                only = MagicMock(status_code=200, text="\n##OK##")
-                client._http_client.post = AsyncMock(return_value=only)
+                client._http_client.stream = _StreamSideEffect(_StreamResponse(200, "\n##OK##"))
                 result = await client._upload_file_to_java(path)
-                assert result == ""
+                assert self._read_and_unlink(result) == ""
             finally:
                 os.unlink(path)
         finally:
@@ -198,13 +224,15 @@ class TestUploadFileToJava:
         try:
             path = _make_temp_json()
             try:
-                truncated = MagicMock(status_code=200, text="partial chunk")
-                ok = MagicMock(status_code=200, text="final result\n##OK##")
-                client._http_client.post = AsyncMock(side_effect=[truncated, ok])
+                stream = _StreamSideEffect(
+                    _StreamResponse(200, "partial chunk"),
+                    _StreamResponse(200, "final result\n##OK##"),
+                )
+                client._http_client.stream = stream
                 with patch("java_client.asyncio.sleep", new_callable=AsyncMock):
                     result = await client._upload_file_to_java(path)
-                assert result == "final result"
-                assert client._http_client.post.call_count == 2
+                assert self._read_and_unlink(result) == "final result"
+                assert stream.call_count == 2
             finally:
                 os.unlink(path)
         finally:
@@ -215,12 +243,11 @@ class TestUploadFileToJava:
         try:
             path = _make_temp_json()
             try:
-                client._http_client.post = AsyncMock(
-                    return_value=MagicMock(status_code=400, text="Bad request")
-                )
+                stream = _StreamSideEffect(_StreamResponse(400, "Bad request"))
+                client._http_client.stream = stream
                 result = await client._upload_file_to_java(path)
                 assert result is None
-                assert client._http_client.post.call_count == 1
+                assert stream.call_count == 1
             finally:
                 os.unlink(path)
         finally:
@@ -231,14 +258,16 @@ class TestUploadFileToJava:
         try:
             path = _make_temp_json()
             try:
-                client._http_client.post = AsyncMock(
-                    return_value=MagicMock(status_code=500, text="Server error")
+                stream = _StreamSideEffect(
+                    _StreamResponse(500, "Server error"),
+                    _StreamResponse(500, "Server error"),
+                    _StreamResponse(500, "Server error"),
                 )
+                client._http_client.stream = stream
                 with patch("java_client.asyncio.sleep", new_callable=AsyncMock):
                     result = await client._upload_file_to_java(path)
                 assert result is None
-                # initial + 2 retries = 3 attempts total
-                assert client._http_client.post.call_count == 3
+                assert stream.call_count == 3
             finally:
                 os.unlink(path)
         finally:
@@ -249,16 +278,16 @@ class TestUploadFileToJava:
         try:
             path = _make_temp_json()
             try:
-                resp_err = MagicMock(status_code=500, text="err")
-                resp_ok = MagicMock(status_code=200, text="Success!\n##OK##")
-                client._http_client.post = AsyncMock(
-                    side_effect=[resp_err, resp_err, resp_ok]
+                stream = _StreamSideEffect(
+                    _StreamResponse(500, "err"),
+                    _StreamResponse(500, "err"),
+                    _StreamResponse(200, "Success!\n##OK##"),
                 )
+                client._http_client.stream = stream
                 with patch("java_client.asyncio.sleep", new_callable=AsyncMock):
                     result = await client._upload_file_to_java(path)
-                assert result == "Success!"
-                assert client._http_client.post.call_count == 3
-                # Sentinel срезан перед return
+                assert self._read_and_unlink(result) == "Success!"
+                assert stream.call_count == 3
             finally:
                 os.unlink(path)
         finally:
