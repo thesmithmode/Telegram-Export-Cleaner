@@ -237,6 +237,53 @@ class TestUploadFileToJava:
         finally:
             p.stop()
 
+    async def test_temp_helper_uses_configured_directory(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path / "exports"))
+        try:
+            fd, path = client._mkstemp(suffix=".txt", prefix="tg_custom_")
+            os.close(fd)
+            try:
+                assert os.path.dirname(path) == str(tmp_path / "exports")
+                assert os.path.exists(path)
+            finally:
+                os.unlink(path)
+        finally:
+            p.stop()
+
+    async def test_disk_usage_error_fails_closed(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path), EXPORT_MIN_FREE_DISK_MB=1)
+        try:
+            target = tmp_path / "x.txt"
+            with patch("java_client.shutil.disk_usage", side_effect=OSError("stat failed")):
+                assert client._has_free_disk_for_write(str(target), 1) is False
+        finally:
+            p.stop()
+
+    async def test_disk_reserve_exhausted_during_stream_removes_output(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path), EXPORT_MIN_FREE_DISK_MB=1)
+        try:
+            with patch.object(client, "_has_free_disk_for_write", side_effect=[True, False]):
+                result = await client._stream_convert_response_to_file(
+                    _StreamResponse(200, chunks=[b"payload", b"\n##OK##"]),
+                    task_id="mid-stream-low-disk",
+                )
+            assert result is None
+            assert list(tmp_path.glob("tg_cleaned_*")) == []
+        finally:
+            p.stop()
+
+    async def test_missing_sentinel_cleanup_ignores_already_removed_file(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            with patch("java_client.os.unlink", side_effect=FileNotFoundError):
+                result = await client._stream_convert_response_to_file(
+                    _StreamResponse(200, "partial without sentinel"),
+                    task_id="truncated",
+                )
+            assert result is None
+        finally:
+            p.stop()
+
     async def test_200_without_sentinel_treated_as_truncated_and_retries(self):
         """T23: HTTP 200 без sentinel = truncated stream. Должен ретраить."""
         client, p = _make_client(max_retries=2)
@@ -901,6 +948,23 @@ class TestSendFileToUser:
         finally:
             p.stop()
 
+    async def test_response_preview_stops_at_limit(self):
+        response = _StreamResponse(500, chunks=[b"abc", b"def"])
+        preview = await JavaBotClient._read_response_preview(response, limit=3)
+        assert preview == "abc"
+
+    async def test_transform_entities_invalid_entity_returns_original(self):
+        original = [None]
+        assert JavaBotClient._transform_entities("text", original) is original
+
+    async def test_split_text_first_line_over_limit_stays_whole(self):
+        client, p = _make_client()
+        try:
+            parts = client._split_text_by_size("abcdef\nx", 3)
+            assert parts == ["abcdef", "x"]
+        finally:
+            p.stop()
+
     async def test_large_file_splits_into_multiple_parts(self):
         client, p = _make_client()
         try:
@@ -923,6 +987,35 @@ class TestSendFileToUser:
             client._http_client.post = AsyncMock(return_value=MagicMock(status_code=500))
             result = await client._send_file_to_user(123, "task_1", "text", "file.txt")
             assert result is False
+        finally:
+            p.stop()
+
+    async def test_large_text_delivery_failure_returns_false(self):
+        client, p = _make_client()
+        try:
+            with patch.object(client, "_split_text_by_size", return_value=["part1", "part2"]), \
+                 patch.object(client, "_send_single_file", new_callable=AsyncMock) as send:
+                send.side_effect = [True, False]
+                result = await client._send_file_to_user(123, "task_1", "x" * (50 * 1024 * 1024), "big.txt")
+
+            assert result is False
+            assert send.call_count == 2
+        finally:
+            p.stop()
+
+    async def test_small_file_path_sent_as_stream(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            source = tmp_path / "small.txt"
+            source.write_text("small", encoding="utf-8")
+
+            with patch.object(client, "_send_single_file", new_callable=AsyncMock) as send:
+                send.return_value = True
+                result = await client._send_file_path_to_user(123, "task_1", str(source), "small.txt")
+
+            assert result is True
+            send.assert_called_once()
+            assert not isinstance(send.call_args.args[2], (bytes, bytearray))
         finally:
             p.stop()
 
@@ -963,6 +1056,23 @@ class TestSendFileToUser:
         finally:
             p.stop()
 
+    async def test_file_part_cleanup_ignores_already_removed_part(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            source = tmp_path / "cleaned.txt"
+            source.write_text("line-1\nline-2\nline-3\n", encoding="utf-8")
+
+            with patch("java_client.TELEGRAM_MAX_FILE_SIZE_BYTES", 10), \
+                 patch.object(client, "_send_single_file", new_callable=AsyncMock) as send, \
+                 patch("java_client.os.unlink", side_effect=FileNotFoundError):
+                send.return_value = False
+                result = await client._send_file_path_to_user(123, "task_1", str(source), "big.txt")
+
+            assert result is False
+            assert send.call_count == 1
+        finally:
+            p.stop()
+
     async def test_file_split_keeps_utf8_boundaries(self, tmp_path):
         client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
         try:
@@ -980,6 +1090,51 @@ class TestSendFileToUser:
 
             assert b"".join(parts).decode("utf-8") == content
 
+        finally:
+            p.stop()
+
+    async def test_file_split_empty_source_removes_empty_part(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            source = tmp_path / "empty.txt"
+            source.write_bytes(b"")
+
+            parts = []
+            async for part_path in client._split_file_by_size(str(source), 10):
+                parts.append(part_path)
+
+            assert parts == []
+            assert list(tmp_path.glob("tg_part_*")) == []
+        finally:
+            p.stop()
+
+    async def test_file_split_exception_cleans_current_part(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            missing = tmp_path / "missing.txt"
+            with pytest.raises(FileNotFoundError):
+                async for _ in client._split_file_by_size(str(missing), 10):
+                    pass
+            assert list(tmp_path.glob("tg_part_*")) == []
+        finally:
+            p.stop()
+
+    async def test_file_split_rolls_to_new_part_when_utf8_char_does_not_fit(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            content = "aa😀"
+            source = tmp_path / "rollover.txt"
+            source.write_text(content, encoding="utf-8")
+
+            parts = []
+            async for part_path in client._split_file_by_size(str(source), 5):
+                with open(part_path, "rb") as f:
+                    data = f.read()
+                data.decode("utf-8")
+                parts.append(data)
+                os.unlink(part_path)
+
+            assert b"".join(parts).decode("utf-8") == content
         finally:
             p.stop()
 
