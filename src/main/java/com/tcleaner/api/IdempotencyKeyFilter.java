@@ -24,10 +24,13 @@ import java.util.regex.Pattern;
  * Клиент присылает {@code Idempotency-Key}; повторный запрос с тем же ключом и URI → 409 Conflict.
  * Опционально: если заголовка нет — фильтр пропускает запрос без изменений (backward-compatible).
  * In-flight lock в Redis (SET NX EX 24h), без кэширования body ответа.
+ * Фильтр выполняется только для /api/** и /dashboard/api/** после Spring Security
+ * и ApiKeyFilter, чтобы не создавать Redis-состояние для публичных или
+ * неавторизованных запросов.
  * Redis недоступен → fail-open (пропускаем, логируем), чтобы не падал sunny-path.
  */
 @Component
-@Order(Ordered.HIGHEST_PRECEDENCE + 5)
+@Order(Ordered.LOWEST_PRECEDENCE - 10)
 public class IdempotencyKeyFilter extends OncePerRequestFilter {
 
     private static final Logger log = LoggerFactory.getLogger(IdempotencyKeyFilter.class);
@@ -37,6 +40,9 @@ public class IdempotencyKeyFilter extends OncePerRequestFilter {
     static final Duration TTL = Duration.ofHours(24);
     private static final Pattern VALID_KEY = Pattern.compile("^[A-Za-z0-9_-]{16,128}$");
     private static final Set<String> MUTATING = Set.of("POST", "PUT", "PATCH", "DELETE");
+    private static final String API_PREFIX = "/api/";
+    private static final String API_HEALTH = "/api/health";
+    private static final String DASHBOARD_API_PREFIX = "/dashboard/api/";
 
     private final StringRedisTemplate redis;
     private final boolean failOpen;
@@ -45,6 +51,14 @@ public class IdempotencyKeyFilter extends OncePerRequestFilter {
                                 @Value("${api.idempotency.fail-open:true}") boolean failOpen) {
         this.redis = redis;
         this.failOpen = failOpen;
+    }
+
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        String path = request.getRequestURI();
+        boolean apiPath = path.startsWith(API_PREFIX) && !API_HEALTH.equals(path);
+        boolean dashboardApiPath = path.startsWith(DASHBOARD_API_PREFIX);
+        return !apiPath && !dashboardApiPath;
     }
 
     @Override
