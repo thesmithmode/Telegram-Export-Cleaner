@@ -30,6 +30,19 @@ class TelegramMiniAppAuthVerifierTest {
     }
 
     @Test
+    void emptyBotTokenRejectsForgedInitData() throws Exception {
+        Clock clock = Clock.fixed(Instant.ofEpochSecond(1_000_100L), ZoneOffset.UTC);
+        TelegramMiniAppAuthVerifier verifier = new TelegramMiniAppAuthVerifier("", clock);
+        String forgedInitData = TelegramAuthTestUtils.buildMiniAppInitData(
+                "", 999L, "Mallory", "mallory", 1_000_000L);
+        TelegramMiniAppLoginData forged = TelegramMiniAppLoginData.parse(forgedInitData);
+
+        assertThatThrownBy(() -> verifier.verify(forged))
+                .isInstanceOf(TelegramAuthenticationException.class)
+                .hasMessageContaining("bot token");
+    }
+
+    @Test
     void tamperedDataHashThrows() throws Exception {
         Clock clock = Clock.fixed(Instant.ofEpochSecond(1_000_100L), ZoneOffset.UTC);
         TelegramMiniAppAuthVerifier verifier = new TelegramMiniAppAuthVerifier(BOT_TOKEN, clock);
