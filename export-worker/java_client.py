@@ -318,7 +318,10 @@ class JavaBotClient:
         tail = b""
         success = False
         try:
-            if not self._has_free_disk_for_write(output_path):
+            if not self._has_free_disk_for_write(
+                output_path,
+                _DISK_FREE_CHECK_INTERVAL_BYTES,
+            ):
                 os.close(fd)
                 return None
 

@@ -249,9 +249,25 @@ class TestUploadFileToJava:
             try:
                 assert result is not None
                 assert guard.call_count == 1
+                assert guard.call_args.args[1] == java_client._DISK_FREE_CHECK_INTERVAL_BYTES
             finally:
                 if result:
                     os.unlink(result)
+        finally:
+            p.stop()
+
+    async def test_initial_disk_reserve_includes_unchecked_write_window(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path), EXPORT_MIN_FREE_DISK_MB=1)
+        try:
+            with patch.object(client, "_has_free_disk_for_write", return_value=False) as guard:
+                result = await client._stream_convert_response_to_file(
+                    _StreamResponse(200, chunks=[b"tiny\n##OK##"]),
+                    task_id="reserve-window",
+                )
+            assert result is None
+            assert guard.call_count == 1
+            assert guard.call_args.args[1] == java_client._DISK_FREE_CHECK_INTERVAL_BYTES
+            assert list(tmp_path.glob("tg_cleaned_*")) == []
         finally:
             p.stop()
 
