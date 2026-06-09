@@ -51,6 +51,29 @@ class IdempotencyKeyFilterTest {
     }
 
     @Test
+    void dashboardLoginTelegramIsNotFiltered() {
+        when(request.getRequestURI()).thenReturn("/dashboard/login/telegram");
+
+        assertThat(filter.shouldNotFilter(request)).isTrue();
+    }
+
+    @Test
+    void apiHealthIsNotFiltered() {
+        when(request.getRequestURI()).thenReturn("/api/health");
+
+        assertThat(filter.shouldNotFilter(request)).isTrue();
+    }
+
+    @Test
+    void protectedApiAndDashboardApiAreFiltered() {
+        when(request.getRequestURI()).thenReturn("/api/convert");
+        assertThat(filter.shouldNotFilter(request)).isFalse();
+
+        when(request.getRequestURI()).thenReturn("/dashboard/api/me");
+        assertThat(filter.shouldNotFilter(request)).isFalse();
+    }
+
+    @Test
     void getRequestBypassesFilter() throws ServletException, IOException {
         when(request.getMethod()).thenReturn("GET");
         when(request.getRequestURI()).thenReturn("/api/health");
