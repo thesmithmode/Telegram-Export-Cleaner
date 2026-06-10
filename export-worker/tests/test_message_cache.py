@@ -1,4 +1,5 @@
 
+import os
 import time
 import pytest
 import asyncio
@@ -121,6 +122,207 @@ class TestMissingRanges:
         await cache.store_messages(123, _make_messages(range(50, 61)))
         missing = await cache.get_missing_ranges(123, 1, 100)
         assert missing == [(1, 9), (21, 49), (61, 100)]
+
+    @pytest.mark.asyncio
+    async def test_checked_empty_gap_is_not_reported_again(self, cache):
+        await cache.store_messages(123, _make_messages(range(10, 21)))
+        await cache.mark_id_range_checked(123, 21, 49)
+        await cache.store_messages(123, _make_messages(range(50, 61)))
+
+        missing = await cache.get_missing_ranges(123, 10, 60)
+
+        assert missing == []
+        assert await cache.get_cached_ranges(123) == [[10, 20], [50, 60]]
+        assert await cache.get_coverage_ranges(123) == [[10, 60]]
+
+    @pytest.mark.asyncio
+    async def test_checked_sparse_gap_keeps_visible_ranges_separate(self, cache):
+        await cache.store_messages(123, _make_messages(range(10, 21)))
+        await cache.store_messages(123, [_make_msg(35)])
+        await cache.mark_id_range_checked(123, 21, 49)
+        await cache.store_messages(123, _make_messages(range(50, 61)))
+
+        missing = await cache.get_missing_ranges(123, 10, 60)
+
+        assert missing == []
+        assert await cache.get_cached_ranges(123) == [[10, 20], [35, 35], [50, 60]]
+        assert await cache.get_coverage_ranges(123) == [[10, 60]]
+
+
+@pytest.mark.asyncio
+class TestExportLines:
+
+    async def test_iter_export_lines_matches_existing_txt_shape(self, cache):
+        await cache.store_messages(
+            123,
+            [
+                _make_msg(1, text="Keep\r\nline", date="2026-06-09T12:00:00"),
+                _make_msg(2, text="Drop", date="2026-06-09T12:01:00"),
+            ],
+        )
+
+        lines = [
+            line async for line in cache.iter_export_lines(
+                123, 1, 2, include_keywords=["keep"], exclude_keywords=[]
+            )
+        ]
+
+        assert lines == ["20260609 Keep line"]
+
+    async def test_iter_export_lines_backfills_legacy_rows(self, tmp_path):
+        db_path = str(tmp_path / "legacy_lines.db")
+        c = MessageCache(db_path=db_path)
+        await c.initialize()
+        try:
+            await c.store_messages(123, [_make_msg(1, text="Legacy")])
+            await c._db.execute(
+                "UPDATE messages SET formatted_line=NULL, filter_text=NULL, format_version=0"
+            )
+            await c._db.commit()
+
+            lines = [line async for line in c.iter_export_lines(123, 1, 1)]
+
+            assert lines == ["20250101 Legacy"]
+            async with c._db.execute(
+                "SELECT formatted_line, filter_text, format_version FROM messages"
+            ) as cur:
+                row = await cur.fetchone()
+            assert row[0] == "20250101 Legacy"
+            assert row[1] == "legacy"
+            assert row[2] == 1
+        finally:
+            await c.close()
+
+
+@pytest.mark.asyncio
+class TestExportArtifacts:
+
+    async def test_small_file_does_not_create_artifact(self, tmp_path):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_small.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1024,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        source = tmp_path / "small.txt"
+        source.write_text("tiny", encoding="utf-8")
+        try:
+            saved = await c.save_full_export_artifact(
+                chat_id=1,
+                topic_id=0,
+                coverage_max_id=10,
+                message_count=2,
+                source_path=str(source),
+            )
+
+            assert saved is None
+            assert await c.get_full_export_artifact(1, 0, 10, 2) is None
+        finally:
+            await c.close()
+
+    async def test_missing_artifact_file_is_treated_as_cache_miss(self, tmp_path):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_missing.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        source = tmp_path / "full.txt"
+        source.write_text("full export", encoding="utf-8")
+        try:
+            saved = await c.save_full_export_artifact(1, 0, 10, 2, str(source))
+            assert saved is not None
+            saved_path, _ = saved
+            assert await c.get_full_export_artifact(1, 0, 10, 2) is not None
+
+            import os
+            os.unlink(saved_path)
+
+            assert await c.get_full_export_artifact(1, 0, 10, 2) is None
+            async with c._db.execute("SELECT COUNT(*) FROM export_artifacts") as cur:
+                row = await cur.fetchone()
+            assert row[0] == 0
+        finally:
+            await c.close()
+
+    async def test_stale_artifact_metadata_unlinks_old_file(self, tmp_path):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_stale.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        source = tmp_path / "full.txt"
+        source.write_text("stale export", encoding="utf-8")
+        try:
+            saved = await c.save_full_export_artifact(1, 0, 10, 2, str(source))
+            assert saved is not None
+            saved_path, _ = saved
+            assert os.path.exists(saved_path)
+
+            assert await c.get_full_export_artifact(1, 0, 11, 2) is None
+
+            assert not os.path.exists(saved_path)
+            async with c._db.execute("SELECT COUNT(*) FROM export_artifacts") as cur:
+                row = await cur.fetchone()
+            assert row[0] == 0
+        finally:
+            await c.close()
+
+    async def test_artifact_lru_eviction_does_not_delete_message_cache(self, tmp_path):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_lru.db"),
+            max_disk_bytes=10 * 1024 * 1024,
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=18,
+        )
+        await c.initialize()
+        first = tmp_path / "first.txt"
+        second = tmp_path / "second.txt"
+        first.write_text("first artifact", encoding="utf-8")
+        second.write_text("second artifact", encoding="utf-8")
+        try:
+            await c.store_messages(1, [_make_msg(1)])
+            one = await c.save_full_export_artifact(1, 0, 1, 1, str(first))
+            assert one is not None
+            two = await c.save_full_export_artifact(2, 0, 1, 1, str(second))
+            assert two is not None
+
+            assert await c.get_full_export_artifact(1, 0, 1, 1) is None
+            assert await c.get_full_export_artifact(2, 0, 1, 1) is not None
+            assert [m.id for m in await c.get_messages(1, 1, 1)] == [1]
+        finally:
+            await c.close()
+
+    async def test_artifacts_count_inside_global_cache_budget(self, tmp_path):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_budget.db"),
+            max_disk_bytes=400,
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        source = tmp_path / "large_artifact.txt"
+        source.write_text("x" * 500, encoding="utf-8")
+        try:
+            await c.store_messages(1, [_make_msg(1, text="small")])
+            saved = await c.save_full_export_artifact(1, 0, 1, 1, str(source))
+            assert saved is not None
+            saved_path, _ = saved
+            assert os.path.exists(saved_path)
+
+            await c.evict_if_needed()
+
+            assert await c.get_full_export_artifact(1, 0, 1, 1) is None
+            assert not os.path.exists(saved_path)
+            assert [m.id for m in await c.get_messages(1, 1, 1)] == [1]
+        finally:
+            await c.close()
 
 class TestMergeAndSort:
 

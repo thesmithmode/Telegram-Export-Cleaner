@@ -59,9 +59,23 @@ Staging: `telegram_export_*_processing` — crash-safe. Worker при старт
 
 ## SQLite cache (worker)
 
-Таблицы: `messages` (msgpack), `chat_id_ranges`, `chat_date_ranges`, `chat_meta` (LRU).
+Текущая схема cache coverage-based:
+- `messages` — источник истины для экспортируемых сообщений: msgpack + `formatted_line`, `filter_text`, `format_version`.
+- `chat_id_ranges` — видимые диапазоны реально сохраненных сообщений.
+- `chat_id_coverage_ranges` — ID-диапазоны, уже проверенные в Telegram, включая пустые/удаленные gaps.
+- `chat_date_ranges` — проверенные date-диапазоны.
+- `chat_meta` — LRU и размер message-cache.
+- `export_artifacts` — optional LRU metadata для готовых txt-файлов полного экспорта.
 
-Запись батчами, merge диапазонов, LRU eviction при превышении `CACHE_MAX_DISK_GB`.
+`store_messages()` обновляет сообщения, visible ranges и coverage ranges. Пустой gap после успешного Telegram-запроса фиксируется через coverage, но не добавляет фейковые сообщения.
+
+Artifact-cache не является источником истины: hit разрешен только для полного неотфильтрованного экспорта при совпадении `coverage_max_id`, `message_count` и `format_version`. Потерянный файл = miss + удаление metadata. Общий лимит artifact-cache задается `EXPORT_ARTIFACT_MAX_DISK_GB` или по умолчанию `min(5GB, 20% CACHE_MAX_DISK_GB)`.
+
+LRU eviction message-cache чистит `messages`, visible ranges, coverage ranges, date ranges, artifact metadata и artifact-файлы соответствующего `(chat_id, topic_id)`.
+
+Почему такое решение, даже если кажется странным:
+
+Artifact-cache намеренно вторичен. Большой txt быстро ускоряет горячий полный экспорт, но не должен становиться отдельной БД сообщений: иначе появятся расхождения при фильтрах, новых сообщениях, потере файла или смене формата.
 
 ---
 

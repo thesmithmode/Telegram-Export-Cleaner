@@ -1,8 +1,6 @@
 
 import pytest
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch, call
-from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from main import ExportWorker
 from java_client import ProgressTracker
@@ -559,6 +557,69 @@ class TestThreePathCaching:
         assert completed_kwargs["messages_count"] == 60
         assert completed_kwargs["bytes_count"] == 123
         assert id_ranges == [[1, 60]], f"Ranges должны смерджиться в [[1,60]], получено: {id_ranges}"
+
+    @pytest.mark.asyncio
+    async def test_id_path_checked_empty_gaps_are_not_fetched_again(self, worker_with_cache):
+        worker = worker_with_cache
+        CHAT_ID = 555004
+
+        await worker.message_cache.store_messages(
+            CHAT_ID,
+            [
+                ExportedMessage(id=i, date="2025-03-01T10:00:00", text=f"left_{i}")
+                for i in range(1, 11)
+            ],
+        )
+        await worker.message_cache.store_messages(
+            CHAT_ID,
+            [
+                ExportedMessage(id=i, date="2025-03-01T11:00:00", text=f"right_{i}")
+                for i in range(21, 31)
+            ],
+        )
+
+        history_calls: list[dict] = []
+
+        async def first_history(*args, **kwargs):
+            history_calls.append(dict(kwargs))
+            if False:
+                yield None
+
+        worker.telegram_client.get_chat_history = first_history
+        worker.telegram_client.verify_and_get_info = AsyncMock(
+            return_value=(True, {"id": CHAT_ID, "title": "Gap Chat", "type": "supergroup"}, None)
+        )
+        worker.telegram_client.get_messages_count = AsyncMock(return_value=30)
+
+        job = ExportRequest(
+            task_id="gap_first",
+            user_id=1,
+            user_chat_id=1,
+            chat_id=CHAT_ID,
+            limit=0,
+            offset_id=0,
+        )
+
+        assert await worker.process_job(job) is True
+        assert any(c.get("offset_id") == 21 and c.get("min_id") == 10 for c in history_calls)
+        assert await worker.message_cache.get_missing_ranges(CHAT_ID, 1, 30) == []
+
+        history_calls.clear()
+
+        async def second_history(*args, **kwargs):
+            history_calls.append(dict(kwargs))
+            if False:
+                yield None
+
+        worker.telegram_client.get_chat_history = second_history
+        worker.java_client.send_cached_response_direct.reset_mock()
+        worker.queue_consumer.mark_job_completed.reset_mock()
+
+        second_job = job.model_copy(update={"task_id": "gap_second"})
+
+        assert await worker.process_job(second_job) is True
+        gap_calls = [c for c in history_calls if c.get("offset_id") == 21 and c.get("min_id") == 10]
+        assert gap_calls == []
 
     @pytest.mark.asyncio
     async def test_direct_cache_export_flag_off_uses_java_path(self, worker_with_cache):
