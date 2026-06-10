@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 TELEGRAM_MAX_FILE_SIZE_BYTES = 45 * 1024 * 1024
 _DISK_FREE_CHECK_INTERVAL_BYTES = 16 * 1024 * 1024
 _CONVERT_SENTINEL = b"\n##OK##"
+_NEWLINE_RE = re.compile(r"\r\n|\r|\n")
 
 _BOT_TOKEN_RE = re.compile(r'/bot[^/]+/')
 
@@ -165,6 +166,68 @@ class JavaBotClient:
             except FileNotFoundError:
                 pass
 
+    async def send_cached_response_direct(self, payload: SendResponsePayload) -> tuple[bool, Optional[int]]:
+        if payload.status != "completed" or payload.actual_count == 0:
+            return await self.send_response(payload), None
+
+        cleaned_path = await self._stream_messages_to_cleaned_text(payload)
+        if cleaned_path is None:
+            logger.info(
+                "Task %s: direct cached export returned empty text "
+                "(actual_count=%s)",
+                payload.task_id,
+                payload.actual_count,
+            )
+            if payload.user_chat_id and self.bot_token:
+                await self.notify_empty_export(
+                    payload.user_chat_id,
+                    payload.task_id,
+                    payload.from_date,
+                    payload.to_date,
+                )
+            return True, 0
+
+        try:
+            bytes_count = os.path.getsize(cleaned_path)
+            if await self._file_is_effectively_empty(cleaned_path):
+                logger.info(
+                    "Task %s: direct cached export is effectively empty "
+                    "(actual_count=%s)",
+                    payload.task_id,
+                    payload.actual_count,
+                )
+                if payload.user_chat_id and self.bot_token:
+                    await self.notify_empty_export(
+                        payload.user_chat_id,
+                        payload.task_id,
+                        payload.from_date,
+                        payload.to_date,
+                    )
+                return True, 0
+
+            if payload.user_chat_id and self.bot_token:
+                filename = self._build_filename(
+                    payload.chat_title,
+                    payload.from_date,
+                    payload.to_date,
+                    payload.chat_username,
+                )
+                sent = await self._send_file_path_to_user(
+                    payload.user_chat_id, payload.task_id, cleaned_path, filename=filename
+                )
+                if not sent:
+                    await self.notify_user_failure(
+                        payload.user_chat_id, payload.task_id,
+                        "Не удалось отправить файл. Попробуйте снова."
+                    )
+                    return False, bytes_count
+            return True, bytes_count
+        finally:
+            try:
+                os.unlink(cleaned_path)
+            except FileNotFoundError:
+                pass
+
     async def _stream_to_temp_json(
         self,
         messages: Union[list[ExportedMessage], AsyncIterator[ExportedMessage]],
@@ -197,6 +260,116 @@ class JavaBotClient:
                 logger.warning(f"Failed to clean up temp file {tmp_path}: {cleanup_err}")
             raise
         return tmp_path
+
+    async def _stream_messages_to_cleaned_text(self, payload: SendResponsePayload) -> Optional[str]:
+        fd, output_path = self._mkstemp(suffix=".txt", prefix="tg_direct_")
+        written = 0
+        bytes_since_disk_check = 0
+        disk_exhausted = False
+        include_keywords = self._parse_keywords(payload.keywords)
+        exclude_keywords = self._parse_keywords(payload.exclude_keywords)
+        try:
+            if not self._has_free_disk_for_write(
+                output_path,
+                _DISK_FREE_CHECK_INTERVAL_BYTES,
+            ):
+                os.close(fd)
+                try:
+                    os.unlink(output_path)
+                except FileNotFoundError:
+                    pass
+                raise OSError(f"Not enough free disk space for direct export task {payload.task_id}")
+
+            msgs_iter = (
+                payload.messages
+                if not isinstance(payload.messages, list)
+                else self._iter_list(payload.messages)
+            )
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as out:
+                async for msg in msgs_iter:
+                    line = self._format_cached_message_line(
+                        msg,
+                        include_keywords=include_keywords,
+                        exclude_keywords=exclude_keywords,
+                    )
+                    if line is None:
+                        continue
+                    encoded_len = len(line.encode("utf-8")) + 1
+                    bytes_since_disk_check += encoded_len
+                    if bytes_since_disk_check >= _DISK_FREE_CHECK_INTERVAL_BYTES:
+                        if not self._has_free_disk_for_write(output_path, encoded_len):
+                            logger.error("Export temp disk reserve exhausted for task %s", payload.task_id)
+                            disk_exhausted = True
+                            break
+                        bytes_since_disk_check = 0
+                    out.write(line)
+                    out.write("\n")
+                    written += 1
+        except Exception:
+            try:
+                os.unlink(output_path)
+            except FileNotFoundError:
+                pass
+            raise
+
+        if disk_exhausted:
+            try:
+                os.unlink(output_path)
+            except FileNotFoundError:
+                pass
+            raise OSError(f"Not enough free disk space for direct export task {payload.task_id}")
+
+        if written == 0:
+            try:
+                os.unlink(output_path)
+            except FileNotFoundError:
+                pass
+            return None
+
+        logger.info("Direct cached export formatted %d lines for task %s", written, payload.task_id)
+        return output_path
+
+    @classmethod
+    def _format_cached_message_line(
+        cls,
+        msg: ExportedMessage,
+        include_keywords: Optional[list[str]] = None,
+        exclude_keywords: Optional[list[str]] = None,
+    ) -> Optional[str]:
+        if msg is None or msg.type == "service":
+            return None
+        date = cls._format_java_export_date(msg.date)
+        if not date:
+            return None
+        text = msg.text or ""
+        if not text.strip():
+            return None
+        text_for_filter = text.lower()
+        if include_keywords and not any(kw in text_for_filter for kw in include_keywords):
+            return None
+        if exclude_keywords and any(kw in text_for_filter for kw in exclude_keywords):
+            return None
+        text = _NEWLINE_RE.sub(" ", text)
+        return f"{date} {text}"
+
+    @staticmethod
+    def _format_java_export_date(date_str: Optional[str]) -> str:
+        if not date_str:
+            return ""
+        if len(date_str) > 19 and date_str[19] in ("+", "-", "Z"):
+            return ""
+        try:
+            normalized = date_str[:19]
+            dt = datetime.strptime(normalized, "%Y-%m-%dT%H:%M:%S")
+            return dt.strftime("%Y%m%d")
+        except (TypeError, ValueError):
+            return ""
+
+    @staticmethod
+    def _parse_keywords(raw: Optional[str]) -> list[str]:
+        if not raw:
+            return []
+        return [part.strip().lower() for part in raw.split(",") if part.strip()]
 
     def _mkstemp(self, suffix: str, prefix: str) -> tuple[int, str]:
         temp_dir = settings.EXPORT_TEMP_DIR

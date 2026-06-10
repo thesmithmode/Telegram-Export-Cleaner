@@ -731,6 +731,363 @@ class TestSendResponse:
         finally:
             p.stop()
 
+class TestDirectCachedResponse:
+
+    def test_format_cached_message_line_matches_java_shape(self):
+        msg = ExportedMessage(
+            id=1,
+            type="message",
+            date="2026-06-09T12:34:56",
+            text="hello\r\nworld",
+        )
+
+        line = JavaBotClient._format_cached_message_line(msg)
+
+        assert line == "20260609 hello world"
+        assert JavaBotClient._format_java_export_date("2026-06-09T12:00:00+00:00") == ""
+
+    @pytest.mark.parametrize(
+        "msg",
+        [
+            ExportedMessage(id=1, type="service", date="2026-06-09T12:00:00", text="x"),
+            ExportedMessage(id=2, type="message", date="", text="x"),
+            ExportedMessage(id=3, type="message", date="not-a-date", text="x"),
+            ExportedMessage(id=4, type="message", date="2026-06-09T12:00:00", text="   "),
+        ],
+    )
+    def test_format_cached_message_line_skips_java_skipped_messages(self, msg):
+        assert JavaBotClient._format_cached_message_line(msg) is None
+
+    def test_format_cached_message_line_applies_keywords(self):
+        msg = ExportedMessage(
+            id=1,
+            type="message",
+            date="2026-06-09T12:00:00",
+            text="Alpha beta gamma",
+        )
+
+        assert JavaBotClient._format_cached_message_line(
+            msg, include_keywords=["beta"], exclude_keywords=[]
+        ) == "20260609 Alpha beta gamma"
+        assert JavaBotClient._format_cached_message_line(
+            msg, include_keywords=["missing"], exclude_keywords=[]
+        ) is None
+        assert JavaBotClient._format_cached_message_line(
+            msg, include_keywords=[], exclude_keywords=["gamma"]
+        ) is None
+
+    @pytest.mark.asyncio
+    async def test_direct_cached_response_writes_txt_and_skips_java_upload(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            messages = [
+                ExportedMessage(id=1, type="message", date="2026-06-09T12:00:00", text="Keep"),
+                ExportedMessage(id=2, type="message", date="2026-06-09T12:01:00", text="Drop"),
+            ]
+            captured = {}
+
+            async def fake_send(chat_id, task_id, file_path, filename):
+                captured["chat_id"] = chat_id
+                captured["filename"] = filename
+                with open(file_path, encoding="utf-8") as f:
+                    captured["content"] = f.read()
+                return True
+
+            with patch.object(
+                client, "_upload_file_to_java", new_callable=AsyncMock
+            ) as mock_upload, patch.object(
+                client, "_send_file_path_to_user", side_effect=fake_send
+            ) as mock_send:
+                success, bytes_count = await client.send_cached_response_direct(
+                    SendResponsePayload(
+                        task_id="direct_1",
+                        status="completed",
+                        messages=messages,
+                        actual_count=2,
+                        user_chat_id=42,
+                        chat_title="Direct Chat",
+                        keywords="keep",
+                    )
+                )
+
+            assert success is True
+            assert bytes_count == len("20260609 Keep\n".encode("utf-8"))
+            assert captured["chat_id"] == 42
+            assert captured["filename"] == "Direct_Chat_all.txt"
+            assert captured["content"] == "20260609 Keep\n"
+            mock_upload.assert_not_called()
+            mock_send.assert_called_once()
+            assert list(tmp_path.glob("tg_direct_*")) == []
+        finally:
+            p.stop()
+
+    @pytest.mark.asyncio
+    async def test_direct_cached_response_empty_after_filter_notifies_without_upload(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            messages = [
+                ExportedMessage(id=1, type="message", date="2026-06-09T12:00:00", text="Drop"),
+            ]
+            with patch.object(
+                client, "_send_file_path_to_user", new_callable=AsyncMock
+            ) as mock_send, patch.object(
+                client, "notify_empty_export", new_callable=AsyncMock
+            ) as mock_notify:
+                success, bytes_count = await client.send_cached_response_direct(
+                    SendResponsePayload(
+                        task_id="direct_empty",
+                        status="completed",
+                        messages=messages,
+                        actual_count=1,
+                        user_chat_id=42,
+                        keywords="missing",
+                    )
+                )
+
+            assert success is True
+            assert bytes_count == 0
+            mock_notify.assert_called_once()
+            mock_send.assert_not_called()
+            assert list(tmp_path.glob("tg_direct_*")) == []
+        finally:
+            p.stop()
+
+    @pytest.mark.asyncio
+    async def test_direct_cached_response_delegates_non_completed(self):
+        client, p = _make_client()
+        try:
+            with patch.object(client, "send_response", new_callable=AsyncMock) as mock_send:
+                mock_send.return_value = True
+                success, bytes_count = await client.send_cached_response_direct(
+                    SendResponsePayload(task_id="failed", status="failed", actual_count=1, messages=[])
+                )
+
+            assert success is True
+            assert bytes_count is None
+            mock_send.assert_awaited_once()
+        finally:
+            p.stop()
+
+    @pytest.mark.asyncio
+    async def test_direct_cached_response_delegates_zero_actual_count(self):
+        client, p = _make_client()
+        try:
+            with patch.object(client, "send_response", new_callable=AsyncMock) as mock_send:
+                mock_send.return_value = True
+                success, bytes_count = await client.send_cached_response_direct(
+                    SendResponsePayload(task_id="zero", status="completed", actual_count=0, messages=[])
+                )
+
+            assert success is True
+            assert bytes_count is None
+            mock_send.assert_awaited_once()
+        finally:
+            p.stop()
+
+    @pytest.mark.asyncio
+    async def test_direct_cached_response_stream_none_without_user_returns_empty(self):
+        client, p = _make_client()
+        try:
+            with patch.object(
+                client, "_stream_messages_to_cleaned_text", new_callable=AsyncMock
+            ) as mock_stream, patch.object(
+                client, "notify_empty_export", new_callable=AsyncMock
+            ) as mock_notify:
+                mock_stream.return_value = None
+                success, bytes_count = await client.send_cached_response_direct(
+                    SendResponsePayload(
+                        task_id="empty_no_user",
+                        status="completed",
+                        actual_count=1,
+                        messages=[],
+                    )
+                )
+
+            assert success is True
+            assert bytes_count == 0
+            mock_notify.assert_not_called()
+        finally:
+            p.stop()
+
+    @pytest.mark.asyncio
+    async def test_direct_cached_response_effectively_empty_notifies_and_cleans(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            path = tmp_path / "empty.txt"
+            path.write_text("\ufeff", encoding="utf-8")
+            with patch.object(
+                client, "_stream_messages_to_cleaned_text", new_callable=AsyncMock
+            ) as mock_stream, patch.object(
+                client, "notify_empty_export", new_callable=AsyncMock
+            ) as mock_notify, patch.object(
+                client, "_send_file_path_to_user", new_callable=AsyncMock
+            ) as mock_send:
+                mock_stream.return_value = str(path)
+                success, bytes_count = await client.send_cached_response_direct(
+                    SendResponsePayload(
+                        task_id="effective_empty",
+                        status="completed",
+                        messages=[],
+                        actual_count=1,
+                        user_chat_id=42,
+                    )
+                )
+
+            assert success is True
+            assert bytes_count == 0
+            mock_notify.assert_awaited_once()
+            mock_send.assert_not_called()
+            assert not path.exists()
+        finally:
+            p.stop()
+
+    @pytest.mark.asyncio
+    async def test_direct_cached_response_send_failure_notifies_and_returns_false(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            path = tmp_path / "result.txt"
+            path.write_text("20260609 hello\n", encoding="utf-8")
+            with patch.object(
+                client, "_stream_messages_to_cleaned_text", new_callable=AsyncMock
+            ) as mock_stream, patch.object(
+                client, "_send_file_path_to_user", new_callable=AsyncMock
+            ) as mock_send, patch.object(
+                client, "notify_user_failure", new_callable=AsyncMock
+            ) as mock_notify:
+                mock_stream.return_value = str(path)
+                mock_send.return_value = False
+                success, bytes_count = await client.send_cached_response_direct(
+                    SendResponsePayload(
+                        task_id="send_fail",
+                        status="completed",
+                        messages=[],
+                        actual_count=1,
+                        user_chat_id=42,
+                    )
+                )
+
+            assert success is False
+            assert bytes_count == len("20260609 hello\n".encode("utf-8"))
+            mock_notify.assert_awaited_once()
+            assert not path.exists()
+        finally:
+            p.stop()
+
+    @pytest.mark.asyncio
+    async def test_direct_cached_response_without_user_skips_upload(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            path = tmp_path / "result.txt"
+            path.write_text("20260609 hello\n", encoding="utf-8")
+            with patch.object(
+                client, "_stream_messages_to_cleaned_text", new_callable=AsyncMock
+            ) as mock_stream, patch.object(
+                client, "_send_file_path_to_user", new_callable=AsyncMock
+            ) as mock_send:
+                mock_stream.return_value = str(path)
+                success, bytes_count = await client.send_cached_response_direct(
+                    SendResponsePayload(
+                        task_id="no_user",
+                        status="completed",
+                        messages=[],
+                        actual_count=1,
+                    )
+                )
+
+            assert success is True
+            assert bytes_count == len("20260609 hello\n".encode("utf-8"))
+            mock_send.assert_not_called()
+            assert not path.exists()
+        finally:
+            p.stop()
+
+    @pytest.mark.asyncio
+    async def test_direct_cached_response_cleanup_ignores_missing_file(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            path = tmp_path / "result.txt"
+            path.write_text("20260609 hello\n", encoding="utf-8")
+
+            async def remove_before_send(*args, **kwargs):
+                path.unlink()
+                return True
+
+            with patch.object(
+                client, "_stream_messages_to_cleaned_text", new_callable=AsyncMock
+            ) as mock_stream, patch.object(
+                client, "_send_file_path_to_user", new_callable=AsyncMock
+            ) as mock_send:
+                mock_stream.return_value = str(path)
+                mock_send.side_effect = remove_before_send
+                success, bytes_count = await client.send_cached_response_direct(
+                    SendResponsePayload(
+                        task_id="missing_cleanup",
+                        status="completed",
+                        messages=[],
+                        actual_count=1,
+                        user_chat_id=42,
+                    )
+                )
+
+            assert success is True
+            assert bytes_count == len("20260609 hello\n".encode("utf-8"))
+            assert not path.exists()
+        finally:
+            p.stop()
+
+    @pytest.mark.asyncio
+    async def test_direct_stream_low_disk_raises_and_cleans(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            with patch.object(client, "_has_free_disk_for_write", return_value=False):
+                with pytest.raises(OSError):
+                    await client._stream_messages_to_cleaned_text(
+                        SendResponsePayload(
+                            task_id="low_disk",
+                            status="completed",
+                            messages=[
+                                ExportedMessage(
+                                    id=1,
+                                    type="message",
+                                    date="2026-06-09T12:00:00",
+                                    text="hello",
+                                )
+                            ],
+                            actual_count=1,
+                        )
+                    )
+
+            assert list(tmp_path.glob("tg_direct_*")) == []
+        finally:
+            p.stop()
+
+    @pytest.mark.asyncio
+    async def test_direct_stream_disk_exhausted_during_write_raises(self, tmp_path, monkeypatch):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            monkeypatch.setattr(java_client, "_DISK_FREE_CHECK_INTERVAL_BYTES", 1)
+            with patch.object(client, "_has_free_disk_for_write", side_effect=[True, False]):
+                with pytest.raises(OSError):
+                    await client._stream_messages_to_cleaned_text(
+                        SendResponsePayload(
+                            task_id="disk_exhausted",
+                            status="completed",
+                            messages=[
+                                ExportedMessage(
+                                    id=1,
+                                    type="message",
+                                    date="2026-06-09T12:00:00",
+                                    text="hello",
+                                )
+                            ],
+                            actual_count=1,
+                        )
+                    )
+
+            assert list(tmp_path.glob("tg_direct_*")) == []
+        finally:
+            p.stop()
+
 # ---------- _transform_entities (static) --------------------------------
 
 class TestEntityTransformation:

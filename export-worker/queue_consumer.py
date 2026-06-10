@@ -315,8 +315,10 @@ class QueueConsumer:
             return False
 
     async def mark_job_completed(self, task_id: str,
-                                 bot_user_id: Optional[int] = None,
-                                 subscription_id: Optional[int] = None) -> bool:
+                                  bot_user_id: Optional[int] = None,
+                                  subscription_id: Optional[int] = None,
+                                  messages_count: Optional[int] = None,
+                                  bytes_count: Optional[int] = None) -> bool:
         ok = await self._finalize_job(
             task_id,
             terminal_key=f"job:completed:{task_id}",
@@ -324,13 +326,26 @@ class QueueConsumer:
         )
         if ok:
             logger.debug(f"Marked job completed: {task_id}")
-            if subscription_id is not None or bot_user_id is not None:
-                await self._publish_completed_event(task_id, bot_user_id, subscription_id)
+            if (
+                subscription_id is not None
+                or bot_user_id is not None
+                or messages_count is not None
+                or bytes_count is not None
+            ):
+                await self._publish_completed_event(
+                    task_id,
+                    bot_user_id,
+                    subscription_id,
+                    messages_count,
+                    bytes_count,
+                )
         return ok
 
     async def _publish_completed_event(self, task_id: str,
-                                       bot_user_id: Optional[int],
-                                       subscription_id: Optional[int] = None) -> None:
+                                        bot_user_id: Optional[int],
+                                        subscription_id: Optional[int] = None,
+                                        messages_count: Optional[int] = None,
+                                        bytes_count: Optional[int] = None) -> None:
         """XADD export.completed в stats:events — обновляет статус в дашборде."""
         try:
             event_data: dict = {
@@ -343,6 +358,10 @@ class QueueConsumer:
                 event_data["subscription_id"] = subscription_id
             if bot_user_id is not None:
                 event_data["bot_user_id"] = bot_user_id
+            if messages_count is not None:
+                event_data["messages_count"] = messages_count
+            if bytes_count is not None:
+                event_data["bytes_count"] = bytes_count
             await self.redis_client.xadd(
                 settings.STATS_STREAM_KEY,
                 {"payload": json.dumps(event_data)},
