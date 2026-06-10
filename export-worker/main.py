@@ -585,7 +585,7 @@ class ExportWorker:
         )
         direct_cache_export = bool(
             settings.WORKER_DIRECT_CACHE_EXPORT
-            and self._last_export_direct_cache_eligible
+            and getattr(self, "_last_export_direct_cache_eligible", False)
             and self.message_cache
             and self.message_cache.enabled
             and msg_count > 0
