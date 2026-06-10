@@ -869,6 +869,47 @@ class TestDirectCachedResponse:
             p.stop()
 
     @pytest.mark.asyncio
+    async def test_direct_cached_response_delegates_zero_actual_count(self):
+        client, p = _make_client()
+        try:
+            with patch.object(client, "send_response", new_callable=AsyncMock) as mock_send:
+                mock_send.return_value = True
+                success, bytes_count = await client.send_cached_response_direct(
+                    SendResponsePayload(task_id="zero", status="completed", actual_count=0, messages=[])
+                )
+
+            assert success is True
+            assert bytes_count is None
+            mock_send.assert_awaited_once()
+        finally:
+            p.stop()
+
+    @pytest.mark.asyncio
+    async def test_direct_cached_response_stream_none_without_user_returns_empty(self):
+        client, p = _make_client()
+        try:
+            with patch.object(
+                client, "_stream_messages_to_cleaned_text", new_callable=AsyncMock
+            ) as mock_stream, patch.object(
+                client, "notify_empty_export", new_callable=AsyncMock
+            ) as mock_notify:
+                mock_stream.return_value = None
+                success, bytes_count = await client.send_cached_response_direct(
+                    SendResponsePayload(
+                        task_id="empty_no_user",
+                        status="completed",
+                        actual_count=1,
+                        messages=[],
+                    )
+                )
+
+            assert success is True
+            assert bytes_count == 0
+            mock_notify.assert_not_called()
+        finally:
+            p.stop()
+
+    @pytest.mark.asyncio
     async def test_direct_cached_response_effectively_empty_notifies_and_cleans(self, tmp_path):
         client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
         try:
@@ -956,6 +997,40 @@ class TestDirectCachedResponse:
             assert success is True
             assert bytes_count == len("20260609 hello\n".encode("utf-8"))
             mock_send.assert_not_called()
+            assert not path.exists()
+        finally:
+            p.stop()
+
+    @pytest.mark.asyncio
+    async def test_direct_cached_response_cleanup_ignores_missing_file(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            path = tmp_path / "result.txt"
+            path.write_text("20260609 hello\n", encoding="utf-8")
+
+            async def remove_before_send(*args, **kwargs):
+                path.unlink()
+                return True
+
+            with patch.object(
+                client, "_stream_messages_to_cleaned_text", new_callable=AsyncMock
+            ) as mock_stream, patch.object(
+                client, "_send_file_path_to_user", new_callable=AsyncMock
+            ) as mock_send:
+                mock_stream.return_value = str(path)
+                mock_send.side_effect = remove_before_send
+                success, bytes_count = await client.send_cached_response_direct(
+                    SendResponsePayload(
+                        task_id="missing_cleanup",
+                        status="completed",
+                        messages=[],
+                        actual_count=1,
+                        user_chat_id=42,
+                    )
+                )
+
+            assert success is True
+            assert bytes_count == len("20260609 hello\n".encode("utf-8"))
             assert not path.exists()
         finally:
             p.stop()
