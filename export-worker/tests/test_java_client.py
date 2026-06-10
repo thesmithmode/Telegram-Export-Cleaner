@@ -859,7 +859,7 @@ class TestDirectCachedResponse:
             with patch.object(client, "send_response", new_callable=AsyncMock) as mock_send:
                 mock_send.return_value = True
                 success, bytes_count = await client.send_cached_response_direct(
-                    SendResponsePayload(task_id="failed", status="failed", actual_count=1)
+                    SendResponsePayload(task_id="failed", status="failed", actual_count=1, messages=[])
                 )
 
             assert success is True
