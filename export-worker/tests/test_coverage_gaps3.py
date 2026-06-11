@@ -353,6 +353,7 @@ class TestExportWithIdCache:
         w.message_cache.store_messages = AsyncMock()
         w.message_cache.evict_if_needed = AsyncMock()
         w.message_cache.count_messages = AsyncMock(return_value=0)
+        w.message_cache.get_coverage_ranges = AsyncMock(return_value=[])
 
         async def _iter(*a, **kw):
             if False:

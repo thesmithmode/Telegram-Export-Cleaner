@@ -388,6 +388,69 @@ class TestLRUTracking:
         assert row[0] >= before
 
     @pytest.mark.asyncio
+    async def test_size_bytes_counts_formatted_text_as_utf8_bytes(self, cache):
+        await cache.store_messages(123, [_make_msg(1, text="Привет 😀")])
+
+        async with cache._db.execute(
+            """
+            SELECT
+                m.formatted_line,
+                m.filter_text,
+                cm.size_bytes,
+                LENGTH(m.data)
+            FROM messages m
+            JOIN chat_meta cm
+              ON cm.chat_id = m.chat_id AND cm.topic_id = m.topic_id
+            WHERE m.chat_id=?
+            """,
+            (123,),
+        ) as cur:
+            formatted_line, filter_text, size_bytes, data_bytes = await cur.fetchone()
+
+        expected = (
+            data_bytes
+            + len(formatted_line.encode("utf-8"))
+            + len(filter_text.encode("utf-8"))
+        )
+        character_counted = data_bytes + len(formatted_line) + len(filter_text)
+
+        assert size_bytes == expected
+        assert size_bytes > character_counted
+
+    @pytest.mark.asyncio
+    async def test_refresh_chat_meta_counts_multibyte_backfill_as_utf8_bytes(self, cache):
+        await cache.store_messages(123, [_make_msg(1, text="До связи 🚀")])
+        await cache._db.execute(
+            "UPDATE messages SET formatted_line=NULL, filter_text=NULL, format_version=0"
+        )
+        await cache._db.commit()
+
+        lines = [line async for line in cache.iter_export_lines(123, 1, 1)]
+        assert lines == ["20250101 До связи 🚀"]
+
+        async with cache._db.execute(
+            """
+            SELECT
+                m.formatted_line,
+                m.filter_text,
+                cm.size_bytes,
+                LENGTH(m.data)
+            FROM messages m
+            JOIN chat_meta cm
+              ON cm.chat_id = m.chat_id AND cm.topic_id = m.topic_id
+            WHERE m.chat_id=?
+            """,
+            (123,),
+        ) as cur:
+            formatted_line, filter_text, size_bytes, data_bytes = await cur.fetchone()
+
+        assert size_bytes == (
+            data_bytes
+            + len(formatted_line.encode("utf-8"))
+            + len(filter_text.encode("utf-8"))
+        )
+
+    @pytest.mark.asyncio
     async def test_last_accessed_refresh_on_read(self, cache):
         await cache.store_messages(123, _make_messages([1, 2, 3]))
 
