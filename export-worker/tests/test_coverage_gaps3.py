@@ -224,6 +224,7 @@ class TestFetchAllMessages:
         w.message_cache.enabled = cache_enabled
         w.message_cache.store_messages = AsyncMock()
         w.message_cache.evict_if_needed = AsyncMock()
+        w.message_cache.get_coverage_ranges = AsyncMock(return_value=[])
 
         async def _empty_iter(*a, **kw):
             if False:
