@@ -1004,10 +1004,9 @@ class JavaBotClient:
         elif total is not None:
             # total может быть 0 (Telegram ещё не посчитал) — показываем 0% вместо спиннера.
             # "N из M" вместо "N/M" чтобы Telegram не превращал в ссылку на телефон.
-            display_total = max(total, message_count) if total > 0 else total
-            pct = min(message_count * 100 // display_total, 100) if display_total > 0 else 0
+            pct = min(message_count * 100 // total, 100) if total > 0 else 0
             bar = self._build_progress_bar(pct)
-            text = f"📊 {bar} {pct}% ({message_count} из {display_total})"
+            text = f"📊 {bar} {pct}% ({message_count} из {total})"
             if eta_text:
                 text += f"   ~{eta_text}"
         elif started:
@@ -1135,7 +1134,6 @@ class ProgressTracker:
     async def seed(self, cached_count: int) -> None:
         if not self._total or cached_count <= 0:
             return
-        self._raise_total_to_observed(cached_count)
         self._baseline_count = cached_count
         self._start_time = time.time()  # ETA timer starts fresh from "now"
         self._last_reported_at = self._start_time
