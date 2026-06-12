@@ -76,6 +76,32 @@ def _make_temp_text(content: str) -> str:
         f.write(content)
     return path
 
+
+async def _raising_messages():
+    raise AssertionError("messages iterator must not be consumed")
+    if False:
+        yield None
+
+
+class _LineCache:
+    def __init__(self, lines=None, artifact=None):
+        self.lines = list(lines or [])
+        self.artifact = artifact
+        self.saved_artifacts = []
+        self.artifact_hits = 0
+
+    async def get_full_export_artifact(self, *args):
+        self.artifact_hits += 1
+        return self.artifact
+
+    async def save_full_export_artifact(self, **kwargs):
+        self.saved_artifacts.append(kwargs)
+        return None
+
+    async def iter_export_lines(self, *args, **kwargs):
+        for line in self.lines:
+            yield line
+
 # ---------- _stream_to_temp_json ----------------------------------------
 
 @pytest.mark.asyncio
@@ -818,6 +844,92 @@ class TestDirectCachedResponse:
             mock_upload.assert_not_called()
             mock_send.assert_called_once()
             assert list(tmp_path.glob("tg_direct_*")) == []
+        finally:
+            p.stop()
+
+    @pytest.mark.asyncio
+    async def test_direct_cached_response_streams_preformatted_cache_lines(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        cache = _LineCache(lines=["20260609 Keep"])
+        captured = {}
+
+        async def fake_send(chat_id, task_id, file_path, filename):
+            with open(file_path, encoding="utf-8") as f:
+                captured["content"] = f.read()
+            return True
+
+        try:
+            with patch.object(client, "_send_file_path_to_user", side_effect=fake_send):
+                success, bytes_count = await client.send_cached_response_direct(
+                    SendResponsePayload(
+                        task_id="direct_lines",
+                        status="completed",
+                        messages=_raising_messages(),
+                        actual_count=1,
+                        user_chat_id=42,
+                        chat_title="Direct Lines",
+                    ),
+                    cache=cache,
+                    cache_context={
+                        "chat_id": 100,
+                        "topic_id": 0,
+                        "range_type": "id",
+                        "low_id": 1,
+                        "high_id": 1,
+                        "full_export": False,
+                    },
+                )
+
+            assert success is True
+            assert bytes_count == len("20260609 Keep\n".encode("utf-8"))
+            assert captured["content"] == "20260609 Keep\n"
+            assert cache.saved_artifacts == []
+        finally:
+            p.stop()
+
+    @pytest.mark.asyncio
+    async def test_direct_cached_response_uses_artifact_hit_without_consuming_messages(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        artifact = tmp_path / "artifact.txt"
+        artifact.write_text("20260609 Cached\n", encoding="utf-8")
+        cache = _LineCache(artifact=(str(artifact), artifact.stat().st_size))
+        captured = {}
+
+        async def fake_send(chat_id, task_id, file_path, filename):
+            captured["path"] = file_path
+            with open(file_path, encoding="utf-8") as f:
+                captured["content"] = f.read()
+            return True
+
+        try:
+            with patch.object(client, "_send_file_path_to_user", side_effect=fake_send):
+                success, bytes_count = await client.send_cached_response_direct(
+                    SendResponsePayload(
+                        task_id="direct_artifact",
+                        status="completed",
+                        messages=_raising_messages(),
+                        actual_count=1,
+                        user_chat_id=42,
+                        chat_title="Direct Artifact",
+                    ),
+                    cache=cache,
+                    cache_context={
+                        "chat_id": 100,
+                        "topic_id": 0,
+                        "range_type": "id",
+                        "low_id": 0,
+                        "high_id": 10,
+                        "coverage_max_id": 10,
+                        "message_count": 1,
+                        "full_export": True,
+                    },
+                )
+
+            assert success is True
+            assert bytes_count == artifact.stat().st_size
+            assert captured["path"] == str(artifact)
+            assert captured["content"] == "20260609 Cached\n"
+            assert artifact.exists()
         finally:
             p.stop()
 
@@ -2069,3 +2181,36 @@ class TestSafeErr:
     def test_returns_string(self):
         e = RuntimeError("some error")
         assert isinstance(_safe_err(e), str)
+
+
+class TestHttpxLoggingRedaction:
+
+    def test_httpx_logger_redacts_bot_token_url(self, caplog):
+        import logging
+
+        java_client.configure_httpx_logging()
+        httpx_logger = logging.getLogger("httpx")
+
+        with caplog.at_level(logging.WARNING, logger="httpx"):
+            httpx_logger.warning(
+                "HTTP Request: POST https://api.telegram.org/bot123456:SECRET/sendDocument"
+            )
+
+        joined = "\n".join(r.getMessage() for r in caplog.records)
+        assert "123456:SECRET" not in joined
+        assert "/bot<REDACTED>/" in joined
+
+    def test_httpcore_child_logger_redacts_bot_token_url(self, caplog):
+        import logging
+
+        java_client.configure_httpx_logging()
+        httpcore_logger = logging.getLogger("httpcore.connection")
+
+        with caplog.at_level(logging.WARNING, logger="httpcore.connection"):
+            httpcore_logger.warning(
+                "HTTP Request: POST https://api.telegram.org/bot123456:SECRET/sendDocument"
+            )
+
+        joined = "\n".join(r.getMessage() for r in caplog.records)
+        assert "123456:SECRET" not in joined
+        assert "/bot<REDACTED>/" in joined

@@ -16,6 +16,11 @@ import httpx
 
 from config import settings
 from models import ExportedMessage, SendResponsePayload
+from text_format import (
+    format_cached_message_line,
+    format_java_export_date,
+    parse_keywords,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +30,43 @@ _CONVERT_SENTINEL = b"\n##OK##"
 _NEWLINE_RE = re.compile(r"\r\n|\r|\n")
 
 _BOT_TOKEN_RE = re.compile(r'/bot[^/]+/')
+_HTTP_LOG_RECORD_FACTORY_INSTALLED = False
+_ORIGINAL_LOG_RECORD_FACTORY = logging.getLogRecordFactory()
 
 def _safe_err(e: Exception) -> str:
     return _BOT_TOKEN_RE.sub('/bot<REDACTED>/', str(e))
+
+
+class _BotTokenRedactionFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = _BOT_TOKEN_RE.sub('/bot<REDACTED>/', record.getMessage())
+        record.args = ()
+        return True
+
+
+def configure_httpx_logging() -> None:
+    global _HTTP_LOG_RECORD_FACTORY_INSTALLED
+    if not _HTTP_LOG_RECORD_FACTORY_INSTALLED:
+        def _redacting_record_factory(*args, **kwargs):
+            record = _ORIGINAL_LOG_RECORD_FACTORY(*args, **kwargs)
+            if record.name == "httpx" or record.name.startswith("httpx."):
+                record.msg = _BOT_TOKEN_RE.sub('/bot<REDACTED>/', record.getMessage())
+                record.args = ()
+            elif record.name == "httpcore" or record.name.startswith("httpcore."):
+                record.msg = _BOT_TOKEN_RE.sub('/bot<REDACTED>/', record.getMessage())
+                record.args = ()
+            return record
+
+        logging.setLogRecordFactory(_redacting_record_factory)
+        _HTTP_LOG_RECORD_FACTORY_INSTALLED = True
+
+    for logger_name in ("httpx", "httpcore"):
+        target_logger = logging.getLogger(logger_name)
+        if not any(isinstance(f, _BotTokenRedactionFilter) for f in target_logger.filters):
+            target_logger.addFilter(_BotTokenRedactionFilter())
+
+
+configure_httpx_logging()
 
 class JavaBotClient:
 
@@ -166,11 +205,52 @@ class JavaBotClient:
             except FileNotFoundError:
                 pass
 
-    async def send_cached_response_direct(self, payload: SendResponsePayload) -> tuple[bool, Optional[int]]:
+    async def send_cached_response_direct(
+        self,
+        payload: SendResponsePayload,
+        cache=None,
+        cache_context: Optional[dict] = None,
+    ) -> tuple[bool, Optional[int]]:
         if payload.status != "completed" or payload.actual_count == 0:
             return await self.send_response(payload), None
 
-        cleaned_path = await self._stream_messages_to_cleaned_text(payload)
+        artifact_eligible = self._is_full_artifact_eligible(payload, cache, cache_context)
+        if artifact_eligible:
+            artifact = await cache.get_full_export_artifact(
+                cache_context["chat_id"],
+                cache_context.get("topic_id", 0),
+                cache_context["coverage_max_id"],
+                cache_context["message_count"],
+            )
+            if artifact is not None:
+                artifact_path, artifact_size = artifact
+                if payload.user_chat_id and self.bot_token:
+                    filename = self._build_filename(
+                        payload.chat_title,
+                        payload.from_date,
+                        payload.to_date,
+                        payload.chat_username,
+                    )
+                    sent = await self._send_file_path_to_user(
+                        payload.user_chat_id,
+                        payload.task_id,
+                        artifact_path,
+                        filename=filename,
+                    )
+                    if not sent:
+                        await self.notify_user_failure(
+                            payload.user_chat_id, payload.task_id,
+                            "Не удалось отправить файл. Попробуйте снова."
+                        )
+                        return False, artifact_size
+                logger.info("Task %s: sent cached export artifact", payload.task_id)
+                return True, artifact_size
+
+        cleaned_path = await self._stream_messages_to_cleaned_text(
+            payload,
+            cache=cache,
+            cache_context=cache_context,
+        )
         if cleaned_path is None:
             logger.info(
                 "Task %s: direct cached export returned empty text "
@@ -188,7 +268,7 @@ class JavaBotClient:
             return True, 0
 
         try:
-            bytes_count = os.path.getsize(cleaned_path)
+            bytes_count = self._count_export_text_bytes(cleaned_path)
             if await self._file_is_effectively_empty(cleaned_path):
                 logger.info(
                     "Task %s: direct cached export is effectively empty "
@@ -221,12 +301,44 @@ class JavaBotClient:
                         "Не удалось отправить файл. Попробуйте снова."
                     )
                     return False, bytes_count
+            if artifact_eligible:
+                try:
+                    await cache.save_full_export_artifact(
+                        chat_id=cache_context["chat_id"],
+                        topic_id=cache_context.get("topic_id", 0),
+                        coverage_max_id=cache_context["coverage_max_id"],
+                        message_count=cache_context["message_count"],
+                        source_path=cleaned_path,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Task %s: export artifact save skipped: %s",
+                        payload.task_id,
+                        _safe_err(exc),
+                    )
             return True, bytes_count
         finally:
             try:
                 os.unlink(cleaned_path)
             except FileNotFoundError:
                 pass
+
+    @staticmethod
+    def _is_full_artifact_eligible(
+        payload: SendResponsePayload,
+        cache,
+        cache_context: Optional[dict],
+    ) -> bool:
+        if cache is None or not cache_context:
+            return False
+        if not cache_context.get("full_export"):
+            return False
+        if payload.from_date or payload.to_date or payload.keywords or payload.exclude_keywords:
+            return False
+        return (
+            cache_context.get("coverage_max_id") is not None
+            and cache_context.get("message_count") is not None
+        )
 
     async def _stream_to_temp_json(
         self,
@@ -261,7 +373,12 @@ class JavaBotClient:
             raise
         return tmp_path
 
-    async def _stream_messages_to_cleaned_text(self, payload: SendResponsePayload) -> Optional[str]:
+    async def _stream_messages_to_cleaned_text(
+        self,
+        payload: SendResponsePayload,
+        cache=None,
+        cache_context: Optional[dict] = None,
+    ) -> Optional[str]:
         fd, output_path = self._mkstemp(suffix=".txt", prefix="tg_direct_")
         written = 0
         bytes_since_disk_check = 0
@@ -280,18 +397,44 @@ class JavaBotClient:
                     pass
                 raise OSError(f"Not enough free disk space for direct export task {payload.task_id}")
 
-            msgs_iter = (
-                payload.messages
-                if not isinstance(payload.messages, list)
-                else self._iter_list(payload.messages)
-            )
-            with os.fdopen(fd, "w", encoding="utf-8", newline="") as out:
-                async for msg in msgs_iter:
-                    line = self._format_cached_message_line(
-                        msg,
+            lines_iter = None
+            if cache is not None and cache_context:
+                if cache_context.get("range_type") == "date":
+                    lines_iter = cache.iter_export_lines(
+                        cache_context["chat_id"],
+                        topic_id=cache_context.get("topic_id", 0),
+                        from_date=cache_context.get("from_date"),
+                        to_date=cache_context.get("to_date"),
                         include_keywords=include_keywords,
                         exclude_keywords=exclude_keywords,
                     )
+                else:
+                    lines_iter = cache.iter_export_lines(
+                        cache_context["chat_id"],
+                        cache_context.get("low_id", 0),
+                        cache_context.get("high_id", 2 ** 62),
+                        topic_id=cache_context.get("topic_id", 0),
+                        include_keywords=include_keywords,
+                        exclude_keywords=exclude_keywords,
+                    )
+            msgs_iter = None
+            if lines_iter is None:
+                msgs_iter = (
+                    payload.messages
+                    if not isinstance(payload.messages, list)
+                    else self._iter_list(payload.messages)
+                )
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as out:
+                source_iter = lines_iter if lines_iter is not None else msgs_iter
+                async for item in source_iter:
+                    if lines_iter is not None:
+                        line = item
+                    else:
+                        line = self._format_cached_message_line(
+                            item,
+                            include_keywords=include_keywords,
+                            exclude_keywords=exclude_keywords,
+                        )
                     if line is None:
                         continue
                     encoded_len = len(line.encode("utf-8")) + 1
@@ -336,46 +479,36 @@ class JavaBotClient:
         include_keywords: Optional[list[str]] = None,
         exclude_keywords: Optional[list[str]] = None,
     ) -> Optional[str]:
-        if msg is None or msg.type == "service":
-            return None
-        date = cls._format_java_export_date(msg.date)
-        if not date:
-            return None
-        text = msg.text or ""
-        if not text.strip():
-            return None
-        text_for_filter = text.lower()
-        if include_keywords and not any(kw in text_for_filter for kw in include_keywords):
-            return None
-        if exclude_keywords and any(kw in text_for_filter for kw in exclude_keywords):
-            return None
-        text = _NEWLINE_RE.sub(" ", text)
-        return f"{date} {text}"
+        return format_cached_message_line(
+            msg,
+            include_keywords=include_keywords,
+            exclude_keywords=exclude_keywords,
+        )
 
     @staticmethod
     def _format_java_export_date(date_str: Optional[str]) -> str:
-        if not date_str:
-            return ""
-        if len(date_str) > 19 and date_str[19] in ("+", "-", "Z"):
-            return ""
-        try:
-            normalized = date_str[:19]
-            dt = datetime.strptime(normalized, "%Y-%m-%dT%H:%M:%S")
-            return dt.strftime("%Y%m%d")
-        except (TypeError, ValueError):
-            return ""
+        return format_java_export_date(date_str)
 
     @staticmethod
     def _parse_keywords(raw: Optional[str]) -> list[str]:
-        if not raw:
-            return []
-        return [part.strip().lower() for part in raw.split(",") if part.strip()]
+        return parse_keywords(raw)
 
     def _mkstemp(self, suffix: str, prefix: str) -> tuple[int, str]:
         temp_dir = settings.EXPORT_TEMP_DIR
         if temp_dir:
             os.makedirs(temp_dir, exist_ok=True)
         return tempfile.mkstemp(suffix=suffix, prefix=prefix, dir=temp_dir or None)
+
+    @staticmethod
+    def _count_export_text_bytes(file_path: str) -> int:
+        total = 0
+        with open(file_path, "r", encoding="utf-8") as f:
+            while True:
+                chunk = f.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk.encode("utf-8"))
+        return total
 
     @staticmethod
     def _min_free_disk_bytes() -> int:

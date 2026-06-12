@@ -4,8 +4,10 @@ import logging
 import os
 import shutil
 import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, AsyncGenerator, List, Optional, Tuple, Union
 
 import aiosqlite
@@ -14,6 +16,11 @@ import msgpack
 
 from models import ExportedMessage
 from pyrogram_client import ensure_utc
+from text_format import (
+    EXPORT_TEXT_FORMAT_VERSION,
+    build_export_cache_fields,
+    line_matches_keywords,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +31,14 @@ from config import settings
 # с TTL канонических маппингов (30 дней), чтобы expire ранжей не оставлял zombie
 # в Java логике. Не привязано к SQLite TTL (там диапазоны хранятся вечно до evict).
 _CACHE_RANGES_REDIS_TTL_SECONDS = 30 * 86400
+_CHAT_META_SIZE_SELECT_SQL = """
+    SELECT COUNT(*), COALESCE(SUM(
+        LENGTH(data)
+        + COALESCE(LENGTH(CAST(formatted_line AS BLOB)), 0)
+        + COALESCE(LENGTH(CAST(filter_text AS BLOB)), 0)
+    ), 0)
+    FROM messages WHERE chat_id=? AND topic_id=?
+"""
 
 
 class MessageCache:
@@ -35,12 +50,35 @@ class MessageCache:
         max_messages_per_chat: int = 100_000,
         ttl_seconds: int = 30 * 86400,
         enabled: bool = True,
+        artifact_dir: Optional[str] = None,
+        artifact_min_bytes: Optional[int] = None,
+        artifact_max_bytes: Optional[int] = None,
+        artifact_enabled: Optional[bool] = None,
     ):
         self.db_path = db_path
         self.max_disk_bytes = max_disk_bytes
         self.max_messages_per_chat = max_messages_per_chat
         self.ttl = ttl_seconds
         self.enabled = enabled
+        self.artifact_enabled = (
+            settings.EXPORT_ARTIFACT_CACHE_ENABLED
+            if artifact_enabled is None else bool(artifact_enabled)
+        )
+        self.artifact_dir = artifact_dir or settings.EXPORT_ARTIFACT_DIR or os.path.join(
+            os.path.dirname(db_path) or ".", "artifacts",
+        )
+        self.artifact_min_bytes = (
+            int(settings.EXPORT_ARTIFACT_MIN_BYTES)
+            if artifact_min_bytes is None else int(artifact_min_bytes)
+        )
+        default_artifact_cap = min(5 * 1024 ** 3, int(max_disk_bytes * 0.2))
+        configured_artifact_cap = int(settings.EXPORT_ARTIFACT_MAX_DISK_GB * 1024 ** 3)
+        if artifact_max_bytes is not None:
+            self.artifact_max_bytes = int(artifact_max_bytes)
+        elif configured_artifact_cap > 0:
+            self.artifact_max_bytes = min(configured_artifact_cap, default_artifact_cap)
+        else:
+            self.artifact_max_bytes = default_artifact_cap
         self._db: Optional[aiosqlite.Connection] = None
         # Read pool: отдельные read-only conn разрывают bottleneck aiosqlite single-thread
         # executor при concurrent reads. WAL уже разрешает writers + readers parallel,
@@ -86,6 +124,9 @@ class MessageCache:
                 msg_id    INTEGER NOT NULL,
                 msg_ts    INTEGER NOT NULL,
                 data      BLOB    NOT NULL,
+                formatted_line TEXT,
+                filter_text    TEXT,
+                format_version INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (chat_id, topic_id, msg_id)
             );
             CREATE INDEX IF NOT EXISTS idx_msg_ts
@@ -96,6 +137,15 @@ class MessageCache:
                 topic_id  INTEGER NOT NULL DEFAULT 0,
                 min_id    INTEGER NOT NULL,
                 max_id    INTEGER NOT NULL,
+                PRIMARY KEY (chat_id, topic_id, min_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS chat_id_coverage_ranges (
+                chat_id    INTEGER NOT NULL,
+                topic_id   INTEGER NOT NULL DEFAULT 0,
+                min_id     INTEGER NOT NULL,
+                max_id     INTEGER NOT NULL,
+                checked_at REAL    NOT NULL DEFAULT 0,
                 PRIMARY KEY (chat_id, topic_id, min_id)
             );
 
@@ -115,7 +165,24 @@ class MessageCache:
                 size_bytes    INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (chat_id, topic_id)
             );
+
+            CREATE TABLE IF NOT EXISTS export_artifacts (
+                chat_id         INTEGER NOT NULL,
+                topic_id        INTEGER NOT NULL DEFAULT 0,
+                scope           TEXT    NOT NULL DEFAULT 'full',
+                format_version  INTEGER NOT NULL,
+                coverage_max_id INTEGER NOT NULL,
+                message_count   INTEGER NOT NULL,
+                file_size       INTEGER NOT NULL,
+                file_path       TEXT    NOT NULL,
+                last_accessed   REAL    NOT NULL,
+                created_at      REAL    NOT NULL,
+                PRIMARY KEY (chat_id, topic_id, scope, format_version)
+            );
+            CREATE INDEX IF NOT EXISTS idx_export_artifacts_lru
+                ON export_artifacts(last_accessed ASC);
         """)
+        await self._migrate_schema_if_needed()
         await self._db.commit()
 
         # Read pool инициализируется ПОСЛЕ создания таблиц чтобы избежать
@@ -184,6 +251,40 @@ class MessageCache:
                 "MessageCache: page_size migration failed: %s — продолжаем со старым size",
                 exc, exc_info=True,
             )
+
+    async def _migrate_schema_if_needed(self) -> None:
+        if self._db is None:
+            return
+
+        async with self._db.execute("PRAGMA table_info(messages)") as cur:
+            rows = await cur.fetchall()
+        columns = {row[1] for row in rows}
+
+        migrations = []
+        if "formatted_line" not in columns:
+            migrations.append("ALTER TABLE messages ADD COLUMN formatted_line TEXT")
+        if "filter_text" not in columns:
+            migrations.append("ALTER TABLE messages ADD COLUMN filter_text TEXT")
+        if "format_version" not in columns:
+            migrations.append(
+                "ALTER TABLE messages ADD COLUMN format_version INTEGER NOT NULL DEFAULT 0"
+            )
+
+        for sql in migrations:
+            await self._db.execute(sql)
+
+        # Existing visible ranges were already fetched from Telegram, so they are
+        # valid initial coverage. Empty gaps are added lazily by new exports.
+        await self._db.execute(
+            """
+            INSERT OR IGNORE INTO chat_id_coverage_ranges(
+                chat_id, topic_id, min_id, max_id, checked_at
+            )
+            SELECT chat_id, topic_id, min_id, max_id, ?
+            FROM chat_id_ranges
+            """,
+            (time.time(),),
+        )
 
     async def _init_read_pool(self) -> None:
         """4 отдельных read-only conn в asyncio.Queue для concurrent reads."""
@@ -305,23 +406,40 @@ class MessageCache:
         total_bytes = 0
         for msg in messages:
             data = self._serialize(msg)
+            formatted_line, filter_text, format_version = build_export_cache_fields(msg)
             ts = int(self._parse_date_to_timestamp(msg.date) or 0)
-            rows.append((chat_id_int, topic_id, msg.id, ts, data))
-            total_bytes += len(data)
+            rows.append((
+                chat_id_int,
+                topic_id,
+                msg.id,
+                ts,
+                data,
+                formatted_line,
+                filter_text,
+                format_version,
+            ))
+            total_bytes += (
+                len(data)
+                + (len(formatted_line.encode("utf-8")) if formatted_line else 0)
+                + (len(filter_text.encode("utf-8")) if filter_text else 0)
+            )
 
         try:
             # INSERT OR REPLACE: newest import always wins
             store_batch = settings.CACHE_STORE_BATCH_SIZE
             for i in range(0, len(rows), store_batch):
                 await self._db.executemany(
-                    "INSERT OR REPLACE INTO messages(chat_id, topic_id, msg_id, msg_ts, data)"
-                    " VALUES (?,?,?,?,?)",
+                    "INSERT OR REPLACE INTO messages("
+                    "chat_id, topic_id, msg_id, msg_ts, data, "
+                    "formatted_line, filter_text, format_version"
+                    ") VALUES (?,?,?,?,?,?,?,?)",
                     rows[i : i + store_batch],
                 )
 
             # Merge ID ranges (без commit внутри — см. докстринг helper'ов)
             msg_ids = sorted(m.id for m in messages)
             await self._add_range(chat_id_int, topic_id, msg_ids[0], msg_ids[-1])
+            await self._add_coverage_range(chat_id_int, topic_id, msg_ids[0], msg_ids[-1])
 
             # Merge date ranges
             dates = sorted({self._extract_date_str(m.date) for m in messages if m.date})
@@ -331,8 +449,7 @@ class MessageCache:
             # Upsert metadata — size_bytes пересчитывается из реальных данных,
             # а не аккумулируется (иначе INSERT OR REPLACE раздувает счётчик)
             async with self._db.execute(
-                "SELECT COUNT(*), COALESCE(SUM(LENGTH(data)), 0)"
-                " FROM messages WHERE chat_id=? AND topic_id=?",
+                _CHAT_META_SIZE_SELECT_SQL,
                 (chat_id_int, topic_id),
             ) as cur:
                 row = await cur.fetchone()
@@ -397,7 +514,7 @@ class MessageCache:
         if self.redis_client is None:
             return
         try:
-            ranges = await self.get_cached_ranges(chat_id_int, topic_id=0)
+            ranges = await self.get_coverage_ranges(chat_id_int, topic_id=0)
             payload = _stdjson.dumps(ranges, separators=(",", ":"))
             await self.redis_client.set(
                 f"cache:ranges:{chat_id_int}",
@@ -481,6 +598,96 @@ class MessageCache:
             row = await cur.fetchone()
             return row[0] if row else 0
 
+    async def iter_export_lines(
+        self,
+        chat_id: Union[int, str],
+        low_id: int = 0,
+        high_id: int = 2 ** 62,
+        topic_id: int = 0,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+        include_keywords: Optional[list[str]] = None,
+        exclude_keywords: Optional[list[str]] = None,
+    ) -> AsyncGenerator[str, None]:
+        if not self.enabled or self._db is None:
+            return
+
+        chat_id_int = int(chat_id)
+        await self._touch(chat_id_int, topic_id)
+
+        if from_date and to_date:
+            ts_from = int(self._date_str_to_timestamp(from_date[:10]))
+            ts_to = int(self._date_str_to_timestamp(to_date[:10])) + 86400 - 1
+            sql = (
+                "SELECT msg_id, data, formatted_line, filter_text, format_version"
+                " FROM messages"
+                " WHERE chat_id=? AND topic_id=? AND msg_ts BETWEEN ? AND ?"
+                " ORDER BY msg_id"
+            )
+            params = (chat_id_int, topic_id, ts_from, ts_to)
+        else:
+            sql = (
+                "SELECT msg_id, data, formatted_line, filter_text, format_version"
+                " FROM messages"
+                " WHERE chat_id=? AND topic_id=? AND msg_id BETWEEN ? AND ?"
+                " ORDER BY msg_id"
+            )
+            params = (chat_id_int, topic_id, low_id, high_id)
+
+        backfilled_any = False
+        async with self._acquire_read() as rc:
+            async with rc.execute(sql, params) as cursor:
+                while True:
+                    rows = await cursor.fetchmany(settings.CACHE_FETCH_CHUNK_SIZE)
+                    if not rows:
+                        break
+                    updates = []
+                    lines = []
+                    for msg_id, data, formatted_line, filter_text, format_version in rows:
+                        if format_version != EXPORT_TEXT_FORMAT_VERSION:
+                            try:
+                                msg = self._deserialize(data)
+                                formatted_line, filter_text, format_version = build_export_cache_fields(msg)
+                            except Exception as exc:
+                                logger.warning(
+                                    "Deserialize error during export line backfill "
+                                    "(chat %s, msg %s): %s",
+                                    chat_id_int, msg_id, exc,
+                                )
+                                formatted_line = None
+                                filter_text = None
+                                format_version = EXPORT_TEXT_FORMAT_VERSION
+                            updates.append((
+                                formatted_line,
+                                filter_text,
+                                EXPORT_TEXT_FORMAT_VERSION,
+                                chat_id_int,
+                                topic_id,
+                                msg_id,
+                            ))
+                        if formatted_line and line_matches_keywords(
+                            filter_text,
+                            include_keywords=include_keywords,
+                            exclude_keywords=exclude_keywords,
+                        ):
+                            lines.append(formatted_line)
+
+                    if updates:
+                        await self._db.executemany(
+                            "UPDATE messages"
+                            " SET formatted_line=?, filter_text=?, format_version=?"
+                            " WHERE chat_id=? AND topic_id=? AND msg_id=?",
+                            updates,
+                        )
+                        await self._db.commit()
+                        backfilled_any = True
+
+                    for line in lines:
+                        yield line
+
+        if backfilled_any:
+            await self._refresh_chat_meta(chat_id_int, topic_id)
+
     # ------------------------------------------------------------------ #
     # ID-range management
     # ------------------------------------------------------------------ #
@@ -497,6 +704,29 @@ class MessageCache:
             rows = await cur.fetchall()
         return [[r[0], r[1]] for r in rows]
 
+    async def get_coverage_ranges(self, chat_id: Union[int, str],
+                                  topic_id: int = 0) -> List[List[int]]:
+        if not self.enabled or self._db is None:
+            return []
+        async with self._db.execute(
+            "SELECT min_id, max_id FROM chat_id_coverage_ranges"
+            " WHERE chat_id=? AND topic_id=? ORDER BY min_id",
+            (int(chat_id), topic_id),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [[r[0], r[1]] for r in rows]
+
+    async def mark_id_range_checked(
+        self, chat_id: Union[int, str], low_id: int, high_id: int,
+        topic_id: int = 0,
+    ) -> None:
+        if not self.enabled or self._db is None or high_id < low_id:
+            return
+        await self._add_coverage_range(int(chat_id), topic_id, low_id, high_id)
+        await self._db.commit()
+        if topic_id == 0:
+            await self._publish_cache_ranges_to_redis(int(chat_id))
+
     async def get_missing_ranges(
         self, chat_id: Union[int, str], requested_low: int, requested_high: int,
         topic_id: int = 0,
@@ -504,7 +734,7 @@ class MessageCache:
         if not self.enabled:
             return [(requested_low, requested_high)]
 
-        cached = await self.get_cached_ranges(chat_id, topic_id=topic_id)
+        cached = await self.get_coverage_ranges(chat_id, topic_id=topic_id)
         if not cached:
             return [(requested_low, requested_high)]
 
@@ -663,6 +893,23 @@ class MessageCache:
             [(chat_id, topic_id, r[0], r[1]) for r in merged],
         )
 
+    async def _add_coverage_range(
+        self, chat_id: int, topic_id: int, new_min: int, new_max: int,
+    ) -> None:
+        cached = await self.get_coverage_ranges(chat_id, topic_id=topic_id)
+        merged = self._merge_intervals(cached + [[new_min, new_max]])
+        checked_at = time.time()
+        await self._db.execute(
+            "DELETE FROM chat_id_coverage_ranges WHERE chat_id=? AND topic_id=?",
+            (chat_id, topic_id),
+        )
+        await self._db.executemany(
+            "INSERT INTO chat_id_coverage_ranges("
+            "chat_id, topic_id, min_id, max_id, checked_at"
+            ") VALUES (?,?,?,?,?)",
+            [(chat_id, topic_id, r[0], r[1], checked_at) for r in merged],
+        )
+
     @staticmethod
     def _merge_intervals(intervals: List[List[int]]) -> List[List[int]]:
         if not intervals:
@@ -713,8 +960,248 @@ class MessageCache:
         return [[d[0].isoformat(), d[1].isoformat()] for d in merged]
 
     # ------------------------------------------------------------------ #
+    # Full-export artifact cache
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _artifact_scope() -> str:
+        return "full"
+
+    def _artifact_root(self) -> Path:
+        return Path(self.artifact_dir).resolve()
+
+    def _artifact_file_path(
+        self, chat_id: int, topic_id: int, coverage_max_id: int, message_count: int,
+    ) -> Path:
+        name = (
+            f"chat_{chat_id}_topic_{topic_id}_v{EXPORT_TEXT_FORMAT_VERSION}"
+            f"_c{coverage_max_id}_m{message_count}.txt"
+        )
+        return self._artifact_root() / name
+
+    def _is_artifact_path_safe(self, file_path: str) -> bool:
+        try:
+            Path(file_path).resolve().relative_to(self._artifact_root())
+            return True
+        except (OSError, ValueError):
+            return False
+
+    def _unlink_artifact_file(self, file_path: str) -> None:
+        if not self._is_artifact_path_safe(file_path):
+            logger.warning("Refusing to unlink artifact outside root: %s", file_path)
+            return
+        try:
+            os.unlink(file_path)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.warning("Failed to unlink export artifact %s: %s", file_path, exc)
+
+    async def _artifact_total_bytes(self) -> int:
+        if self._db is None:
+            return 0
+        async with self._db.execute(
+            "SELECT COALESCE(SUM(file_size), 0) FROM export_artifacts"
+        ) as cur:
+            row = await cur.fetchone()
+        return int(row[0] if row else 0)
+
+    async def get_full_export_artifact(
+        self,
+        chat_id: Union[int, str],
+        topic_id: int,
+        coverage_max_id: int,
+        message_count: int,
+    ) -> Optional[tuple[str, int]]:
+        if not self.enabled or not self.artifact_enabled or self._db is None:
+            return None
+        chat_id_int = int(chat_id)
+        scope = self._artifact_scope()
+        async with self._db.execute(
+            "SELECT coverage_max_id, message_count, file_size, file_path"
+            " FROM export_artifacts"
+            " WHERE chat_id=? AND topic_id=? AND scope=? AND format_version=?",
+            (chat_id_int, topic_id, scope, EXPORT_TEXT_FORMAT_VERSION),
+        ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return None
+
+        stored_coverage_max_id, stored_message_count, file_size, file_path = row
+        if (
+            stored_coverage_max_id != coverage_max_id
+            or stored_message_count != message_count
+            or not os.path.exists(file_path)
+        ):
+            if os.path.exists(file_path):
+                self._unlink_artifact_file(file_path)
+            await self._db.execute(
+                "DELETE FROM export_artifacts"
+                " WHERE chat_id=? AND topic_id=? AND scope=? AND format_version=?",
+                (chat_id_int, topic_id, scope, EXPORT_TEXT_FORMAT_VERSION),
+            )
+            await self._db.commit()
+            return None
+
+        await self._db.execute(
+            "UPDATE export_artifacts SET last_accessed=?"
+            " WHERE chat_id=? AND topic_id=? AND scope=? AND format_version=?",
+            (time.time(), chat_id_int, topic_id, scope, EXPORT_TEXT_FORMAT_VERSION),
+        )
+        await self._db.commit()
+        return file_path, file_size
+
+    async def save_full_export_artifact(
+        self,
+        chat_id: Union[int, str],
+        topic_id: int,
+        coverage_max_id: int,
+        message_count: int,
+        source_path: str,
+    ) -> Optional[tuple[str, int]]:
+        if not self.enabled or not self.artifact_enabled or self._db is None:
+            return None
+        try:
+            file_size = os.path.getsize(source_path)
+        except OSError:
+            return None
+        if file_size < self.artifact_min_bytes or file_size > self.artifact_max_bytes:
+            return None
+
+        chat_id_int = int(chat_id)
+        root = self._artifact_root()
+        root.mkdir(parents=True, exist_ok=True)
+        final_path = self._artifact_file_path(
+            chat_id_int, topic_id, coverage_max_id, message_count,
+        )
+        tmp_path = root / f".{final_path.name}.{uuid.uuid4().hex}.tmp"
+
+        try:
+            with open(source_path, "rb") as src, open(tmp_path, "wb") as dst:
+                shutil.copyfileobj(src, dst, length=1024 * 1024)
+                dst.flush()
+                os.fsync(dst.fileno())
+            os.replace(tmp_path, final_path)
+            try:
+                dir_fd = os.open(root, os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError:
+                pass
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
+            raise
+
+        scope = self._artifact_scope()
+        now = time.time()
+        async with self._db.execute(
+            "SELECT file_path FROM export_artifacts"
+            " WHERE chat_id=? AND topic_id=? AND scope=? AND format_version=?",
+            (chat_id_int, topic_id, scope, EXPORT_TEXT_FORMAT_VERSION),
+        ) as cur:
+            old_row = await cur.fetchone()
+        old_path = old_row[0] if old_row else None
+
+        await self._db.execute(
+            """
+            INSERT INTO export_artifacts(
+                chat_id, topic_id, scope, format_version,
+                coverage_max_id, message_count, file_size, file_path,
+                last_accessed, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(chat_id, topic_id, scope, format_version) DO UPDATE SET
+                coverage_max_id = excluded.coverage_max_id,
+                message_count   = excluded.message_count,
+                file_size       = excluded.file_size,
+                file_path       = excluded.file_path,
+                last_accessed   = excluded.last_accessed,
+                created_at      = excluded.created_at
+            """,
+            (
+                chat_id_int,
+                topic_id,
+                scope,
+                EXPORT_TEXT_FORMAT_VERSION,
+                coverage_max_id,
+                message_count,
+                file_size,
+                str(final_path),
+                now,
+                now,
+            ),
+        )
+        await self._db.commit()
+
+        if old_path and old_path != str(final_path):
+            self._unlink_artifact_file(old_path)
+        await self.evict_artifacts_if_needed()
+        return str(final_path), file_size
+
+    async def evict_artifacts_if_needed(self, max_bytes: Optional[int] = None) -> int:
+        if not self.enabled or self._db is None:
+            return 0
+        limit = self.artifact_max_bytes if max_bytes is None else int(max_bytes)
+        if limit <= 0:
+            limit = 0
+        total = await self._artifact_total_bytes()
+        if total <= limit:
+            return 0
+
+        async with self._db.execute(
+            "SELECT chat_id, topic_id, scope, format_version, file_size, file_path"
+            " FROM export_artifacts ORDER BY last_accessed ASC"
+        ) as cur:
+            rows = await cur.fetchall()
+
+        to_delete = []
+        for chat_id, topic_id, scope, version, file_size, file_path in rows:
+            if total <= limit:
+                break
+            to_delete.append((chat_id, topic_id, scope, version, file_path))
+            total -= file_size
+
+        for chat_id, topic_id, scope, version, _ in to_delete:
+            await self._db.execute(
+                "DELETE FROM export_artifacts"
+                " WHERE chat_id=? AND topic_id=? AND scope=? AND format_version=?",
+                (chat_id, topic_id, scope, version),
+            )
+        await self._db.commit()
+
+        for *_, file_path in to_delete:
+            self._unlink_artifact_file(file_path)
+        return len(to_delete)
+
+    # ------------------------------------------------------------------ #
     # LRU touch & eviction
     # ------------------------------------------------------------------ #
+
+    async def _refresh_chat_meta(self, chat_id: int, topic_id: int) -> None:
+        if self._db is None:
+            return
+        async with self._db.execute(
+            _CHAT_META_SIZE_SELECT_SQL,
+            (chat_id, topic_id),
+        ) as cur:
+            row = await cur.fetchone()
+        count = row[0] if row else 0
+        size_bytes = row[1] if row else 0
+        await self._db.execute(
+            """
+            INSERT INTO chat_meta(chat_id, topic_id, last_accessed, msg_count, size_bytes)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(chat_id, topic_id) DO UPDATE SET
+                msg_count = excluded.msg_count,
+                size_bytes = excluded.size_bytes
+            """,
+            (chat_id, topic_id, time.time(), count, size_bytes),
+        )
+        await self._db.commit()
 
     async def _touch(self, chat_id: int, topic_id: int = 0):
         """Обновляет last_accessed и сразу фиксирует изменение в БД."""
@@ -752,7 +1239,19 @@ class MessageCache:
             total_bytes: int = row[0] if row else 0
 
         target = int(self.max_disk_bytes * 0.9)
-        if total_bytes <= target:
+        artifact_bytes = await self._artifact_total_bytes()
+        total_with_artifacts = total_bytes + artifact_bytes
+
+        artifact_budget = min(
+            self.artifact_max_bytes,
+            max(0, target - total_bytes),
+        )
+        artifact_evicted = await self.evict_artifacts_if_needed(max_bytes=artifact_budget)
+        if artifact_evicted:
+            artifact_bytes = await self._artifact_total_bytes()
+            total_with_artifacts = total_bytes + artifact_bytes
+
+        if total_with_artifacts <= target:
             return 0
 
         # Fetch candidates sorted oldest-first (LRU)
@@ -762,10 +1261,19 @@ class MessageCache:
             candidates = await cur.fetchall()
 
         evicted = 0
+        artifact_paths_to_unlink: list[str] = []
         try:
             for chat_id, topic_id, size in candidates:
-                if total_bytes <= target:
+                if total_with_artifacts <= target:
                     break
+                async with self._db.execute(
+                    "SELECT file_path, file_size FROM export_artifacts"
+                    " WHERE chat_id=? AND topic_id=?",
+                    (chat_id, topic_id),
+                ) as cur:
+                    artifact_rows = await cur.fetchall()
+                artifact_paths_to_unlink.extend(row[0] for row in artifact_rows)
+                chat_artifact_bytes = sum(int(row[1]) for row in artifact_rows)
                 await self._db.execute(
                     "DELETE FROM messages WHERE chat_id=? AND topic_id=?", (chat_id, topic_id)
                 )
@@ -773,7 +1281,13 @@ class MessageCache:
                     "DELETE FROM chat_id_ranges WHERE chat_id=? AND topic_id=?", (chat_id, topic_id)
                 )
                 await self._db.execute(
+                    "DELETE FROM chat_id_coverage_ranges WHERE chat_id=? AND topic_id=?", (chat_id, topic_id)
+                )
+                await self._db.execute(
                     "DELETE FROM chat_date_ranges WHERE chat_id=? AND topic_id=?", (chat_id, topic_id)
+                )
+                await self._db.execute(
+                    "DELETE FROM export_artifacts WHERE chat_id=? AND topic_id=?", (chat_id, topic_id)
                 )
                 await self._db.execute(
                     "DELETE FROM chat_meta WHERE chat_id=? AND topic_id=?", (chat_id, topic_id)
@@ -781,11 +1295,14 @@ class MessageCache:
                 # Также убираем lock — иначе dict растёт unbounded при долгом uptime
                 self._chat_locks.pop(chat_id, None)
                 total_bytes -= size
+                artifact_bytes -= chat_artifact_bytes
+                total_with_artifacts -= size + chat_artifact_bytes
                 evicted += 1
                 topic_info = f" topic={topic_id}" if topic_id else ""
                 logger.info(
                     f"Evicted LRU cache for chat {chat_id}{topic_info} "
-                    f"({size // 1024} KB freed, remaining ~{total_bytes // 1024 // 1024} MB)"
+                    f"({(size + chat_artifact_bytes) // 1024} KB freed, "
+                    f"remaining ~{total_with_artifacts // 1024 // 1024} MB)"
                 )
             # Один атомарный commit — либо все evict'ы, либо ни одного.
             # Не оставляет "phantom ranges" без messages при прерывании.
@@ -796,6 +1313,9 @@ class MessageCache:
             except Exception as rb_exc:
                 logger.warning(f"rollback failed during evict: {rb_exc}")
             raise
+
+        for artifact_path in artifact_paths_to_unlink:
+            self._unlink_artifact_file(artifact_path)
 
         return evicted
 

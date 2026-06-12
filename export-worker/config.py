@@ -72,6 +72,10 @@ class Settings(BaseSettings):
     CACHE_FETCH_CHUNK_SIZE: int = 1_000           # rows per cursor.fetchmany
     CACHE_STORE_BATCH_SIZE: int = 1_000           # rows per executemany INSERT
     CACHE_READ_POOL_SIZE: int = 4                  # отдельные read-only conn для concurrent reads
+    EXPORT_ARTIFACT_CACHE_ENABLED: bool = True
+    EXPORT_ARTIFACT_DIR: Optional[str] = None       # default: <CACHE_DB_PATH dir>/artifacts
+    EXPORT_ARTIFACT_MIN_BYTES: int = 8 * 1024 * 1024
+    EXPORT_ARTIFACT_MAX_DISK_GB: float = 0.0        # 0 => min(5GB, 20% CACHE_MAX_DISK_GB)
     # Миграция page_size 4096 → 8192. Требует VACUUM + ~2x места на диске на пике.
     # Worker startup блокируется на время прохода (минуты для крупных БД).
     # Healthcheck в docker-compose использует pgrep → процесс жив во время VACUUM,

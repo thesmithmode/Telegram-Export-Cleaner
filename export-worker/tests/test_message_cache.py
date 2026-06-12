@@ -1,4 +1,5 @@
 
+import os
 import time
 import pytest
 import asyncio
@@ -122,6 +123,444 @@ class TestMissingRanges:
         missing = await cache.get_missing_ranges(123, 1, 100)
         assert missing == [(1, 9), (21, 49), (61, 100)]
 
+    @pytest.mark.asyncio
+    async def test_checked_empty_gap_is_not_reported_again(self, cache):
+        await cache.store_messages(123, _make_messages(range(10, 21)))
+        await cache.mark_id_range_checked(123, 21, 49)
+        await cache.store_messages(123, _make_messages(range(50, 61)))
+
+        missing = await cache.get_missing_ranges(123, 10, 60)
+
+        assert missing == []
+        assert await cache.get_cached_ranges(123) == [[10, 20], [50, 60]]
+        assert await cache.get_coverage_ranges(123) == [[10, 60]]
+
+    @pytest.mark.asyncio
+    async def test_checked_sparse_gap_keeps_visible_ranges_separate(self, cache):
+        await cache.store_messages(123, _make_messages(range(10, 21)))
+        await cache.store_messages(123, [_make_msg(35)])
+        await cache.mark_id_range_checked(123, 21, 49)
+        await cache.store_messages(123, _make_messages(range(50, 61)))
+
+        missing = await cache.get_missing_ranges(123, 10, 60)
+
+        assert missing == []
+        assert await cache.get_cached_ranges(123) == [[10, 20], [35, 35], [50, 60]]
+        assert await cache.get_coverage_ranges(123) == [[10, 60]]
+
+
+@pytest.mark.asyncio
+class TestExportLines:
+
+    async def test_iter_export_lines_matches_existing_txt_shape(self, cache):
+        await cache.store_messages(
+            123,
+            [
+                _make_msg(1, text="Keep\r\nline", date="2026-06-09T12:00:00"),
+                _make_msg(2, text="Drop", date="2026-06-09T12:01:00"),
+            ],
+        )
+
+        lines = [
+            line async for line in cache.iter_export_lines(
+                123, 1, 2, include_keywords=["keep"], exclude_keywords=[]
+            )
+        ]
+
+        assert lines == ["20260609 Keep line"]
+
+    async def test_iter_export_lines_backfills_legacy_rows(self, tmp_path):
+        db_path = str(tmp_path / "legacy_lines.db")
+        c = MessageCache(db_path=db_path)
+        await c.initialize()
+        try:
+            await c.store_messages(123, [_make_msg(1, text="Legacy")])
+            await c._db.execute(
+                "UPDATE messages SET formatted_line=NULL, filter_text=NULL, format_version=0"
+            )
+            await c._db.commit()
+
+            lines = [line async for line in c.iter_export_lines(123, 1, 1)]
+
+            assert lines == ["20250101 Legacy"]
+            async with c._db.execute(
+                "SELECT formatted_line, filter_text, format_version FROM messages"
+            ) as cur:
+                row = await cur.fetchone()
+            assert row[0] == "20250101 Legacy"
+            assert row[1] == "legacy"
+            assert row[2] == 1
+        finally:
+            await c.close()
+
+    async def test_iter_export_lines_date_path_skips_corrupt_legacy_row(
+        self, cache, caplog
+    ):
+        await cache._db.execute(
+            """
+            INSERT INTO messages(
+                chat_id, topic_id, msg_id, msg_ts, data,
+                formatted_line, filter_text, format_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (123, 0, 1, 1735689600, b"not-msgpack", None, None, 0),
+        )
+        await cache._db.commit()
+
+        with caplog.at_level("WARNING"):
+            lines = [
+                line async for line in cache.iter_export_lines(
+                    123,
+                    from_date="2025-01-01",
+                    to_date="2025-01-01",
+                )
+            ]
+
+        assert lines == []
+        assert any("Deserialize error during export line backfill" in r.message for r in caplog.records)
+        async with cache._db.execute(
+            "SELECT format_version FROM messages WHERE chat_id=? AND msg_id=?",
+            (123, 1),
+        ) as cur:
+            row = await cur.fetchone()
+        assert row[0] == 1
+
+    async def test_schema_migration_adds_legacy_export_columns(self, tmp_path):
+        db_path = str(tmp_path / "legacy_schema.db")
+        c = MessageCache(db_path=db_path)
+        c._db = await aiosqlite.connect(db_path)
+        try:
+            await c._db.executescript(
+                """
+                CREATE TABLE messages (
+                    chat_id INTEGER NOT NULL,
+                    topic_id INTEGER NOT NULL DEFAULT 0,
+                    msg_id INTEGER NOT NULL,
+                    msg_ts INTEGER NOT NULL,
+                    data BLOB NOT NULL,
+                    PRIMARY KEY (chat_id, topic_id, msg_id)
+                );
+                CREATE TABLE chat_id_ranges (
+                    chat_id INTEGER NOT NULL,
+                    topic_id INTEGER NOT NULL DEFAULT 0,
+                    min_id INTEGER NOT NULL,
+                    max_id INTEGER NOT NULL,
+                    PRIMARY KEY (chat_id, topic_id, min_id)
+                );
+                CREATE TABLE chat_id_coverage_ranges (
+                    chat_id INTEGER NOT NULL,
+                    topic_id INTEGER NOT NULL DEFAULT 0,
+                    min_id INTEGER NOT NULL,
+                    max_id INTEGER NOT NULL,
+                    checked_at REAL NOT NULL DEFAULT 0,
+                    PRIMARY KEY (chat_id, topic_id, min_id)
+                );
+                """
+            )
+            await c._db.execute(
+                "INSERT INTO chat_id_ranges(chat_id, topic_id, min_id, max_id) VALUES (?,?,?,?)",
+                (123, 0, 1, 3),
+            )
+            await c._db.commit()
+
+            await c._migrate_schema_if_needed()
+            await c._db.commit()
+
+            async with c._db.execute("PRAGMA table_info(messages)") as cur:
+                columns = {row[1] for row in await cur.fetchall()}
+            assert {"formatted_line", "filter_text", "format_version"}.issubset(columns)
+
+            async with c._db.execute(
+                "SELECT min_id, max_id FROM chat_id_coverage_ranges WHERE chat_id=?",
+                (123,),
+            ) as cur:
+                row = await cur.fetchone()
+            assert row == (1, 3)
+        finally:
+            await c.close()
+
+    async def test_schema_migration_without_db_is_noop(self):
+        c = MessageCache(enabled=False)
+
+        await c._migrate_schema_if_needed()
+
+
+@pytest.mark.asyncio
+class TestExportArtifacts:
+
+    async def test_uninitialized_artifact_and_eviction_paths_are_noops(self, tmp_path):
+        c = MessageCache(
+            db_path=str(tmp_path / "noop.db"),
+            enabled=False,
+            artifact_enabled=True,
+        )
+
+        assert await c._artifact_total_bytes() == 0
+        assert await c.get_full_export_artifact(1, 0, 1, 1) is None
+        assert await c.save_full_export_artifact(1, 0, 1, 1, str(tmp_path / "missing")) is None
+        assert await c.evict_artifacts_if_needed() == 0
+        await c._refresh_chat_meta(1, 0)
+        await c._touch(1, 0)
+        assert await c._evict_impl() == 0
+
+    async def test_artifact_path_safety_and_unlink_edges(self, tmp_path, caplog, monkeypatch):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_paths.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+        )
+        await c.initialize()
+        try:
+            root = c._artifact_root()
+            root.mkdir(parents=True, exist_ok=True)
+            safe_path = root / "safe.txt"
+            outside_path = tmp_path / "outside.txt"
+
+            assert c._is_artifact_path_safe(str(safe_path)) is True
+            assert c._is_artifact_path_safe(str(outside_path)) is False
+
+            with caplog.at_level("WARNING"):
+                c._unlink_artifact_file(str(outside_path))
+            assert outside_path.exists() is False
+            assert any("outside root" in r.message for r in caplog.records)
+
+            c._unlink_artifact_file(str(safe_path))
+
+            safe_path.write_text("data", encoding="utf-8")
+
+            def fail_unlink(_):
+                raise OSError("cannot unlink")
+
+            monkeypatch.setattr(os, "unlink", fail_unlink)
+            with caplog.at_level("WARNING"):
+                c._unlink_artifact_file(str(safe_path))
+            assert any("Failed to unlink export artifact" in r.message for r in caplog.records)
+        finally:
+            await c.close()
+
+    async def test_small_file_does_not_create_artifact(self, tmp_path):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_small.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1024,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        source = tmp_path / "small.txt"
+        source.write_text("tiny", encoding="utf-8")
+        try:
+            saved = await c.save_full_export_artifact(
+                chat_id=1,
+                topic_id=0,
+                coverage_max_id=10,
+                message_count=2,
+                source_path=str(source),
+            )
+
+            assert saved is None
+            assert await c.get_full_export_artifact(1, 0, 10, 2) is None
+        finally:
+            await c.close()
+
+    async def test_missing_and_oversized_artifact_sources_are_skipped(self, tmp_path):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_bounds.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=4,
+        )
+        await c.initialize()
+        try:
+            assert await c.save_full_export_artifact(1, 0, 1, 1, str(tmp_path / "missing.txt")) is None
+
+            large = tmp_path / "large.txt"
+            large.write_text("12345", encoding="utf-8")
+
+            assert await c.save_full_export_artifact(1, 0, 1, 1, str(large)) is None
+        finally:
+            await c.close()
+
+    async def test_replacing_artifact_unlinks_old_file_and_ignores_dir_fsync_error(
+        self, tmp_path, monkeypatch
+    ):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_replace.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        first = tmp_path / "first.txt"
+        second = tmp_path / "second.txt"
+        first.write_text("first artifact", encoding="utf-8")
+        second.write_text("second artifact", encoding="utf-8")
+        monkeypatch.setattr(os, "open", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("fsync unavailable")))
+        try:
+            saved_first = await c.save_full_export_artifact(1, 0, 10, 1, str(first))
+            assert saved_first is not None
+            first_path, _ = saved_first
+            assert os.path.exists(first_path)
+
+            saved_second = await c.save_full_export_artifact(1, 0, 11, 1, str(second))
+            assert saved_second is not None
+            second_path, _ = saved_second
+
+            assert not os.path.exists(first_path)
+            assert os.path.exists(second_path)
+            assert await c.get_full_export_artifact(1, 0, 11, 1) == saved_second
+        finally:
+            await c.close()
+
+    async def test_save_artifact_fsyncs_artifact_directory(self, tmp_path, monkeypatch):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_dir_fsync.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        source = tmp_path / "source.txt"
+        source.write_text("content", encoding="utf-8")
+        closed = []
+
+        monkeypatch.setattr(os, "open", lambda *args, **kwargs: 12345)
+        monkeypatch.setattr(os, "fsync", lambda fd: None)
+        monkeypatch.setattr(os, "close", lambda fd: closed.append(fd))
+        try:
+            saved = await c.save_full_export_artifact(1, 0, 1, 1, str(source))
+
+            assert saved is not None
+            assert closed == [12345]
+        finally:
+            await c.close()
+
+    async def test_artifact_copy_failure_removes_tmp_file(self, tmp_path, monkeypatch):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_copy_fail.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        source = tmp_path / "source.txt"
+        source.write_text("content", encoding="utf-8")
+
+        def fail_copy(*args, **kwargs):
+            raise RuntimeError("copy failed")
+
+        monkeypatch.setattr("message_cache.shutil.copyfileobj", fail_copy)
+        try:
+            with pytest.raises(RuntimeError, match="copy failed"):
+                await c.save_full_export_artifact(1, 0, 1, 1, str(source))
+
+            artifact_root = c._artifact_root()
+            leftovers = list(artifact_root.glob("*.tmp")) if artifact_root.exists() else []
+            assert leftovers == []
+        finally:
+            await c.close()
+
+    async def test_missing_artifact_file_is_treated_as_cache_miss(self, tmp_path):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_missing.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        source = tmp_path / "full.txt"
+        source.write_text("full export", encoding="utf-8")
+        try:
+            saved = await c.save_full_export_artifact(1, 0, 10, 2, str(source))
+            assert saved is not None
+            saved_path, _ = saved
+            assert await c.get_full_export_artifact(1, 0, 10, 2) is not None
+
+            import os
+            os.unlink(saved_path)
+
+            assert await c.get_full_export_artifact(1, 0, 10, 2) is None
+            async with c._db.execute("SELECT COUNT(*) FROM export_artifacts") as cur:
+                row = await cur.fetchone()
+            assert row[0] == 0
+        finally:
+            await c.close()
+
+    async def test_stale_artifact_metadata_unlinks_old_file(self, tmp_path):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_stale.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        source = tmp_path / "full.txt"
+        source.write_text("stale export", encoding="utf-8")
+        try:
+            saved = await c.save_full_export_artifact(1, 0, 10, 2, str(source))
+            assert saved is not None
+            saved_path, _ = saved
+            assert os.path.exists(saved_path)
+
+            assert await c.get_full_export_artifact(1, 0, 11, 2) is None
+
+            assert not os.path.exists(saved_path)
+            async with c._db.execute("SELECT COUNT(*) FROM export_artifacts") as cur:
+                row = await cur.fetchone()
+            assert row[0] == 0
+        finally:
+            await c.close()
+
+    async def test_artifact_lru_eviction_does_not_delete_message_cache(self, tmp_path):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_lru.db"),
+            max_disk_bytes=10 * 1024 * 1024,
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=18,
+        )
+        await c.initialize()
+        first = tmp_path / "first.txt"
+        second = tmp_path / "second.txt"
+        first.write_text("first artifact", encoding="utf-8")
+        second.write_text("second artifact", encoding="utf-8")
+        try:
+            await c.store_messages(1, [_make_msg(1)])
+            one = await c.save_full_export_artifact(1, 0, 1, 1, str(first))
+            assert one is not None
+            two = await c.save_full_export_artifact(2, 0, 1, 1, str(second))
+            assert two is not None
+
+            assert await c.get_full_export_artifact(1, 0, 1, 1) is None
+            assert await c.get_full_export_artifact(2, 0, 1, 1) is not None
+            assert [m.id for m in await c.get_messages(1, 1, 1)] == [1]
+        finally:
+            await c.close()
+
+    async def test_artifacts_count_inside_global_cache_budget(self, tmp_path):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_budget.db"),
+            max_disk_bytes=400,
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        source = tmp_path / "large_artifact.txt"
+        source.write_text("x" * 500, encoding="utf-8")
+        try:
+            await c.store_messages(1, [_make_msg(1, text="small")])
+            saved = await c.save_full_export_artifact(1, 0, 1, 1, str(source))
+            assert saved is not None
+            saved_path, _ = saved
+            assert os.path.exists(saved_path)
+
+            await c.evict_if_needed()
+
+            assert await c.get_full_export_artifact(1, 0, 1, 1) is None
+            assert not os.path.exists(saved_path)
+            assert [m.id for m in await c.get_messages(1, 1, 1)] == [1]
+        finally:
+            await c.close()
+
 class TestMergeAndSort:
 
     @pytest.mark.asyncio
@@ -184,6 +623,69 @@ class TestLRUTracking:
             row = await cur.fetchone()
         assert row is not None
         assert row[0] >= before
+
+    @pytest.mark.asyncio
+    async def test_size_bytes_counts_formatted_text_as_utf8_bytes(self, cache):
+        await cache.store_messages(123, [_make_msg(1, text="Привет 😀")])
+
+        async with cache._db.execute(
+            """
+            SELECT
+                m.formatted_line,
+                m.filter_text,
+                cm.size_bytes,
+                LENGTH(m.data)
+            FROM messages m
+            JOIN chat_meta cm
+              ON cm.chat_id = m.chat_id AND cm.topic_id = m.topic_id
+            WHERE m.chat_id=?
+            """,
+            (123,),
+        ) as cur:
+            formatted_line, filter_text, size_bytes, data_bytes = await cur.fetchone()
+
+        expected = (
+            data_bytes
+            + len(formatted_line.encode("utf-8"))
+            + len(filter_text.encode("utf-8"))
+        )
+        character_counted = data_bytes + len(formatted_line) + len(filter_text)
+
+        assert size_bytes == expected
+        assert size_bytes > character_counted
+
+    @pytest.mark.asyncio
+    async def test_refresh_chat_meta_counts_multibyte_backfill_as_utf8_bytes(self, cache):
+        await cache.store_messages(123, [_make_msg(1, text="До связи 🚀")])
+        await cache._db.execute(
+            "UPDATE messages SET formatted_line=NULL, filter_text=NULL, format_version=0"
+        )
+        await cache._db.commit()
+
+        lines = [line async for line in cache.iter_export_lines(123, 1, 1)]
+        assert lines == ["20250101 До связи 🚀"]
+
+        async with cache._db.execute(
+            """
+            SELECT
+                m.formatted_line,
+                m.filter_text,
+                cm.size_bytes,
+                LENGTH(m.data)
+            FROM messages m
+            JOIN chat_meta cm
+              ON cm.chat_id = m.chat_id AND cm.topic_id = m.topic_id
+            WHERE m.chat_id=?
+            """,
+            (123,),
+        ) as cur:
+            formatted_line, filter_text, size_bytes, data_bytes = await cur.fetchone()
+
+        assert size_bytes == (
+            data_bytes
+            + len(formatted_line.encode("utf-8"))
+            + len(filter_text.encode("utf-8"))
+        )
 
     @pytest.mark.asyncio
     async def test_last_accessed_refresh_on_read(self, cache):
@@ -312,6 +814,16 @@ class TestCacheDisabled:
         assert await cache.get_missing_ranges(123, 1, 100) == [(1, 100)]
         assert await cache.get_cached_date_ranges(123) == []
         assert await cache.get_messages_by_date(123, "2025-01-01", "2025-01-31") == []
+
+    @pytest.mark.asyncio
+    async def test_disabled_iter_export_lines_and_coverage_helpers_are_noops(self):
+        cache = MessageCache(enabled=False)
+
+        lines = [line async for line in cache.iter_export_lines(123, 1, 10)]
+
+        assert lines == []
+        assert await cache.get_coverage_ranges(123) == []
+        await cache.mark_id_range_checked(123, 10, 9)
 
 class TestDateIndex:
 

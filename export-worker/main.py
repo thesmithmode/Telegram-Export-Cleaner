@@ -51,6 +51,7 @@ class ExportWorker:
         self.jobs_processed = 0
         self.jobs_failed = 0
         self._last_export_direct_cache_eligible = False
+        self._last_export_cache_context: Optional[dict] = None
         self._cache_stats_task: Optional[asyncio.Task] = None
 
     @property
@@ -480,6 +481,7 @@ class ExportWorker:
         msg_count = 0
         cache_was_tried = False
         self._last_export_direct_cache_eligible = False
+        self._last_export_cache_context = None
 
         if self.message_cache and self.message_cache.enabled:
             cache_was_tried = True
@@ -592,7 +594,11 @@ class ExportWorker:
         )
         direct_bytes_count = None
         if direct_cache_export:
-            success, direct_bytes_count = await self.java_client.send_cached_response_direct(payload)
+            success, direct_bytes_count = await self.java_client.send_cached_response_direct(
+                payload,
+                cache=self.message_cache,
+                cache_context=self._last_export_cache_context,
+            )
         else:
             success = await self.java_client.send_response(payload)
 
@@ -839,6 +845,14 @@ class ExportWorker:
                 await tracker.finalize(count)
 
             await self.message_cache.evict_if_needed()
+            self._last_export_cache_context = {
+                "chat_id": int(job.chat_id),
+                "topic_id": tid,
+                "range_type": "date",
+                "from_date": from_date_str,
+                "to_date": to_date_str,
+                "full_export": False,
+            }
             return count, self.message_cache.iter_messages_by_date(
                 job.chat_id, from_date_str, to_date_str, topic_id=tid
             )
@@ -925,6 +939,14 @@ class ExportWorker:
             await tracker.finalize(count)
 
         await self.message_cache.evict_if_needed()
+        self._last_export_cache_context = {
+            "chat_id": int(job.chat_id),
+            "topic_id": tid,
+            "range_type": "date",
+            "from_date": from_date_str,
+            "to_date": to_date_str,
+            "full_export": False,
+        }
         return count, self.message_cache.iter_messages_by_date(
             job.chat_id, from_date_str, to_date_str, topic_id=tid
         )
@@ -948,8 +970,14 @@ class ExportWorker:
                 await self.message_cache.evict_if_needed()
             return result
 
-        cache_max_id = max(r[1] for r in cached_ranges)
-        logger.info(f"  Cache HIT для чата {job.chat_id}: ranges={cached_ranges}, cache_max_id={cache_max_id}")
+        coverage_ranges = await self.message_cache.get_coverage_ranges(job.chat_id, topic_id=tid)
+        effective_ranges = coverage_ranges or cached_ranges
+        cache_max_id = max(r[1] for r in effective_ranges)
+        logger.info(
+            f"  Cache HIT для чата {job.chat_id}: "
+            f"visible_ranges={cached_ranges}, coverage_ranges={coverage_ranges}, "
+            f"cache_max_id={cache_max_id}"
+        )
 
         # Прогресс-трекер
         tracker = self._create_tracker(job, topic_name)
@@ -1020,7 +1048,7 @@ class ExportWorker:
 
         # Step 2: fill ID gaps
         logger.info("  Step 2: Computing missing ID ranges...")
-        full_min = min(r[0] for r in cached_ranges)
+        full_min = min(r[0] for r in effective_ranges)
         full_max = max(cache_max_id, latest_new_id)
         logger.info(f"    Range to check: [{full_min}, {full_max}]")
         missing = await self.message_cache.get_missing_ranges(job.chat_id, full_min, full_max, topic_id=tid)
@@ -1045,6 +1073,9 @@ class ExportWorker:
                     return None
                 gap_count = new_count - fetched_count
                 fetched_count = new_count
+                await self.message_cache.mark_id_range_checked(
+                    job.chat_id, gap_low, gap_high, topic_id=tid
+                )
             except ExportCancelled:
                 raise
             except Exception as e:
@@ -1056,7 +1087,10 @@ class ExportWorker:
         # Step 3: fetch messages OLDER than cache minimum
         logger.info("  Step 3: Fetching older messages...")
         if not job.limit or job.limit <= 0:
-            cache_min_id = min(r[0] for r in cached_ranges)
+            refreshed_coverage = await self.message_cache.get_coverage_ranges(
+                job.chat_id, topic_id=tid
+            )
+            cache_min_id = min(r[0] for r in (refreshed_coverage or effective_ranges))
             logger.info(f"    Cache min ID: {cache_min_id}")
             if cache_min_id > 1:
                 iter_older = self.telegram_client.get_chat_history(
@@ -1077,6 +1111,9 @@ class ExportWorker:
                         return None
                     older_count = new_count - fetched_count
                     fetched_count = new_count
+                    await self.message_cache.mark_id_range_checked(
+                        job.chat_id, 1, cache_min_id - 1, topic_id=tid
+                    )
                 except ExportCancelled:
                     raise
                 except Exception as e:
@@ -1103,6 +1140,24 @@ class ExportWorker:
 
         # Возвращаем (count, generator) — вызывающий код стримит через iter_messages,
         # не держа все 252K объектов в памяти одновременно.
+        final_coverage = await self.message_cache.get_coverage_ranges(job.chat_id, topic_id=tid)
+        coverage_max_id = max(r[1] for r in final_coverage) if final_coverage else full_max
+        self._last_export_cache_context = {
+            "chat_id": int(job.chat_id),
+            "topic_id": tid,
+            "range_type": "id",
+            "low_id": actual_min,
+            "high_id": full_max,
+            "coverage_max_id": coverage_max_id,
+            "message_count": count,
+            "full_export": not (
+                job.limit
+                or job.from_date
+                or job.to_date
+                or job.keywords
+                or job.exclude_keywords
+            ),
+        }
         return count, self.message_cache.iter_messages(job.chat_id, actual_min, full_max, topic_id=tid)
 
     async def _fetch_all_messages(
@@ -1151,6 +1206,8 @@ class ExportWorker:
         # Fallback list only used when cache is disabled (edge case)
         nocache_messages: list[ExportedMessage] = []
         count = 0
+        min_seen_id: Optional[int] = None
+        max_seen_id = 0
 
         # NB: seed() здесь НЕ вызываем. _fetch_all_messages — это fallback, который
         # перекачивает весь диапазон с нуля (не только gaps), поэтому count += 1
@@ -1170,6 +1227,8 @@ class ExportWorker:
                 is_cancelled_fn=self._make_cancel_checker(job.task_id),
             ):
                 count += 1
+                min_seen_id = message.id if min_seen_id is None else min(min_seen_id, message.id)
+                max_seen_id = max(max_seen_id, message.id)
                 if use_cache:
                     batch.append(message)
                     if len(batch) >= self._CACHE_BATCH_SIZE:
@@ -1201,6 +1260,18 @@ class ExportWorker:
         if batch and use_cache:
             await self.message_cache.store_messages(job.chat_id, batch, topic_id=tid)
 
+        if (
+            use_cache
+            and min_seen_id is not None
+            and not job.from_date
+            and not job.to_date
+            and not (job.limit and job.limit > 0)
+            and min_seen_id > 1
+        ):
+            await self.message_cache.mark_id_range_checked(
+                job.chat_id, 1, min_seen_id - 1, topic_id=tid
+            )
+
         if tracker:
             await tracker.finalize(count)
 
@@ -1208,11 +1279,42 @@ class ExportWorker:
             from_date_str = job.from_date[:10] if job.from_date else None
             to_date_str   = job.to_date[:10]   if job.to_date   else None
             if from_date_str and to_date_str:
+                self._last_export_cache_context = {
+                    "chat_id": int(job.chat_id),
+                    "topic_id": tid,
+                    "range_type": "date",
+                    "from_date": from_date_str,
+                    "to_date": to_date_str,
+                    "full_export": False,
+                }
                 gen = self.message_cache.iter_messages_by_date(
                     job.chat_id, from_date_str, to_date_str, topic_id=tid
                 )
             else:
                 # No date filter: return all messages for this chat from cache
+                coverage_ranges = await self.message_cache.get_coverage_ranges(
+                    job.chat_id, topic_id=tid
+                )
+                coverage_max_id = (
+                    max(r[1] for r in coverage_ranges)
+                    if coverage_ranges else max_seen_id
+                )
+                self._last_export_cache_context = {
+                    "chat_id": int(job.chat_id),
+                    "topic_id": tid,
+                    "range_type": "id",
+                    "low_id": 0,
+                    "high_id": _MAX_MESSAGE_ID,
+                    "coverage_max_id": coverage_max_id,
+                    "message_count": count,
+                    "full_export": not (
+                        job.limit
+                        or job.from_date
+                        or job.to_date
+                        or job.keywords
+                        or job.exclude_keywords
+                    ),
+                }
                 gen = self.message_cache.iter_messages(job.chat_id, 0, _MAX_MESSAGE_ID, topic_id=tid)
             return count, gen
 
