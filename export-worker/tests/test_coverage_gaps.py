@@ -13,20 +13,16 @@
 Эти сценарии покрывают реальное поведение (не моки моков):
 user-visible error codes, durability recovery, rate-limit backoff.
 """
-import asyncio
 import json
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import redis.asyncio as aioredis
 from pyrogram.errors import (
-    BadRequest, ChannelPrivate, ChatAdminRequired, PeerFlood, PeerIdInvalid,
-    Unauthorized, UserDeactivated, AuthKeyUnregistered, SessionExpired,
+    BadRequest, ChannelPrivate, ChatAdminRequired, PeerFlood, Unauthorized, SessionExpired,
 )
 
 from main import ExportWorker
-from java_client import ProgressTracker
 from models import ExportRequest
 from queue_consumer import QueueConsumer
 from pyrogram_client import (

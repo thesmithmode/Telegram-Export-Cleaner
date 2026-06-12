@@ -986,16 +986,18 @@ class MessageCache:
         except (OSError, ValueError):
             return False
 
-    def _unlink_artifact_file(self, file_path: str) -> None:
+    def _unlink_artifact_file(self, file_path: str) -> bool:
         if not self._is_artifact_path_safe(file_path):
             logger.warning("Refusing to unlink artifact outside root: %s", file_path)
-            return
+            return False
         try:
             os.unlink(file_path)
+            return True
         except FileNotFoundError:
-            pass
+            return True
         except OSError as exc:
             logger.warning("Failed to unlink export artifact %s: %s", file_path, exc)
+            return False
 
     async def _artifact_total_bytes(self) -> int:
         if self._db is None:
@@ -1034,7 +1036,8 @@ class MessageCache:
             or not os.path.exists(file_path)
         ):
             if os.path.exists(file_path):
-                self._unlink_artifact_file(file_path)
+                if not self._unlink_artifact_file(file_path):
+                    return None
             await self._db.execute(
                 "DELETE FROM export_artifacts"
                 " WHERE chat_id=? AND topic_id=? AND scope=? AND format_version=?",
@@ -1098,7 +1101,6 @@ class MessageCache:
             raise
 
         scope = self._artifact_scope()
-        now = time.time()
         async with self._db.execute(
             "SELECT file_path FROM export_artifacts"
             " WHERE chat_id=? AND topic_id=? AND scope=? AND format_version=?",
@@ -1107,6 +1109,12 @@ class MessageCache:
             old_row = await cur.fetchone()
         old_path = old_row[0] if old_row else None
 
+        if old_path and old_path != str(final_path):
+            if not self._unlink_artifact_file(old_path):
+                self._unlink_artifact_file(str(final_path))
+                return None
+
+        now = time.time()
         await self._db.execute(
             """
             INSERT INTO export_artifacts(
@@ -1137,8 +1145,6 @@ class MessageCache:
         )
         await self._db.commit()
 
-        if old_path and old_path != str(final_path):
-            self._unlink_artifact_file(old_path)
         await self.evict_artifacts_if_needed()
         return str(final_path), file_size
 
@@ -1158,24 +1164,21 @@ class MessageCache:
         ) as cur:
             rows = await cur.fetchall()
 
-        to_delete = []
+        evicted = 0
         for chat_id, topic_id, scope, version, file_size, file_path in rows:
             if total <= limit:
                 break
-            to_delete.append((chat_id, topic_id, scope, version, file_path))
-            total -= file_size
-
-        for chat_id, topic_id, scope, version, _ in to_delete:
+            if not self._unlink_artifact_file(file_path):
+                continue
             await self._db.execute(
                 "DELETE FROM export_artifacts"
                 " WHERE chat_id=? AND topic_id=? AND scope=? AND format_version=?",
                 (chat_id, topic_id, scope, version),
             )
-        await self._db.commit()
-
-        for *_, file_path in to_delete:
-            self._unlink_artifact_file(file_path)
-        return len(to_delete)
+            await self._db.commit()
+            total -= file_size
+            evicted += 1
+        return evicted
 
     # ------------------------------------------------------------------ #
     # LRU touch & eviction
@@ -1261,7 +1264,6 @@ class MessageCache:
             candidates = await cur.fetchall()
 
         evicted = 0
-        artifact_paths_to_unlink: list[str] = []
         try:
             for chat_id, topic_id, size in candidates:
                 if total_with_artifacts <= target:
@@ -1272,7 +1274,14 @@ class MessageCache:
                     (chat_id, topic_id),
                 ) as cur:
                     artifact_rows = await cur.fetchall()
-                artifact_paths_to_unlink.extend(row[0] for row in artifact_rows)
+                if not all(self._unlink_artifact_file(row[0]) for row in artifact_rows):
+                    topic_info = f" topic={topic_id}" if topic_id else ""
+                    logger.warning(
+                        "Eviction skipped for chat %s%s: artifact file removal failed",
+                        chat_id,
+                        topic_info,
+                    )
+                    continue
                 chat_artifact_bytes = sum(int(row[1]) for row in artifact_rows)
                 await self._db.execute(
                     "DELETE FROM messages WHERE chat_id=? AND topic_id=?", (chat_id, topic_id)
@@ -1313,9 +1322,6 @@ class MessageCache:
             except Exception as rb_exc:
                 logger.warning(f"rollback failed during evict: {rb_exc}")
             raise
-
-        for artifact_path in artifact_paths_to_unlink:
-            self._unlink_artifact_file(artifact_path)
 
         return evicted
 

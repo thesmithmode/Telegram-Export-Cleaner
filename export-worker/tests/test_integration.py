@@ -1,6 +1,6 @@
 
 import pytest
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
+from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime
 
 from models import ExportRequest, ExportResponse, ExportedMessage, ErrorCode

@@ -25,15 +25,15 @@ class MessageFilterTest {
     @BeforeEach
     void setUp() throws Exception {
         objectMapper = new ObjectMapper();
-        
+
         message1 = objectMapper.readTree("""
             {"id": 1, "type": "message", "date": "2025-06-24T10:00:00", "text": "Hello world"}
             """);
-        
+
         message2 = objectMapper.readTree("""
             {"id": 2, "type": "message", "date": "2025-07-15T15:30:00", "text": "Goodbye world"}
             """);
-        
+
         serviceMessage = objectMapper.readTree("""
             {"id": 3, "type": "service", "date": "2025-06-25T10:00:00", "text": "User left the group"}
             """);
@@ -195,7 +195,7 @@ class MessageFilterTest {
                     .withPredicate(node -> node.get("text").asText().contains("Goodbye"));
 
             assertThat(filter.matches(message2)).isTrue();
-            
+
             JsonNode msg3 = objectMapper.createObjectNode()
                     .put("id", 3)
                     .put("text", "Just hello");
@@ -207,7 +207,7 @@ class MessageFilterTest {
     @DisplayName("Фильтрует список сообщений")
     void filterMessageList() {
         List<JsonNode> messages = List.of(message1, message2, serviceMessage);
-        
+
         MessageFilter filter = new MessageFilter()
                 .withStartDate(LocalDate.of(2025, 7, 1));
 

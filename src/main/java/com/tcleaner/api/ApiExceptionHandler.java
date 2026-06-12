@@ -66,7 +66,7 @@ public class ApiExceptionHandler {
         return ResponseEntity.badRequest().body(error);
     }
 
-    
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, String>> handleGenericException(Exception ex) {
         log.error("CRITICAL ERROR: {} - {}", ex.getClass().getName(), ex.getMessage(), ex);

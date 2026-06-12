@@ -32,7 +32,7 @@ class MarkdownParserTest {
         void parsesPlainText() throws Exception {
             String text = "Hello world";
             JsonNode entity = createEntity("plain", text);
-            
+
             String result = MarkdownParser.parseEntity(entity);
             assertThat(result).isEqualTo("Hello world");
         }
@@ -41,7 +41,7 @@ class MarkdownParserTest {
         @DisplayName("Парсит bold")
         void parsesBold() throws Exception {
             JsonNode entity = createEntity("bold", "important");
-            
+
             String result = MarkdownParser.parseEntity(entity);
             assertThat(result).isEqualTo("**important**");
         }
@@ -50,7 +50,7 @@ class MarkdownParserTest {
         @DisplayName("Парсит italic")
         void parsesItalic() throws Exception {
             JsonNode entity = createEntity("italic", "emphasis");
-            
+
             String result = MarkdownParser.parseEntity(entity);
             assertThat(result).isEqualTo("*emphasis*");
         }
@@ -59,7 +59,7 @@ class MarkdownParserTest {
         @DisplayName("Парсит strikethrough")
         void parsesStrikethrough() throws Exception {
             JsonNode entity = createEntity("strikethrough", "deleted");
-            
+
             String result = MarkdownParser.parseEntity(entity);
             assertThat(result).isEqualTo("~~deleted~~");
         }
@@ -68,7 +68,7 @@ class MarkdownParserTest {
         @DisplayName("Парсит code (inline)")
         void parsesCode() throws Exception {
             JsonNode entity = createEntity("code", "console.log()");
-            
+
             String result = MarkdownParser.parseEntity(entity);
             assertThat(result).isEqualTo("`console.log()`");
         }
@@ -77,7 +77,7 @@ class MarkdownParserTest {
         @DisplayName("Парсит spoiler")
         void parsesSpoiler() throws Exception {
             JsonNode entity = createEntity("spoiler", "secret");
-            
+
             String result = MarkdownParser.parseEntity(entity);
             assertThat(result).isEqualTo("||secret||");
         }
@@ -86,7 +86,7 @@ class MarkdownParserTest {
         @DisplayName("Парсит underline")
         void parsesUnderline() throws Exception {
             JsonNode entity = createEntity("underline", "underlined");
-            
+
             String result = MarkdownParser.parseEntity(entity);
             assertThat(result).isEqualTo("<u>underlined</u>");
         }
@@ -95,7 +95,7 @@ class MarkdownParserTest {
         @DisplayName("Парсит blockquote")
         void parsesBlockquote() throws Exception {
             JsonNode entity = createEntity("blockquote", "quote");
-            
+
             String result = MarkdownParser.parseEntity(entity);
             assertThat(result).isEqualTo("> quote");
         }
@@ -109,7 +109,7 @@ class MarkdownParserTest {
         @DisplayName("Парсит link")
         void parsesLink() throws Exception {
             JsonNode entity = createEntity("link", "https://example.com");
-            
+
             String result = MarkdownParser.parseEntity(entity);
             assertThat(result).isEqualTo("https://example.com");
         }
@@ -176,7 +176,7 @@ class MarkdownParserTest {
         @DisplayName("Парсит bot_command")
         void parsesBotCommand() throws Exception {
             JsonNode entity = createEntity("bot_command", "/start");
-            
+
             String result = MarkdownParser.parseEntity(entity);
             assertThat(result).isEqualTo("/start");
         }
@@ -218,7 +218,7 @@ class MarkdownParserTest {
             JsonNode entity = objectMapper.readTree("""
                 {"type": "pre", "text": "function test() {}", "language": "javascript"}
                 """);
-            
+
             String result = MarkdownParser.parseEntity(entity);
             assertThat(result).isEqualTo("```javascript\nfunction test() {}\n```");
         }
@@ -229,7 +229,7 @@ class MarkdownParserTest {
             JsonNode entity = objectMapper.readTree("""
                 {"type": "pre", "text": "some code"}
                 """);
-            
+
             String result = MarkdownParser.parseEntity(entity);
             assertThat(result).isEqualTo("```\nsome code\n```");
         }
@@ -240,7 +240,7 @@ class MarkdownParserTest {
             JsonNode entity = objectMapper.readTree("""
                 {"type": "text_link", "text": "click here", "href": "https://example.com"}
                 """);
-            
+
             String result = MarkdownParser.parseEntity(entity);
             assertThat(result).isEqualTo("[click here](https://example.com)");
         }
@@ -249,7 +249,7 @@ class MarkdownParserTest {
         @DisplayName("Парсит email")
         void parsesEmail() throws Exception {
             JsonNode entity = createEntity("email", "test@example.com");
-            
+
             String result = MarkdownParser.parseEntity(entity);
             assertThat(result).isEqualTo("test@example.com");
         }
@@ -258,7 +258,7 @@ class MarkdownParserTest {
         @DisplayName("Парсит phone")
         void parsesPhone() throws Exception {
             JsonNode entity = createEntity("phone", "+1234567890");
-            
+
             String result = MarkdownParser.parseEntity(entity);
             assertThat(result).isEqualTo("+1234567890");
         }
@@ -269,7 +269,7 @@ class MarkdownParserTest {
             JsonNode entity = objectMapper.readTree("""
                 {"type": "custom_emoji", "text": "👍", "document_id": "123456789"}
                 """);
-            
+
             String result = MarkdownParser.parseEntity(entity);
             assertThat(result).isEqualTo("[emoji_123456789]");
         }
@@ -285,7 +285,7 @@ class MarkdownParserTest {
             List<JsonNode> entities = new ArrayList<>();
             entities.add(createEntity("plain", "Check this: "));
             entities.add(createEntity("link", "https://example.com"));
-            
+
             String result = MarkdownParser.parseEntityList(entities);
             assertThat(result).isEqualTo("Check this: https://example.com");
         }
@@ -297,7 +297,7 @@ class MarkdownParserTest {
             entities.add(createEntity("plain", "This is "));
             entities.add(createEntity("bold", "important"));
             entities.add(createEntity("plain", " text"));
-            
+
             String result = MarkdownParser.parseEntityList(entities);
             assertThat(result).isEqualTo("This is **important** text");
         }

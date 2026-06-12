@@ -17,18 +17,17 @@
 import asyncio
 import json
 from collections import OrderedDict
-from datetime import datetime, timezone
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import redis.asyncio as aioredis
 import redis
 
 from main import ExportWorker
 from models import ExportRequest
 from queue_consumer import QueueConsumer
-from java_client import JavaBotClient, ProgressTracker, _format_eta
+from java_client import JavaBotClient, _format_eta
 from pyrogram_client import TelegramClient, ExportCancelled
 
 
@@ -1035,7 +1034,7 @@ class TestGetMessagesCountDispatch:
     async def test_with_date_calls_date_range(self):
         tc = _make_telegram_client()
         with patch.object(tc, "get_date_range_count",
-                         AsyncMock(return_value=20)) as m:
+                         AsyncMock(return_value=20)):
             result = await tc.get_messages_count(
                 123,
                 from_date=datetime(2025, 1, 1),
@@ -1047,6 +1046,6 @@ class TestGetMessagesCountDispatch:
     async def test_no_topic_no_date_calls_chat_count(self):
         tc = _make_telegram_client()
         with patch.object(tc, "get_chat_messages_count",
-                         AsyncMock(return_value=50)) as m:
+                         AsyncMock(return_value=50)):
             result = await tc.get_messages_count(123)
             assert result == 50

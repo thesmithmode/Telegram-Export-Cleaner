@@ -8,7 +8,7 @@ public final class StringUtils {
     private StringUtils() {
     }
 
-    
+
     public static List<String> splitCsv(String csv) {
         List<String> result = new ArrayList<>();
         if (csv != null && !csv.isBlank()) {

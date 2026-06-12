@@ -75,7 +75,7 @@ class JavaBotClient:
         self.timeout = timeout
         self.max_retries = max_retries
         self.bot_token = settings.TELEGRAM_BOT_TOKEN
-        
+
         # /api/convert: write фаза — multi-GB upload (write=300s между чанками,
         # не суммарно). read=None — Java может долго парсить и стримить cleaned-text
         # обратно; точечного нижнего предела на read нет, suggested timeout
@@ -349,19 +349,19 @@ class JavaBotClient:
         try:
             with os.fdopen(fd, "wb") as f:
                 f.write(f'{{"type":"personal_chat","name":"Export","message_count":{count},"messages":['.encode("utf-8"))
-                
+
                 first = True
                 msgs_iter = messages if not isinstance(messages, list) else self._iter_list(messages)
-                
+
                 async for msg in msgs_iter:
                     m_dict = msg.model_dump(exclude_none=True)
                     if m_dict.get("text_entities"):
                         m_dict["text_entities"] = self._transform_entities(m_dict.get("text") or "", m_dict["text_entities"])
-                    
+
                     if not first: f.write(b",")
                     f.write(json.dumps(m_dict, ensure_ascii=False).encode("utf-8"))
                     first = False
-                
+
                 f.write(b"]}")
         except Exception:
             try:

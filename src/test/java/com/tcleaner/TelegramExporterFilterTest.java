@@ -46,14 +46,14 @@ class TelegramExporterFilterTest {
                 ]
             }
             """;
-        
+
         Path inputFile = tempDir.resolve("result.json");
         Files.writeString(inputFile, json);
-        
+
         MessageFilter filter = new MessageFilter().withKeyword("hello");
-        
+
         List<String> result = exporter.processFile(inputFile, filter);
-        
+
         assertThat(result).hasSize(1);
         assertThat(result.get(0)).contains("Hello world");
     }
@@ -71,16 +71,16 @@ class TelegramExporterFilterTest {
                 ]
             }
             """;
-        
+
         Path inputFile = tempDir.resolve("result.json");
         Files.writeString(inputFile, json);
-        
+
         MessageFilter filter = new MessageFilter()
                 .withStartDate(LocalDate.of(2025, 6, 22))
                 .withEndDate(LocalDate.of(2025, 6, 26));
-        
+
         List<String> result = exporter.processFile(inputFile, filter);
-        
+
         assertThat(result).hasSize(1);
         assertThat(result.get(0)).contains("June 24");
     }
@@ -97,12 +97,12 @@ class TelegramExporterFilterTest {
                 ]
             }
             """;
-        
+
         Path inputFile = tempDir.resolve("result.json");
         Files.writeString(inputFile, json);
-        
+
         List<String> result = exporter.processFile(inputFile, null);
-        
+
         assertThat(result).hasSize(2);
     }
 
@@ -117,13 +117,13 @@ class TelegramExporterFilterTest {
                 ]
             }
             """;
-        
+
         Path inputFile = tempDir.resolve("result.json");
         Files.writeString(inputFile, json);
-        
+
         List<String> resultNoFilter = exporter.processFile(inputFile);
         List<String> resultNullFilter = exporter.processFile(inputFile, null);
-        
+
         assertThat(resultNullFilter).isEqualTo(resultNoFilter);
     }
 
@@ -140,14 +140,14 @@ class TelegramExporterFilterTest {
                 ]
             }
             """;
-        
+
         Path inputFile = tempDir.resolve("result.json");
         Files.writeString(inputFile, json);
-        
+
         MessageFilter filter = new MessageFilter().withIncludeType("message");
-        
+
         List<String> result = exporter.processFile(inputFile, filter);
-        
+
         assertThat(result).hasSize(2);
         assertThat(result).allMatch(line -> line.contains("Regular") || line.contains("Another"));
     }
@@ -165,14 +165,14 @@ class TelegramExporterFilterTest {
                 ]
             }
             """;
-        
+
         Path inputFile = tempDir.resolve("result.json");
         Files.writeString(inputFile, json);
-        
+
         MessageFilter filter = new MessageFilter().withExcludeType("service");
-        
+
         List<String> result = exporter.processFile(inputFile, filter);
-        
+
         assertThat(result).hasSize(2);
     }
 
@@ -187,17 +187,17 @@ class TelegramExporterFilterTest {
                 ]
             }
             """;
-        
+
         Path inputFile = tempDir.resolve("result.json");
         Files.writeString(inputFile, json);
-        
+
         ObjectMapper mapper = new ObjectMapper();
         MessageProcessor processor = new MessageProcessor();
         TelegramExporter exporter = new TelegramExporter(mapper, processor);
-        
+
         MessageFilter filter = new MessageFilter();
         List<String> result = exporter.processFile(inputFile, filter);
-        
+
         assertThat(result).hasSize(1);
     }
 }

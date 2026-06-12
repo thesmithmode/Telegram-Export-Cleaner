@@ -1,6 +1,6 @@
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from main import ExportWorker
 from message_cache import MessageCache

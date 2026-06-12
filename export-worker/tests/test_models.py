@@ -259,7 +259,6 @@ class TestMessageEntity:
         assert entity.length == 4  # 't','e','x','t' — all BMP, 1 unit each
 
     def test_multi_emoji_offsets_accumulate(self):
-        text = "🔥🎉 ok"
         # UTF-16 length of prefix "🔥🎉 "
         prefix_utf16 = len("🔥🎉 ".encode("utf-16-le")) // 2
         assert prefix_utf16 == 5  # 2 + 2 + 1

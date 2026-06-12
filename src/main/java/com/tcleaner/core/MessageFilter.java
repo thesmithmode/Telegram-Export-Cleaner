@@ -28,7 +28,7 @@ public class MessageFilter {
     private final Set<String> excludeTypes;
     private final List<Predicate<JsonNode>> customPredicates;
 
-    
+
     public MessageFilter() {
         this.keywords = new ArrayList<>();
         this.excludeKeywords = new ArrayList<>();
@@ -37,7 +37,7 @@ public class MessageFilter {
         this.customPredicates = new ArrayList<>();
     }
 
-    
+
     public static MessageFilter fromParameters(LocalDate startDate, LocalDate endDate,
                                              String keywords, String excludeKeywords) {
         boolean hasFilters = startDate != null
@@ -79,7 +79,7 @@ public class MessageFilter {
         return filter;
     }
 
-    
+
     public static MessageFilter fromParameters(String startDate, String endDate,
                                              String keywords, String excludeKeywords) {
         LocalDate parsedStart = isPresent(startDate) ? LocalDate.parse(startDate) : null;

@@ -144,7 +144,7 @@ class MessageProcessorEdgeCasesTest {
         @DisplayName("Обрабатывает text как массив объектов")
         void handlesTextAsArrayOfObjects() throws Exception {
             JsonNode message = objectMapper.readTree("""
-                {"id": 1, "type": "message", "date": "2025-06-24T10:00:00", 
+                {"id": 1, "type": "message", "date": "2025-06-24T10:00:00",
                  "text": [
                     {"type": "plain", "text": "Hello "},
                     {"type": "bold", "text": "World"}
@@ -158,7 +158,7 @@ class MessageProcessorEdgeCasesTest {
         @DisplayName("Обрабатывает text как массив со строками и объектами")
         void handlesTextAsMixedArray() throws Exception {
             JsonNode message = objectMapper.readTree("""
-                {"id": 1, "type": "message", "date": "2025-06-24T10:00:00", 
+                {"id": 1, "type": "message", "date": "2025-06-24T10:00:00",
                  "text": [
                     "Start: ",
                     {"type": "code", "text": "test"},

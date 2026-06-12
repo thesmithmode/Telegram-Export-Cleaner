@@ -11,7 +11,7 @@ import org.telegram.telegrambots.meta.generics.TelegramClient;
 @ConditionalOnExpression("'${telegram.bot.token:}' != ''")
 public class BotConfig {
 
-    
+
     @Bean
     public TelegramClient telegramClient(@Value("${telegram.bot.token}") String botToken) {
         return new OkHttpTelegramClient(botToken);

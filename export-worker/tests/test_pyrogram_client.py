@@ -441,7 +441,6 @@ class TestTelegramClientDateFiltering:
 
     @pytest.mark.asyncio
     async def test_from_date_stops_iteration_early(self):
-        from pyrogram_client import MessageConverter
 
         client = TelegramClient()
         client.is_connected = True
@@ -581,7 +580,6 @@ class TestTelegramClientFloodWait:
     @pytest.mark.asyncio
     async def test_flood_wait_max_retries_exceeded_raises(self):
         from pyrogram.errors import FloodWait
-        from config import settings
 
         client = TelegramClient()
         client.is_connected = True
@@ -600,7 +598,7 @@ class TestTelegramClientFloodWait:
                     pass
 
     @pytest.mark.asyncio
-    async def test_on_floodwait_callback_called_with_wait_time(self):
+    async def test_on_floodwait_callback_called_with_wait_time_countdown(self):
         from pyrogram.errors import FloodWait
 
         client = TelegramClient()
@@ -640,7 +638,7 @@ class TestTelegramClientFloodWait:
             assert later <= earlier
 
     @pytest.mark.asyncio
-    async def test_no_on_floodwait_does_not_crash(self):
+    async def test_no_on_floodwait_none_does_not_crash(self):
         from pyrogram.errors import FloodWait
 
         client = TelegramClient()
@@ -1075,11 +1073,7 @@ class TestResolveNumericChatIdWithCanonicalMapping:
         assert call_args[1]["ex"] == 86400 * 30
 
     async def test_fallback_2_saves_canonical_mapping_with_username(self):
-        from pyrogram import types
-        from pyrogram.errors import ChannelPrivate
         from unittest.mock import AsyncMock
-        import pyrogram.raw.types as raw_types
-        import pyrogram.raw.functions as functions
 
         client = TelegramClient()
         mock_pyrogram = AsyncMock()

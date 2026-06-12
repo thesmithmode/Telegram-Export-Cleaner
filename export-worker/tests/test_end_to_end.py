@@ -1,9 +1,6 @@
 
 import pytest
 from unittest.mock import AsyncMock, Mock, patch
-import asyncio
-import tempfile
-import os
 
 from models import ExportRequest, ExportResponse, ExportedMessage
 from java_client import ProgressTracker
