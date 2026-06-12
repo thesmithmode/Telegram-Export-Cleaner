@@ -1784,8 +1784,9 @@ class TestProgressTracker:
             text = client._http_client.post.call_args[1]["data"]["text"]
             assert "100%" in text
             assert "103%" not in text
-            assert text.count("253432") == 2
-            assert "244143" not in text
+            assert "253432" in text
+            assert text.count("253432") == 1
+            assert "244143" in text
         finally:
             p.stop()
 
@@ -1815,7 +1816,7 @@ class TestProgressTracker:
         assert last_call.args[2] == 110
         assert last_call.args[3] == 110  # max(100, 110) = 110
 
-    async def test_seed_raises_underestimated_total_to_cached_count(self):
+    async def test_seed_keeps_telegram_total_when_cache_count_is_higher(self):
         mock_java_client = AsyncMock()
         mock_java_client.send_progress_update = AsyncMock(return_value=777)
 
@@ -1830,7 +1831,49 @@ class TestProgressTracker:
 
         seed_call = mock_java_client.send_progress_update.call_args_list[-1]
         assert seed_call.args[2] == 389129
-        assert seed_call.args[3] == 389129
+        assert seed_call.args[3] == 344355
+
+    async def test_raise_total_to_observed_logs_once_and_updates_total(self, caplog):
+        mock_java_client = AsyncMock()
+        tracker = ProgressTracker(
+            client=mock_java_client,
+            user_chat_id=123,
+            task_id="task_1",
+        )
+        tracker._total = 100
+
+        with caplog.at_level("INFO", logger="java_client"):
+            tracker._raise_total_to_observed(110)
+            tracker._raise_total_to_observed(120)
+
+        assert tracker._total == 120
+        assert caplog.text.count("Progress total estimate adjusted") == 1
+
+    async def test_set_total_then_seed_displays_cached_count_against_chat_total(self):
+        client, p = _make_client()
+        try:
+            client._http_client.post = AsyncMock(
+                return_value=MagicMock(
+                    status_code=200,
+                    json=lambda: {"result": {"message_id": 777}},
+                )
+            )
+            tracker = ProgressTracker(
+                client=client,
+                user_chat_id=123,
+                task_id="task_1",
+            )
+
+            await tracker.start()
+            await tracker.set_total(400500)
+            await tracker.seed(cached_count=400283)
+
+            text = client._http_client.post.call_args[1]["data"]["text"]
+            assert "400283" in text
+            assert "400500" in text
+            assert text.count("400283") == 1
+        finally:
+            p.stop()
 
     async def test_send_progress_update_with_zero_total_shows_progress_bar(self):
         client, p = _make_client()
