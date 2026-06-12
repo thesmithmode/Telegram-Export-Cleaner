@@ -31,11 +31,14 @@ from config import settings
 # с TTL канонических маппингов (30 дней), чтобы expire ранжей не оставлял zombie
 # в Java логике. Не привязано к SQLite TTL (там диапазоны хранятся вечно до evict).
 _CACHE_RANGES_REDIS_TTL_SECONDS = 30 * 86400
-_MESSAGE_ROW_SIZE_BYTES_SQL = (
-    "LENGTH(data)"
-    " + COALESCE(LENGTH(CAST(formatted_line AS BLOB)), 0)"
-    " + COALESCE(LENGTH(CAST(filter_text AS BLOB)), 0)"
-)
+_CHAT_META_SIZE_SELECT_SQL = """
+    SELECT COUNT(*), COALESCE(SUM(
+        LENGTH(data)
+        + COALESCE(LENGTH(CAST(formatted_line AS BLOB)), 0)
+        + COALESCE(LENGTH(CAST(filter_text AS BLOB)), 0)
+    ), 0)
+    FROM messages WHERE chat_id=? AND topic_id=?
+"""
 
 
 class MessageCache:
@@ -446,10 +449,7 @@ class MessageCache:
             # Upsert metadata — size_bytes пересчитывается из реальных данных,
             # а не аккумулируется (иначе INSERT OR REPLACE раздувает счётчик)
             async with self._db.execute(
-                "SELECT COUNT(*), COALESCE(SUM("
-                + _MESSAGE_ROW_SIZE_BYTES_SQL
-                + "), 0)"
-                " FROM messages WHERE chat_id=? AND topic_id=?",
+                _CHAT_META_SIZE_SELECT_SQL,
                 (chat_id_int, topic_id),
             ) as cur:
                 row = await cur.fetchone()
@@ -1185,10 +1185,7 @@ class MessageCache:
         if self._db is None:
             return
         async with self._db.execute(
-            "SELECT COUNT(*), COALESCE(SUM("
-            + _MESSAGE_ROW_SIZE_BYTES_SQL
-            + "), 0)"
-            " FROM messages WHERE chat_id=? AND topic_id=?",
+            _CHAT_META_SIZE_SELECT_SQL,
             (chat_id, topic_id),
         ) as cur:
             row = await cur.fetchone()
