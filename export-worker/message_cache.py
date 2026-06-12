@@ -1264,6 +1264,7 @@ class MessageCache:
             candidates = await cur.fetchall()
 
         evicted = 0
+        artifact_paths_to_unlink: list[str] = []
         try:
             for chat_id, topic_id, size in candidates:
                 if total_with_artifacts <= target:
@@ -1322,6 +1323,9 @@ class MessageCache:
             except Exception as rb_exc:
                 logger.warning(f"rollback failed during evict: {rb_exc}")
             raise
+
+        for artifact_path in artifact_paths_to_unlink:
+            self._unlink_artifact_file(artifact_path)
 
         return evicted
 
