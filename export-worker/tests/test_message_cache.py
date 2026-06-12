@@ -546,6 +546,38 @@ class TestExportArtifacts:
         finally:
             await c.close()
 
+    async def test_artifact_copy_failure_ignores_missing_tmp_file(
+        self, tmp_path, monkeypatch
+    ):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_copy_missing_tmp.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        source = tmp_path / "source.txt"
+        source.write_text("content", encoding="utf-8")
+
+        def fail_copy(*args, **kwargs):
+            raise RuntimeError("copy failed")
+
+        original_unlink = os.unlink
+
+        def missing_tmp(path):
+            if str(path).endswith(".tmp"):
+                raise FileNotFoundError(path)
+            return original_unlink(path)
+
+        monkeypatch.setattr("message_cache.shutil.copyfileobj", fail_copy)
+        monkeypatch.setattr(os, "unlink", missing_tmp)
+        try:
+            with pytest.raises(RuntimeError, match="copy failed"):
+                await c.save_full_export_artifact(1, 0, 1, 1, str(source))
+        finally:
+            monkeypatch.setattr(os, "unlink", original_unlink)
+            await c.close()
+
     async def test_missing_artifact_file_is_treated_as_cache_miss(self, tmp_path):
         c = MessageCache(
             db_path=str(tmp_path / "artifact_missing.db"),
@@ -734,6 +766,41 @@ class TestExportArtifacts:
 
             assert not os.path.exists(saved_path)
             assert [m.id for m in await c.get_messages(1, 1, 1)] == [1]
+            async with c._db.execute("SELECT COUNT(*) FROM export_artifacts") as cur:
+                row = await cur.fetchone()
+            assert row[0] == 0
+        finally:
+            await c.close()
+
+    async def test_chat_eviction_drops_artifact_metadata_inside_message_lru(
+        self, tmp_path, monkeypatch
+    ):
+        c = MessageCache(
+            db_path=str(tmp_path / "chat_evict_artifact_inside_lru.db"),
+            max_disk_bytes=10 * 1024 * 1024,
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        source = tmp_path / "artifact.txt"
+        source.write_text("artifact data", encoding="utf-8")
+        try:
+            await c.store_messages(1, [_make_msg(1, text="message large enough")])
+            saved = await c.save_full_export_artifact(1, 0, 1, 1, str(source))
+            assert saved is not None
+            saved_path, _ = saved
+
+            async def skip_artifact_lru(max_bytes=None):
+                return 0
+
+            monkeypatch.setattr(c, "evict_artifacts_if_needed", skip_artifact_lru)
+            c.max_disk_bytes = 10
+
+            assert await c.evict_if_needed() == 1
+            assert not os.path.exists(saved_path)
+            assert await c._artifact_total_bytes() == 0
+            assert await c.get_messages(1, 1, 1) == []
             async with c._db.execute("SELECT COUNT(*) FROM export_artifacts") as cur:
                 row = await cur.fetchone()
             assert row[0] == 0
