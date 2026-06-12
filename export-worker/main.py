@@ -531,6 +531,7 @@ class ExportWorker:
                 await self._cleanup_job(job)
                 return None
             msg_count, messages_for_send = fallback_result
+            self._mark_direct_cache_eligible_if_context_ready(msg_count)
             if self.message_cache and self.message_cache.enabled:
                 await self.message_cache.evict_if_needed()
 
