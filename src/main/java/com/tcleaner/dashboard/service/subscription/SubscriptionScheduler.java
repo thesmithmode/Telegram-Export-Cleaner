@@ -196,7 +196,7 @@ public class SubscriptionScheduler {
 
     private void enqueueOne(ChatSubscription sub, Chat chat, Instant now) {
         String chatIdentifier = chat.getCanonicalChatId();
-        
+
         // Усекаем до секунд: Python worker валидирует формат до HH:MM:SS,
         // наносекунды из Instant.now() отправляют job в DLQ.
         // Диапазон строим в UTC: worker (ensure_utc) трактует naive datetime как UTC.

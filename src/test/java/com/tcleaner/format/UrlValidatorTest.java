@@ -117,7 +117,7 @@ class UrlValidatorTest {
         }
     }
 
-    
+
     @Nested
     @DisplayName("Protocol-relative URL — блокировка (regression)")
     class BlocksProtocolRelative {

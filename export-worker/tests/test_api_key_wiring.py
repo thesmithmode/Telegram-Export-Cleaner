@@ -2,7 +2,6 @@
 import re
 from pathlib import Path
 
-import pytest
 from unittest.mock import patch
 
 from java_client import JavaBotClient

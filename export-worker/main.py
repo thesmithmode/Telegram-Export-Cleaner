@@ -468,6 +468,14 @@ class ExportWorker:
                 logger.info(f"  Topic: {topic_name} (id={job.topic_id})")
         return True, job, chat_info, topic_name
 
+    def _mark_direct_cache_eligible_if_context_ready(self, msg_count: int) -> None:
+        self._last_export_direct_cache_eligible = bool(
+            self.message_cache
+            and self.message_cache.enabled
+            and msg_count > 0
+            and self._last_export_cache_context
+        )
+
     async def _run_cache_aware_export(
         self, job: ExportRequest, topic_name: Optional[str]
     ) -> Optional[tuple[int, AsyncGenerator]]:
@@ -491,7 +499,7 @@ class ExportWorker:
                 result = await self._export_with_id_cache(job, topic_name)
             if result is not None:
                 msg_count, messages_for_send = result
-                self._last_export_direct_cache_eligible = True
+                self._mark_direct_cache_eligible_if_context_ready(msg_count)
 
         # Если кэш вернул None — сначала проверяем отмену (не гоним в fallback зря)
         if messages_for_send is None and cache_was_tried:
@@ -521,6 +529,7 @@ class ExportWorker:
                 await self._cleanup_job(job)
                 return None
             msg_count, messages_for_send = fallback_result
+            self._mark_direct_cache_eligible_if_context_ready(msg_count)
             if self.message_cache and self.message_cache.enabled:
                 await self.message_cache.evict_if_needed()
 

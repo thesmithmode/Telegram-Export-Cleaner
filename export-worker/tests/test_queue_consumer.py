@@ -1,7 +1,7 @@
 
 import json
 import pytest
-from unittest.mock import Mock, MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock, AsyncMock, patch
 
 from models import ExportRequest
 from queue_consumer import QueueConsumer
@@ -65,7 +65,7 @@ class TestQueueConsumer:
         invalid_json = "not valid json {"
 
         try:
-            data = json.loads(invalid_json)
+            _ = json.loads(invalid_json)
             pytest.fail("Should have raised JSONDecodeError")
         except json.JSONDecodeError:
             # Expected
@@ -78,7 +78,7 @@ class TestQueueConsumer:
         }
 
         try:
-            job = ExportRequest(**incomplete_job)
+            _ = ExportRequest(**incomplete_job)
             pytest.fail("Should have raised validation error")
         except Exception:
             # Expected

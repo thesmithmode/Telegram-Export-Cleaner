@@ -30,7 +30,7 @@ public class UrlValidator {
     private UrlValidator() {
     }
 
-    
+
     public static boolean isSafeUrl(String url) {
         if (url == null || url.isBlank()) {
             return false;
@@ -76,7 +76,7 @@ public class UrlValidator {
         }
     }
 
-    
+
     public static String sanitizeUrl(String url, String defaultUrl) {
         return isSafeUrl(url) ? url : defaultUrl;
     }

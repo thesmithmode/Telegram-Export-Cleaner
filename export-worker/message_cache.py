@@ -184,6 +184,7 @@ class MessageCache:
         """)
         await self._migrate_schema_if_needed()
         await self._db.commit()
+        await self._cleanup_orphan_artifacts()
 
         # Read pool инициализируется ПОСЛЕ создания таблиц чтобы избежать
         # race на CREATE TABLE между read-only conn и main conn.
@@ -986,16 +987,57 @@ class MessageCache:
         except (OSError, ValueError):
             return False
 
-    def _unlink_artifact_file(self, file_path: str) -> None:
+    def _unlink_artifact_file(self, file_path: str) -> bool:
         if not self._is_artifact_path_safe(file_path):
             logger.warning("Refusing to unlink artifact outside root: %s", file_path)
-            return
+            return False
         try:
             os.unlink(file_path)
+            return True
         except FileNotFoundError:
-            pass
+            return True
         except OSError as exc:
             logger.warning("Failed to unlink export artifact %s: %s", file_path, exc)
+            return False
+
+    async def _artifact_metadata_paths(self) -> set[str]:
+        if self._db is None:
+            return set()
+        async with self._db.execute("SELECT file_path FROM export_artifacts") as cur:
+            rows = await cur.fetchall()
+        paths = set()
+        for row in rows:
+            try:
+                paths.add(str(Path(row[0]).resolve()))
+            except OSError:
+                paths.add(str(row[0]))
+        return paths
+
+    async def _cleanup_orphan_artifacts(self) -> int:
+        if self._db is None:
+            return 0
+        root = self._artifact_root()
+        if not root.exists():
+            return 0
+        active_paths = await self._artifact_metadata_paths()
+        removed = 0
+        try:
+            items = list(root.iterdir())
+        except OSError as exc:
+            logger.warning("Failed to scan artifact root %s: %s", root, exc)
+            return 0
+        for item in items:
+            if not item.is_file():
+                continue
+            try:
+                resolved = str(item.resolve())
+            except OSError:
+                continue
+            if resolved in active_paths:
+                continue
+            if self._unlink_artifact_file(str(item)):
+                removed += 1
+        return removed
 
     async def _artifact_total_bytes(self) -> int:
         if self._db is None:
@@ -1033,14 +1075,14 @@ class MessageCache:
             or stored_message_count != message_count
             or not os.path.exists(file_path)
         ):
-            if os.path.exists(file_path):
-                self._unlink_artifact_file(file_path)
             await self._db.execute(
                 "DELETE FROM export_artifacts"
                 " WHERE chat_id=? AND topic_id=? AND scope=? AND format_version=?",
                 (chat_id_int, topic_id, scope, EXPORT_TEXT_FORMAT_VERSION),
             )
             await self._db.commit()
+            if os.path.exists(file_path):
+                self._unlink_artifact_file(file_path)
             return None
 
         await self._db.execute(
@@ -1098,7 +1140,6 @@ class MessageCache:
             raise
 
         scope = self._artifact_scope()
-        now = time.time()
         async with self._db.execute(
             "SELECT file_path FROM export_artifacts"
             " WHERE chat_id=? AND topic_id=? AND scope=? AND format_version=?",
@@ -1107,38 +1148,45 @@ class MessageCache:
             old_row = await cur.fetchone()
         old_path = old_row[0] if old_row else None
 
-        await self._db.execute(
-            """
-            INSERT INTO export_artifacts(
-                chat_id, topic_id, scope, format_version,
-                coverage_max_id, message_count, file_size, file_path,
-                last_accessed, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(chat_id, topic_id, scope, format_version) DO UPDATE SET
-                coverage_max_id = excluded.coverage_max_id,
-                message_count   = excluded.message_count,
-                file_size       = excluded.file_size,
-                file_path       = excluded.file_path,
-                last_accessed   = excluded.last_accessed,
-                created_at      = excluded.created_at
-            """,
-            (
-                chat_id_int,
-                topic_id,
-                scope,
-                EXPORT_TEXT_FORMAT_VERSION,
-                coverage_max_id,
-                message_count,
-                file_size,
-                str(final_path),
-                now,
-                now,
-            ),
-        )
-        await self._db.commit()
+        now = time.time()
+        try:
+            await self._db.execute(
+                """
+                INSERT INTO export_artifacts(
+                    chat_id, topic_id, scope, format_version,
+                    coverage_max_id, message_count, file_size, file_path,
+                    last_accessed, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(chat_id, topic_id, scope, format_version) DO UPDATE SET
+                    coverage_max_id = excluded.coverage_max_id,
+                    message_count   = excluded.message_count,
+                    file_size       = excluded.file_size,
+                    file_path       = excluded.file_path,
+                    last_accessed   = excluded.last_accessed,
+                    created_at      = excluded.created_at
+                """,
+                (
+                    chat_id_int,
+                    topic_id,
+                    scope,
+                    EXPORT_TEXT_FORMAT_VERSION,
+                    coverage_max_id,
+                    message_count,
+                    file_size,
+                    str(final_path),
+                    now,
+                    now,
+                ),
+            )
+            await self._db.commit()
+        except Exception:
+            if old_path != str(final_path):
+                self._unlink_artifact_file(str(final_path))
+            raise
 
         if old_path and old_path != str(final_path):
             self._unlink_artifact_file(old_path)
+
         await self.evict_artifacts_if_needed()
         return str(final_path), file_size
 
@@ -1158,24 +1206,24 @@ class MessageCache:
         ) as cur:
             rows = await cur.fetchall()
 
-        to_delete = []
+        evicted = 0
+        unlink_after_commit = []
         for chat_id, topic_id, scope, version, file_size, file_path in rows:
             if total <= limit:
                 break
-            to_delete.append((chat_id, topic_id, scope, version, file_path))
-            total -= file_size
-
-        for chat_id, topic_id, scope, version, _ in to_delete:
             await self._db.execute(
                 "DELETE FROM export_artifacts"
                 " WHERE chat_id=? AND topic_id=? AND scope=? AND format_version=?",
                 (chat_id, topic_id, scope, version),
             )
-        await self._db.commit()
-
-        for *_, file_path in to_delete:
-            self._unlink_artifact_file(file_path)
-        return len(to_delete)
+            total -= file_size
+            evicted += 1
+            unlink_after_commit.append(file_path)
+        if evicted:
+            await self._db.commit()
+            for file_path in unlink_after_commit:
+                self._unlink_artifact_file(file_path)
+        return evicted
 
     # ------------------------------------------------------------------ #
     # LRU touch & eviction
@@ -1228,6 +1276,24 @@ class MessageCache:
                     return 0
                 await asyncio.sleep(0.1 * (2 ** attempt))
 
+    async def _delete_chat_cache_rows(self, chat_id: int, topic_id: int) -> None:
+        await self._db.execute(
+            "DELETE FROM messages WHERE chat_id=? AND topic_id=?", (chat_id, topic_id)
+        )
+        await self._db.execute(
+            "DELETE FROM chat_id_ranges WHERE chat_id=? AND topic_id=?", (chat_id, topic_id)
+        )
+        await self._db.execute(
+            "DELETE FROM chat_id_coverage_ranges WHERE chat_id=? AND topic_id=?",
+            (chat_id, topic_id),
+        )
+        await self._db.execute(
+            "DELETE FROM chat_date_ranges WHERE chat_id=? AND topic_id=?", (chat_id, topic_id)
+        )
+        await self._db.execute(
+            "DELETE FROM chat_meta WHERE chat_id=? AND topic_id=?", (chat_id, topic_id)
+        )
+
     async def _evict_impl(self) -> int:
         if self._db is None:
             return 0
@@ -1261,7 +1327,6 @@ class MessageCache:
             candidates = await cur.fetchall()
 
         evicted = 0
-        artifact_paths_to_unlink: list[str] = []
         try:
             for chat_id, topic_id, size in candidates:
                 if total_with_artifacts <= target:
@@ -1272,31 +1337,23 @@ class MessageCache:
                     (chat_id, topic_id),
                 ) as cur:
                     artifact_rows = await cur.fetchall()
-                artifact_paths_to_unlink.extend(row[0] for row in artifact_rows)
+                artifact_paths = [row[0] for row in artifact_rows]
                 chat_artifact_bytes = sum(int(row[1]) for row in artifact_rows)
-                await self._db.execute(
-                    "DELETE FROM messages WHERE chat_id=? AND topic_id=?", (chat_id, topic_id)
-                )
-                await self._db.execute(
-                    "DELETE FROM chat_id_ranges WHERE chat_id=? AND topic_id=?", (chat_id, topic_id)
-                )
-                await self._db.execute(
-                    "DELETE FROM chat_id_coverage_ranges WHERE chat_id=? AND topic_id=?", (chat_id, topic_id)
-                )
-                await self._db.execute(
-                    "DELETE FROM chat_date_ranges WHERE chat_id=? AND topic_id=?", (chat_id, topic_id)
-                )
-                await self._db.execute(
-                    "DELETE FROM export_artifacts WHERE chat_id=? AND topic_id=?", (chat_id, topic_id)
-                )
-                await self._db.execute(
-                    "DELETE FROM chat_meta WHERE chat_id=? AND topic_id=?", (chat_id, topic_id)
-                )
+                if chat_artifact_bytes:
+                    await self._db.execute(
+                        "DELETE FROM export_artifacts WHERE chat_id=? AND topic_id=?",
+                        (chat_id, topic_id),
+                    )
+                    await self._db.commit()
+                    for file_path in artifact_paths:
+                        self._unlink_artifact_file(file_path)
+                    artifact_bytes -= chat_artifact_bytes
+                    total_with_artifacts -= chat_artifact_bytes
+                await self._delete_chat_cache_rows(chat_id, topic_id)
                 # Также убираем lock — иначе dict растёт unbounded при долгом uptime
                 self._chat_locks.pop(chat_id, None)
                 total_bytes -= size
-                artifact_bytes -= chat_artifact_bytes
-                total_with_artifacts -= size + chat_artifact_bytes
+                total_with_artifacts -= size
                 evicted += 1
                 topic_info = f" topic={topic_id}" if topic_id else ""
                 logger.info(
@@ -1304,8 +1361,8 @@ class MessageCache:
                     f"({(size + chat_artifact_bytes) // 1024} KB freed, "
                     f"remaining ~{total_with_artifacts // 1024 // 1024} MB)"
                 )
-            # Один атомарный commit — либо все evict'ы, либо ни одного.
-            # Не оставляет "phantom ranges" без messages при прерывании.
+            # Artifact metadata is dropped separately because artifact files are derived cache.
+            # Message rows and ranges stay in one transaction to avoid phantom ranges.
             await self._db.commit()
         except Exception:
             try:
@@ -1313,9 +1370,6 @@ class MessageCache:
             except Exception as rb_exc:
                 logger.warning(f"rollback failed during evict: {rb_exc}")
             raise
-
-        for artifact_path in artifact_paths_to_unlink:
-            self._unlink_artifact_file(artifact_path)
 
         return evicted
 

@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 from main import ExportWorker
 from models import ExportRequest, ExportedMessage
 from pyrogram_client import ExportCancelled

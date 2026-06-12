@@ -201,7 +201,7 @@ class TestConcurrency:
             build_response(f"task_{i}", 100)
             for i in range(10)
         ])
-        elapsed = time.time() - start
+        _ = time.time() - start
 
         assert len(responses) == 10
         for response in responses:
@@ -309,7 +309,7 @@ class TestExportRateBenchmark:
 
     def test_response_building_rate(self):
         start = time.time()
-        response = ExportResponse(
+        _ = ExportResponse(
             task_id="test",
             status="completed",
             message_count=10000,

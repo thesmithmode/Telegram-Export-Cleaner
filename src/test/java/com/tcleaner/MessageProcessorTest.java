@@ -42,9 +42,9 @@ class MessageProcessorTest {
                     "text": "Hello world"
                 }
                 """);
-            
+
             String result = processor.processMessage(message);
-            
+
             assertThat(result).isEqualTo("20250624 Hello world");
         }
 
@@ -63,9 +63,9 @@ class MessageProcessorTest {
                     ]
                 }
                 """);
-            
+
             String result = processor.processMessage(message);
-            
+
             assertThat(result).isEqualTo("20250624 This is **important**");
         }
 
@@ -84,9 +84,9 @@ class MessageProcessorTest {
                     ]
                 }
                 """);
-            
+
             String result = processor.processMessage(message);
-            
+
             assertThat(result).isEqualTo("20250624 Check https://example.com");
         }
 
@@ -102,9 +102,9 @@ class MessageProcessorTest {
                     "title": "Test Channel"
                 }
                 """);
-            
+
             String result = processor.processMessage(message);
-            
+
             assertThat(result).isNull();
         }
 
@@ -120,9 +120,9 @@ class MessageProcessorTest {
                     "text": "Line 1\\nLine 2\\nLine 3"
                 }
                 """);
-            
+
             String result = processor.processMessage(message);
-            
+
             assertThat(result).isEqualTo("20250624 Line 1 Line 2 Line 3");
         }
 
@@ -138,9 +138,9 @@ class MessageProcessorTest {
                     "text": "Hello! 👋"
                 }
                 """);
-            
+
             String result = processor.processMessage(message);
-            
+
             assertThat(result).isEqualTo("20250624 Hello! 👋");
         }
 
@@ -160,9 +160,9 @@ class MessageProcessorTest {
                     ]
                 }
                 """);
-            
+
             String result = processor.processMessage(message);
-            
+
             assertThat(result).isEqualTo("20250624 Use `console.log()` for debugging");
         }
 
@@ -181,9 +181,9 @@ class MessageProcessorTest {
                     ]
                 }
                 """);
-            
+
             String result = processor.processMessage(message);
-            
+
             assertThat(result).isEqualTo("20250624 Secret: ||password123||");
         }
 
@@ -199,9 +199,9 @@ class MessageProcessorTest {
                     "text": ""
                 }
                 """);
-            
+
             String result = processor.processMessage(message);
-            
+
             assertThat(result).isNull();
         }
 
@@ -218,9 +218,9 @@ class MessageProcessorTest {
                     "text": "Forwarded message text"
                 }
                 """);
-            
+
             String result = processor.processMessage(message);
-            
+
             assertThat(result).isEqualTo("20250624 Forwarded message text");
         }
 
@@ -237,9 +237,9 @@ class MessageProcessorTest {
                     "text": "This is a reply"
                 }
                 """);
-            
+
             String result = processor.processMessage(message);
-            
+
             assertThat(result).isEqualTo("20250624 This is a reply");
         }
 
@@ -256,9 +256,9 @@ class MessageProcessorTest {
                     "text": "Check this photo!"
                 }
                 """);
-            
+
             String result = processor.processMessage(message);
-            
+
             assertThat(result).isEqualTo("20250624 Check this photo!");
         }
     }
@@ -271,7 +271,7 @@ class MessageProcessorTest {
         @DisplayName("Обрабатывает список сообщений")
         void processesMessageList() throws Exception {
             List<JsonNode> messages = new ArrayList<>();
-            
+
             messages.add(objectMapper.readTree("""
                 {"id": 1, "type": "message", "date": "2025-06-24T10:00:00", "text": "First"}
                 """));
@@ -281,9 +281,9 @@ class MessageProcessorTest {
             messages.add(objectMapper.readTree("""
                 {"id": 3, "type": "message", "date": "2025-06-24T10:02:00", "text": "Second"}
                 """));
-            
+
             List<String> result = processor.processMessages(messages);
-            
+
             assertThat(result).containsExactly(
                 "20250624 First",
                 "20250624 Second"
@@ -320,9 +320,9 @@ class MessageProcessorTest {
                     "text": "Test"
                 }
                 """);
-            
+
             String result = processor.processMessage(message);
-            
+
             assertThat(result).startsWith("20251231");
             assertThat(result).isEqualTo("20251231 Test");
         }
@@ -338,9 +338,9 @@ class MessageProcessorTest {
                     "text": "New Year"
                 }
                 """);
-            
+
             String result = processor.processMessage(message);
-            
+
             assertThat(result).startsWith("20250101");
             assertThat(result).doesNotContain("-");
         }

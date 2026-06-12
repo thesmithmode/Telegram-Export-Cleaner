@@ -8,8 +8,6 @@ from unittest.mock import AsyncMock
 
 from message_cache import MessageCache
 from cache_stats import (
-    CacheStatsSnapshot,
-    ChatStatEntry,
     REDIS_SNAPSHOT_KEY,
     REDIS_SNAPSHOT_TTL,
     build_snapshot,

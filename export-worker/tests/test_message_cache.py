@@ -337,6 +337,94 @@ class TestExportArtifacts:
         finally:
             await c.close()
 
+    async def test_orphan_artifact_cleanup_edges(self, tmp_path, monkeypatch, caplog):
+        disabled = MessageCache(enabled=False)
+        assert await disabled._cleanup_orphan_artifacts() == 0
+
+        missing_root = MessageCache(
+            db_path=str(tmp_path / "missing_root.db"),
+            artifact_dir=str(tmp_path / "missing_artifacts"),
+        )
+        await missing_root.initialize()
+        try:
+            assert await missing_root._cleanup_orphan_artifacts() == 0
+        finally:
+            await missing_root.close()
+
+        c = MessageCache(
+            db_path=str(tmp_path / "orphan_cleanup.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        try:
+            root = c._artifact_root()
+            root.mkdir(parents=True, exist_ok=True)
+
+            active = root / "active.txt"
+            active.write_text("active artifact", encoding="utf-8")
+            await c._db.execute(
+                """
+                INSERT INTO export_artifacts(
+                    chat_id, topic_id, scope, format_version,
+                    coverage_max_id, message_count, file_size, file_path,
+                    last_accessed, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (1, 0, "full", 1, 1, 1, active.stat().st_size, str(active), 1.0, 1.0),
+            )
+            await c._db.commit()
+            assert await c._cleanup_orphan_artifacts() == 0
+            assert active.exists()
+
+            orphan = root / "orphan.txt"
+            orphan.write_text("orphan artifact", encoding="utf-8")
+            original_root = c._artifact_root
+            c._artifact_root = lambda: root
+
+            path_cls = type(root)
+            original_iterdir = path_cls.iterdir
+
+            def fail_iterdir(_self):
+                raise OSError("scan failed")
+
+            monkeypatch.setattr(path_cls, "iterdir", fail_iterdir)
+            with caplog.at_level("WARNING"):
+                assert await c._cleanup_orphan_artifacts() == 0
+            assert any("Failed to scan artifact root" in r.message for r in caplog.records)
+            monkeypatch.setattr(path_cls, "iterdir", original_iterdir)
+
+            original_resolve = path_cls.resolve
+
+            def fail_orphan_resolve(self, *args, **kwargs):
+                if self == orphan:
+                    raise OSError("resolve failed")
+                return original_resolve(self, *args, **kwargs)
+
+            monkeypatch.setattr(path_cls, "resolve", fail_orphan_resolve)
+            assert await c._cleanup_orphan_artifacts() == 0
+            assert orphan.exists()
+            monkeypatch.setattr(path_cls, "resolve", original_resolve)
+
+            original_unlink = os.unlink
+
+            def fail_orphan_unlink(path):
+                if str(path) == str(orphan):
+                    raise OSError("busy")
+                return original_unlink(path)
+
+            monkeypatch.setattr(os, "unlink", fail_orphan_unlink)
+            assert await c._cleanup_orphan_artifacts() == 0
+            assert orphan.exists()
+            monkeypatch.setattr(os, "unlink", original_unlink)
+
+            assert await c._cleanup_orphan_artifacts() == 1
+            assert not orphan.exists()
+        finally:
+            c._artifact_root = original_root if "original_root" in locals() else c._artifact_root
+            await c.close()
+
     async def test_small_file_does_not_create_artifact(self, tmp_path):
         c = MessageCache(
             db_path=str(tmp_path / "artifact_small.db"),
@@ -458,6 +546,38 @@ class TestExportArtifacts:
         finally:
             await c.close()
 
+    async def test_artifact_copy_failure_ignores_missing_tmp_file(
+        self, tmp_path, monkeypatch
+    ):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_copy_missing_tmp.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        source = tmp_path / "source.txt"
+        source.write_text("content", encoding="utf-8")
+
+        def fail_copy(*args, **kwargs):
+            raise RuntimeError("copy failed")
+
+        original_unlink = os.unlink
+
+        def missing_tmp(path):
+            if str(path).endswith(".tmp"):
+                raise FileNotFoundError(path)
+            return original_unlink(path)
+
+        monkeypatch.setattr("message_cache.shutil.copyfileobj", fail_copy)
+        monkeypatch.setattr(os, "unlink", missing_tmp)
+        try:
+            with pytest.raises(RuntimeError, match="copy failed"):
+                await c.save_full_export_artifact(1, 0, 1, 1, str(source))
+        finally:
+            monkeypatch.setattr(os, "unlink", original_unlink)
+            await c.close()
+
     async def test_missing_artifact_file_is_treated_as_cache_miss(self, tmp_path):
         c = MessageCache(
             db_path=str(tmp_path / "artifact_missing.db"),
@@ -509,6 +629,45 @@ class TestExportArtifacts:
         finally:
             await c.close()
 
+    async def test_stale_artifact_metadata_is_dropped_when_unlink_fails(
+        self, tmp_path, monkeypatch
+    ):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_stale_unlink_fail.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        source = tmp_path / "full.txt"
+        source.write_text("stale export", encoding="utf-8")
+        original_unlink = os.unlink
+        try:
+            saved = await c.save_full_export_artifact(1, 0, 10, 2, str(source))
+            assert saved is not None
+            saved_path, _ = saved
+
+            def fail_saved_path(path):
+                if str(path) == saved_path:
+                    raise OSError("busy")
+                return original_unlink(path)
+
+            monkeypatch.setattr(os, "unlink", fail_saved_path)
+            assert await c.get_full_export_artifact(1, 0, 11, 2) is None
+
+            assert os.path.exists(saved_path)
+            assert await c._artifact_total_bytes() == 0
+            async with c._db.execute("SELECT COUNT(*) FROM export_artifacts") as cur:
+                row = await cur.fetchone()
+            assert row[0] == 0
+
+            monkeypatch.setattr(os, "unlink", original_unlink)
+            assert await c._cleanup_orphan_artifacts() == 1
+            assert not os.path.exists(saved_path)
+        finally:
+            monkeypatch.setattr(os, "unlink", original_unlink)
+            await c.close()
+
     async def test_artifact_lru_eviction_does_not_delete_message_cache(self, tmp_path):
         c = MessageCache(
             db_path=str(tmp_path / "artifact_lru.db"),
@@ -532,6 +691,315 @@ class TestExportArtifacts:
             assert await c.get_full_export_artifact(1, 0, 1, 1) is None
             assert await c.get_full_export_artifact(2, 0, 1, 1) is not None
             assert [m.id for m in await c.get_messages(1, 1, 1)] == [1]
+        finally:
+            await c.close()
+
+    async def test_chat_eviction_drops_metadata_when_artifact_unlink_fails(
+        self, tmp_path, monkeypatch
+    ):
+        c = MessageCache(
+            db_path=str(tmp_path / "chat_evict_artifact_unlink_fail.db"),
+            max_disk_bytes=10 * 1024 * 1024,
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        source = tmp_path / "artifact.txt"
+        source.write_text("artifact data", encoding="utf-8")
+        original_unlink = os.unlink
+        try:
+            await c.store_messages(1, [_make_msg(1, text="message large enough")])
+            saved = await c.save_full_export_artifact(1, 0, 1, 1, str(source))
+            assert saved is not None
+            saved_path, _ = saved
+
+            def fail_saved_path(path):
+                if str(path) == saved_path:
+                    raise OSError("busy")
+                return original_unlink(path)
+
+            c.max_disk_bytes = 10
+            monkeypatch.setattr(os, "unlink", fail_saved_path)
+            assert await c.evict_if_needed() == 1
+
+            assert os.path.exists(saved_path)
+            assert await c._artifact_total_bytes() == 0
+            assert await c.get_messages(1, 1, 1) == []
+            async with c._db.execute("SELECT COUNT(*) FROM export_artifacts") as cur:
+                row = await cur.fetchone()
+            assert row[0] == 0
+
+            monkeypatch.setattr(os, "unlink", original_unlink)
+            assert await c._cleanup_orphan_artifacts() == 1
+            assert not os.path.exists(saved_path)
+        finally:
+            monkeypatch.setattr(os, "unlink", original_unlink)
+            await c.close()
+
+    async def test_chat_eviction_keeps_messages_when_db_delete_fails_after_artifact_cleanup(
+        self, tmp_path, monkeypatch
+    ):
+        c = MessageCache(
+            db_path=str(tmp_path / "chat_evict_db_fail_after_artifact.db"),
+            max_disk_bytes=10 * 1024 * 1024,
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        source = tmp_path / "artifact.txt"
+        source.write_text("artifact data", encoding="utf-8")
+        try:
+            await c.store_messages(1, [_make_msg(1, text="message large enough")])
+            saved = await c.save_full_export_artifact(1, 0, 1, 1, str(source))
+            assert saved is not None
+            saved_path, _ = saved
+
+            async def fail_message_delete(chat_id, topic_id):
+                raise RuntimeError("message delete failed")
+
+            c.max_disk_bytes = 10
+            monkeypatch.setattr(c, "_delete_chat_cache_rows", fail_message_delete)
+            with pytest.raises(RuntimeError, match="message delete failed"):
+                await c.evict_if_needed()
+
+            assert not os.path.exists(saved_path)
+            assert [m.id for m in await c.get_messages(1, 1, 1)] == [1]
+            async with c._db.execute("SELECT COUNT(*) FROM export_artifacts") as cur:
+                row = await cur.fetchone()
+            assert row[0] == 0
+        finally:
+            await c.close()
+
+    async def test_chat_eviction_drops_artifact_metadata_inside_message_lru(
+        self, tmp_path, monkeypatch
+    ):
+        c = MessageCache(
+            db_path=str(tmp_path / "chat_evict_artifact_inside_lru.db"),
+            max_disk_bytes=10 * 1024 * 1024,
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        source = tmp_path / "artifact.txt"
+        source.write_text("artifact data", encoding="utf-8")
+        try:
+            await c.store_messages(1, [_make_msg(1, text="message large enough")])
+            saved = await c.save_full_export_artifact(1, 0, 1, 1, str(source))
+            assert saved is not None
+            saved_path, _ = saved
+
+            async def skip_artifact_lru(max_bytes=None):
+                return 0
+
+            monkeypatch.setattr(c, "evict_artifacts_if_needed", skip_artifact_lru)
+            c.max_disk_bytes = 10
+
+            assert await c.evict_if_needed() == 1
+            assert not os.path.exists(saved_path)
+            assert await c._artifact_total_bytes() == 0
+            assert await c.get_messages(1, 1, 1) == []
+            async with c._db.execute("SELECT COUNT(*) FROM export_artifacts") as cur:
+                row = await cur.fetchone()
+            assert row[0] == 0
+        finally:
+            await c.close()
+
+    async def test_artifact_eviction_drops_metadata_when_unlink_fails(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_unlink_retry.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        source = tmp_path / "artifact.txt"
+        source.write_text("artifact data", encoding="utf-8")
+        original_unlink = os.unlink
+        try:
+            saved = await c.save_full_export_artifact(1, 0, 1, 1, str(source))
+            assert saved is not None
+            saved_path, _ = saved
+
+            def fail_saved_path(path):
+                if str(path) == saved_path:
+                    raise OSError("busy")
+                return original_unlink(path)
+
+            monkeypatch.setattr(os, "unlink", fail_saved_path)
+            with caplog.at_level("WARNING"):
+                assert await c.evict_artifacts_if_needed(max_bytes=0) == 1
+
+            assert os.path.exists(saved_path)
+            assert await c._artifact_total_bytes() == 0
+            async with c._db.execute("SELECT COUNT(*) FROM export_artifacts") as cur:
+                row = await cur.fetchone()
+            assert row[0] == 0
+            assert any("Failed to unlink export artifact" in r.message for r in caplog.records)
+
+            monkeypatch.setattr(os, "unlink", original_unlink)
+            assert await c._cleanup_orphan_artifacts() == 1
+
+            assert not os.path.exists(saved_path)
+        finally:
+            monkeypatch.setattr(os, "unlink", original_unlink)
+            await c.close()
+
+    async def test_artifact_eviction_drops_all_metadata_before_unlinking_files(
+        self, tmp_path, monkeypatch
+    ):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_partial_unlink.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        first = c._artifact_root() / "first.txt"
+        second = c._artifact_root() / "second.txt"
+        first.parent.mkdir(parents=True, exist_ok=True)
+        first.write_text("first artifact", encoding="utf-8")
+        second.write_text("second artifact", encoding="utf-8")
+        original_unlink = os.unlink
+        try:
+            await c._db.executemany(
+                """
+                INSERT INTO export_artifacts(
+                    chat_id, topic_id, scope, format_version,
+                    coverage_max_id, message_count, file_size, file_path,
+                    last_accessed, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (1, 0, "full", 1, 1, 1, first.stat().st_size, str(first), 1.0, 1.0),
+                    (1, 0, "extra", 1, 1, 1, second.stat().st_size, str(second), 1.0, 1.0),
+                ],
+            )
+            await c._db.commit()
+
+            def fail_second(path):
+                if str(path) == str(second):
+                    raise OSError("busy")
+                return original_unlink(path)
+
+            monkeypatch.setattr(os, "unlink", fail_second)
+            assert await c.evict_artifacts_if_needed(max_bytes=0) == 2
+
+            assert not first.exists()
+            assert second.exists()
+            async with c._db.execute(
+                "SELECT scope FROM export_artifacts ORDER BY scope"
+            ) as cur:
+                rows = await cur.fetchall()
+            assert rows == []
+        finally:
+            monkeypatch.setattr(os, "unlink", original_unlink)
+            await c.close()
+
+    async def test_artifact_eviction_commits_deleted_rows_once(
+        self, tmp_path, monkeypatch
+    ):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_single_commit.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        first = tmp_path / "first.txt"
+        second = tmp_path / "second.txt"
+        first.write_text("first artifact", encoding="utf-8")
+        second.write_text("second artifact", encoding="utf-8")
+        try:
+            assert await c.save_full_export_artifact(1, 0, 1, 1, str(first)) is not None
+            assert await c.save_full_export_artifact(2, 0, 1, 1, str(second)) is not None
+            commit_calls = 0
+            original_commit = c._db.commit
+
+            async def count_commit():
+                nonlocal commit_calls
+                commit_calls += 1
+                await original_commit()
+
+            monkeypatch.setattr(c._db, "commit", count_commit)
+
+            assert await c.evict_artifacts_if_needed(max_bytes=0) == 2
+            assert commit_calls == 1
+        finally:
+            await c.close()
+
+    async def test_replacing_artifact_commits_new_metadata_when_old_unlink_fails(
+        self, tmp_path, monkeypatch
+    ):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_replace_unlink_fail.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        first = tmp_path / "first.txt"
+        second = tmp_path / "second.txt"
+        first.write_text("first artifact", encoding="utf-8")
+        second.write_text("second artifact", encoding="utf-8")
+        original_unlink = os.unlink
+        try:
+            saved_first = await c.save_full_export_artifact(1, 0, 10, 1, str(first))
+            assert saved_first is not None
+            old_path, _ = saved_first
+
+            def fail_old_path(path):
+                if str(path) == old_path:
+                    raise OSError("busy")
+                return original_unlink(path)
+
+            monkeypatch.setattr(os, "unlink", fail_old_path)
+            saved_second = await c.save_full_export_artifact(1, 0, 11, 1, str(second))
+            assert saved_second is not None
+
+            assert os.path.exists(old_path)
+            assert await c.get_full_export_artifact(1, 0, 11, 1) == saved_second
+
+            monkeypatch.setattr(os, "unlink", original_unlink)
+            assert await c._cleanup_orphan_artifacts() == 1
+            assert not os.path.exists(old_path)
+        finally:
+            monkeypatch.setattr(os, "unlink", original_unlink)
+            await c.close()
+
+    async def test_save_artifact_removes_new_file_when_metadata_commit_fails(
+        self, tmp_path, monkeypatch
+    ):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_save_commit_fail.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        source = tmp_path / "source.txt"
+        source.write_text("artifact data", encoding="utf-8")
+        original_execute = c._db.execute
+        try:
+            def fail_insert(sql, *args, **kwargs):
+                if "INSERT INTO export_artifacts" in sql:
+                    async def fail():
+                        raise RuntimeError("metadata write failed")
+
+                    return fail()
+                return original_execute(sql, *args, **kwargs)
+
+            monkeypatch.setattr(c._db, "execute", fail_insert)
+            with pytest.raises(RuntimeError, match="metadata write failed"):
+                await c.save_full_export_artifact(1, 0, 1, 1, str(source))
+
+            artifact_root = c._artifact_root()
+            leftovers = list(artifact_root.glob("*.txt")) if artifact_root.exists() else []
+            assert leftovers == []
         finally:
             await c.close()
 

@@ -33,7 +33,6 @@ main.py (94%):
 from __future__ import annotations
 
 import asyncio
-import json
 import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -42,7 +41,7 @@ import aiosqlite
 
 from main import ExportWorker
 from message_cache import MessageCache
-from models import ExportRequest, ExportedMessage, SendResponsePayload
+from models import ExportRequest, ExportedMessage
 from pyrogram_client import (
     TelegramClient, ExportCancelled, ensure_utc, cancellable_floodwait_sleep,
 )
