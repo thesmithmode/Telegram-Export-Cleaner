@@ -337,6 +337,94 @@ class TestExportArtifacts:
         finally:
             await c.close()
 
+    async def test_orphan_artifact_cleanup_edges(self, tmp_path, monkeypatch, caplog):
+        disabled = MessageCache(enabled=False)
+        assert await disabled._cleanup_orphan_artifacts() == 0
+
+        missing_root = MessageCache(
+            db_path=str(tmp_path / "missing_root.db"),
+            artifact_dir=str(tmp_path / "missing_artifacts"),
+        )
+        await missing_root.initialize()
+        try:
+            assert await missing_root._cleanup_orphan_artifacts() == 0
+        finally:
+            await missing_root.close()
+
+        c = MessageCache(
+            db_path=str(tmp_path / "orphan_cleanup.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        try:
+            root = c._artifact_root()
+            root.mkdir(parents=True, exist_ok=True)
+
+            active = root / "active.txt"
+            active.write_text("active artifact", encoding="utf-8")
+            await c._db.execute(
+                """
+                INSERT INTO export_artifacts(
+                    chat_id, topic_id, scope, format_version,
+                    coverage_max_id, message_count, file_size, file_path,
+                    last_accessed, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (1, 0, "full", 1, 1, 1, active.stat().st_size, str(active), 1.0, 1.0),
+            )
+            await c._db.commit()
+            assert await c._cleanup_orphan_artifacts() == 0
+            assert active.exists()
+
+            orphan = root / "orphan.txt"
+            orphan.write_text("orphan artifact", encoding="utf-8")
+            original_root = c._artifact_root
+            c._artifact_root = lambda: root
+
+            path_cls = type(root)
+            original_iterdir = path_cls.iterdir
+
+            def fail_iterdir(_self):
+                raise OSError("scan failed")
+
+            monkeypatch.setattr(path_cls, "iterdir", fail_iterdir)
+            with caplog.at_level("WARNING"):
+                assert await c._cleanup_orphan_artifacts() == 0
+            assert any("Failed to scan artifact root" in r.message for r in caplog.records)
+            monkeypatch.setattr(path_cls, "iterdir", original_iterdir)
+
+            original_resolve = path_cls.resolve
+
+            def fail_orphan_resolve(self, *args, **kwargs):
+                if self == orphan:
+                    raise OSError("resolve failed")
+                return original_resolve(self, *args, **kwargs)
+
+            monkeypatch.setattr(path_cls, "resolve", fail_orphan_resolve)
+            assert await c._cleanup_orphan_artifacts() == 0
+            assert orphan.exists()
+            monkeypatch.setattr(path_cls, "resolve", original_resolve)
+
+            original_unlink = os.unlink
+
+            def fail_orphan_unlink(path):
+                if str(path) == str(orphan):
+                    raise OSError("busy")
+                return original_unlink(path)
+
+            monkeypatch.setattr(os, "unlink", fail_orphan_unlink)
+            assert await c._cleanup_orphan_artifacts() == 0
+            assert orphan.exists()
+            monkeypatch.setattr(os, "unlink", original_unlink)
+
+            assert await c._cleanup_orphan_artifacts() == 1
+            assert not orphan.exists()
+        finally:
+            c._artifact_root = original_root if "original_root" in locals() else c._artifact_root
+            await c.close()
+
     async def test_small_file_does_not_create_artifact(self, tmp_path):
         c = MessageCache(
             db_path=str(tmp_path / "artifact_small.db"),
@@ -814,6 +902,38 @@ class TestExportArtifacts:
             assert not os.path.exists(old_path)
         finally:
             monkeypatch.setattr(os, "unlink", original_unlink)
+            await c.close()
+
+    async def test_save_artifact_removes_new_file_when_metadata_commit_fails(
+        self, tmp_path, monkeypatch
+    ):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_save_commit_fail.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        source = tmp_path / "source.txt"
+        source.write_text("artifact data", encoding="utf-8")
+        original_execute = c._db.execute
+        try:
+            def fail_insert(sql, *args, **kwargs):
+                if "INSERT INTO export_artifacts" in sql:
+                    async def fail():
+                        raise RuntimeError("metadata write failed")
+
+                    return fail()
+                return original_execute(sql, *args, **kwargs)
+
+            monkeypatch.setattr(c._db, "execute", fail_insert)
+            with pytest.raises(RuntimeError, match="metadata write failed"):
+                await c.save_full_export_artifact(1, 0, 1, 1, str(source))
+
+            artifact_root = c._artifact_root()
+            leftovers = list(artifact_root.glob("*.txt")) if artifact_root.exists() else []
+            assert leftovers == []
+        finally:
             await c.close()
 
     async def test_artifacts_count_inside_global_cache_budget(self, tmp_path):
