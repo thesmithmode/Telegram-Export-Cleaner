@@ -1070,19 +1070,15 @@ class MessageCache:
             return None
 
         stored_coverage_max_id, stored_message_count, file_size, file_path = row
-        if (
-            stored_coverage_max_id != coverage_max_id
-            or stored_message_count != message_count
-            or not os.path.exists(file_path)
-        ):
+        if not os.path.exists(file_path):
             await self._db.execute(
                 "DELETE FROM export_artifacts"
                 " WHERE chat_id=? AND topic_id=? AND scope=? AND format_version=?",
                 (chat_id_int, topic_id, scope, EXPORT_TEXT_FORMAT_VERSION),
             )
             await self._db.commit()
-            if os.path.exists(file_path):
-                self._unlink_artifact_file(file_path)
+            return None
+        if stored_coverage_max_id != coverage_max_id or stored_message_count != message_count:
             return None
 
         await self._db.execute(
@@ -1092,6 +1088,54 @@ class MessageCache:
         )
         await self._db.commit()
         return file_path, file_size
+
+    async def get_latest_full_export_artifact(
+        self,
+        chat_id: Union[int, str],
+        topic_id: int,
+        max_coverage_id: int,
+        max_message_count: int,
+    ) -> Optional[tuple[str, int, int, int]]:
+        if not self.enabled or not self.artifact_enabled or self._db is None:
+            return None
+        chat_id_int = int(chat_id)
+        scope = self._artifact_scope()
+        async with self._db.execute(
+            "SELECT coverage_max_id, message_count, file_size, file_path"
+            " FROM export_artifacts"
+            " WHERE chat_id=? AND topic_id=? AND scope=? AND format_version=?"
+            " AND coverage_max_id<=? AND message_count<=?"
+            " ORDER BY coverage_max_id DESC, message_count DESC LIMIT 1",
+            (
+                chat_id_int,
+                topic_id,
+                scope,
+                EXPORT_TEXT_FORMAT_VERSION,
+                max_coverage_id,
+                max_message_count,
+            ),
+        ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return None
+
+        stored_coverage_max_id, stored_message_count, file_size, file_path = row
+        if not os.path.exists(file_path):
+            await self._db.execute(
+                "DELETE FROM export_artifacts"
+                " WHERE chat_id=? AND topic_id=? AND scope=? AND format_version=?",
+                (chat_id_int, topic_id, scope, EXPORT_TEXT_FORMAT_VERSION),
+            )
+            await self._db.commit()
+            return None
+
+        await self._db.execute(
+            "UPDATE export_artifacts SET last_accessed=?"
+            " WHERE chat_id=? AND topic_id=? AND scope=? AND format_version=?",
+            (time.time(), chat_id_int, topic_id, scope, EXPORT_TEXT_FORMAT_VERSION),
+        )
+        await self._db.commit()
+        return file_path, int(file_size), int(stored_coverage_max_id), int(stored_message_count)
 
     async def save_full_export_artifact(
         self,

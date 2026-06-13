@@ -214,16 +214,25 @@ class JavaBotClient:
         if payload.status != "completed" or payload.actual_count == 0:
             return await self.send_response(payload), None
 
+        started_at = time.monotonic()
         artifact_eligible = self._is_full_artifact_eligible(payload, cache, cache_context)
         if artifact_eligible:
+            artifact_lookup_started = time.monotonic()
             artifact = await cache.get_full_export_artifact(
                 cache_context["chat_id"],
                 cache_context.get("topic_id", 0),
                 cache_context["coverage_max_id"],
                 cache_context["message_count"],
             )
+            logger.info(
+                "Task %s: artifact exact lookup took %.3fs hit=%s",
+                payload.task_id,
+                time.monotonic() - artifact_lookup_started,
+                artifact is not None,
+            )
             if artifact is not None:
                 artifact_path, artifact_size = artifact
+                upload_started = time.monotonic()
                 if payload.user_chat_id and self.bot_token:
                     filename = self._build_filename(
                         payload.chat_title,
@@ -243,14 +252,35 @@ class JavaBotClient:
                             "Не удалось отправить файл. Попробуйте снова."
                         )
                         return False, artifact_size
-                logger.info("Task %s: sent cached export artifact", payload.task_id)
+                logger.info(
+                    "Task %s: sent cached export artifact size=%d upload=%.3fs total=%.3fs",
+                    payload.task_id,
+                    artifact_size,
+                    time.monotonic() - upload_started,
+                    time.monotonic() - started_at,
+                )
                 return True, artifact_size
 
-        cleaned_path = await self._stream_messages_to_cleaned_text(
-            payload,
-            cache=cache,
-            cache_context=cache_context,
-        )
+            cleaned_path = await self._try_extend_full_export_artifact(
+                payload,
+                cache,
+                cache_context,
+            )
+        else:
+            cleaned_path = None
+
+        if cleaned_path is None:
+            stream_started = time.monotonic()
+            cleaned_path = await self._stream_messages_to_cleaned_text(
+                payload,
+                cache=cache,
+                cache_context=cache_context,
+            )
+            logger.info(
+                "Task %s: direct export stream stage took %.3fs",
+                payload.task_id,
+                time.monotonic() - stream_started,
+            )
         if cleaned_path is None:
             logger.info(
                 "Task %s: direct cached export returned empty text "
@@ -268,7 +298,14 @@ class JavaBotClient:
             return True, 0
 
         try:
+            count_started = time.monotonic()
             bytes_count = self._count_export_text_bytes(cleaned_path)
+            logger.info(
+                "Task %s: direct export byte count took %.3fs bytes=%d",
+                payload.task_id,
+                time.monotonic() - count_started,
+                bytes_count,
+            )
             if await self._file_is_effectively_empty(cleaned_path):
                 logger.info(
                     "Task %s: direct cached export is effectively empty "
@@ -292,8 +329,14 @@ class JavaBotClient:
                     payload.to_date,
                     payload.chat_username,
                 )
+                upload_started = time.monotonic()
                 sent = await self._send_file_path_to_user(
                     payload.user_chat_id, payload.task_id, cleaned_path, filename=filename
+                )
+                logger.info(
+                    "Task %s: Telegram document upload took %.3fs",
+                    payload.task_id,
+                    time.monotonic() - upload_started,
                 )
                 if not sent:
                     await self.notify_user_failure(
@@ -303,6 +346,7 @@ class JavaBotClient:
                     return False, bytes_count
             if artifact_eligible:
                 try:
+                    save_started = time.monotonic()
                     await cache.save_full_export_artifact(
                         chat_id=cache_context["chat_id"],
                         topic_id=cache_context.get("topic_id", 0),
@@ -310,12 +354,22 @@ class JavaBotClient:
                         message_count=cache_context["message_count"],
                         source_path=cleaned_path,
                     )
+                    logger.info(
+                        "Task %s: export artifact save took %.3fs",
+                        payload.task_id,
+                        time.monotonic() - save_started,
+                    )
                 except Exception as exc:
                     logger.warning(
                         "Task %s: export artifact save skipped: %s",
                         payload.task_id,
                         _safe_err(exc),
                     )
+            logger.info(
+                "Task %s: direct cached export total took %.3fs",
+                payload.task_id,
+                time.monotonic() - started_at,
+            )
             return True, bytes_count
         finally:
             try:
@@ -339,6 +393,76 @@ class JavaBotClient:
             cache_context.get("coverage_max_id") is not None
             and cache_context.get("message_count") is not None
         )
+
+    async def _try_extend_full_export_artifact(
+        self,
+        payload: SendResponsePayload,
+        cache,
+        cache_context: dict,
+    ) -> Optional[str]:
+        getter = getattr(cache, "get_latest_full_export_artifact", None)
+        if not callable(getter):
+            return None
+        lookup_started = time.monotonic()
+        previous = await getter(
+            cache_context["chat_id"],
+            cache_context.get("topic_id", 0),
+            cache_context["coverage_max_id"],
+            cache_context["message_count"],
+        )
+        logger.info(
+            "Task %s: artifact base lookup took %.3fs hit=%s",
+            payload.task_id,
+            time.monotonic() - lookup_started,
+            previous is not None,
+        )
+        if previous is None:
+            return None
+
+        artifact_path, artifact_size, previous_max_id, previous_count = previous
+        current_max_id = int(cache_context["coverage_max_id"])
+        current_count = int(cache_context["message_count"])
+        if previous_max_id >= current_max_id or previous_count > current_count:
+            return None
+
+        fd, output_path = self._mkstemp(suffix=".txt", prefix="tg_direct_inc_")
+        appended = 0
+        started = time.monotonic()
+        try:
+            with os.fdopen(fd, "wb") as out, open(artifact_path, "rb") as src:
+                shutil.copyfileobj(src, out, length=1024 * 1024)
+                if artifact_size > 0:
+                    src.seek(-1, os.SEEK_END)
+                    if src.read(1) != b"\n":
+                        out.write(b"\n")
+                lines_iter = cache.iter_export_lines(
+                    cache_context["chat_id"],
+                    previous_max_id + 1,
+                    current_max_id,
+                    topic_id=cache_context.get("topic_id", 0),
+                )
+                async for line in lines_iter:
+                    if line is None:
+                        continue
+                    out.write(line.encode("utf-8"))
+                    out.write(b"\n")
+                    appended += 1
+            logger.info(
+                "Task %s: extended export artifact from max_id=%d to %d "
+                "with %d lines in %.3fs",
+                payload.task_id,
+                previous_max_id,
+                current_max_id,
+                appended,
+                time.monotonic() - started,
+            )
+            return output_path
+        except Exception:
+            try:
+                os.unlink(output_path)
+            except FileNotFoundError:
+                pass
+            raise
 
     async def _stream_to_temp_json(
         self,

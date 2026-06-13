@@ -498,6 +498,30 @@ class TestExportArtifacts:
         finally:
             await c.close()
 
+    async def test_mismatched_artifact_remains_available_as_incremental_base(self, tmp_path):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_incremental.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        source = tmp_path / "source.txt"
+        source.write_text("old artifact", encoding="utf-8")
+        try:
+            saved = await c.save_full_export_artifact(1, 0, 10, 1, str(source))
+            assert saved is not None
+
+            assert await c.get_full_export_artifact(1, 0, 12, 2) is None
+            latest = await c.get_latest_full_export_artifact(1, 0, 12, 2)
+
+            assert latest is not None
+            assert latest[0] == saved[0]
+            assert latest[2:] == (10, 1)
+            assert os.path.exists(saved[0])
+        finally:
+            await c.close()
+
     async def test_save_artifact_fsyncs_artifact_directory(self, tmp_path, monkeypatch):
         c = MessageCache(
             db_path=str(tmp_path / "artifact_dir_fsync.db"),
@@ -543,6 +567,28 @@ class TestExportArtifacts:
             artifact_root = c._artifact_root()
             leftovers = list(artifact_root.glob("*.tmp")) if artifact_root.exists() else []
             assert leftovers == []
+        finally:
+            await c.close()
+
+    async def test_latest_artifact_metadata_is_dropped_when_file_missing(self, tmp_path):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_latest_missing.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        source = tmp_path / "source.txt"
+        source.write_text("old artifact", encoding="utf-8")
+        try:
+            saved = await c.save_full_export_artifact(1, 0, 10, 1, str(source))
+            assert saved is not None
+            os.unlink(saved[0])
+
+            assert await c.get_latest_full_export_artifact(1, 0, 12, 2) is None
+            async with c._db.execute("SELECT COUNT(*) FROM export_artifacts") as cur:
+                row = await cur.fetchone()
+            assert row[0] == 0
         finally:
             await c.close()
 
@@ -604,7 +650,7 @@ class TestExportArtifacts:
         finally:
             await c.close()
 
-    async def test_stale_artifact_metadata_unlinks_old_file(self, tmp_path):
+    async def test_mismatched_artifact_exact_lookup_keeps_incremental_base(self, tmp_path):
         c = MessageCache(
             db_path=str(tmp_path / "artifact_stale.db"),
             artifact_dir=str(tmp_path / "artifacts"),
@@ -622,16 +668,14 @@ class TestExportArtifacts:
 
             assert await c.get_full_export_artifact(1, 0, 11, 2) is None
 
-            assert not os.path.exists(saved_path)
+            assert os.path.exists(saved_path)
             async with c._db.execute("SELECT COUNT(*) FROM export_artifacts") as cur:
                 row = await cur.fetchone()
-            assert row[0] == 0
+            assert row[0] == 1
         finally:
             await c.close()
 
-    async def test_stale_artifact_metadata_is_dropped_when_unlink_fails(
-        self, tmp_path, monkeypatch
-    ):
+    async def test_missing_artifact_metadata_is_dropped(self, tmp_path):
         c = MessageCache(
             db_path=str(tmp_path / "artifact_stale_unlink_fail.db"),
             artifact_dir=str(tmp_path / "artifacts"),
@@ -641,31 +685,20 @@ class TestExportArtifacts:
         await c.initialize()
         source = tmp_path / "full.txt"
         source.write_text("stale export", encoding="utf-8")
-        original_unlink = os.unlink
         try:
             saved = await c.save_full_export_artifact(1, 0, 10, 2, str(source))
             assert saved is not None
             saved_path, _ = saved
+            os.unlink(saved_path)
 
-            def fail_saved_path(path):
-                if str(path) == saved_path:
-                    raise OSError("busy")
-                return original_unlink(path)
+            assert await c.get_full_export_artifact(1, 0, 10, 2) is None
 
-            monkeypatch.setattr(os, "unlink", fail_saved_path)
-            assert await c.get_full_export_artifact(1, 0, 11, 2) is None
-
-            assert os.path.exists(saved_path)
+            assert not os.path.exists(saved_path)
             assert await c._artifact_total_bytes() == 0
             async with c._db.execute("SELECT COUNT(*) FROM export_artifacts") as cur:
                 row = await cur.fetchone()
             assert row[0] == 0
-
-            monkeypatch.setattr(os, "unlink", original_unlink)
-            assert await c._cleanup_orphan_artifacts() == 1
-            assert not os.path.exists(saved_path)
         finally:
-            monkeypatch.setattr(os, "unlink", original_unlink)
             await c.close()
 
     async def test_artifact_lru_eviction_does_not_delete_message_cache(self, tmp_path):
