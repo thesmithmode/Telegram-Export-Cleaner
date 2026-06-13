@@ -110,6 +110,11 @@ class _LineCache:
         for line in self.lines:
             yield line
 
+
+class _CacheWithoutLatestArtifact:
+    pass
+
+
 # ---------- _stream_to_temp_json ----------------------------------------
 
 @pytest.mark.asyncio
@@ -991,7 +996,7 @@ class TestDirectCachedResponse:
         artifact = tmp_path / "artifact.txt"
         artifact.write_text("20260609 Old\n", encoding="utf-8")
         cache = _LineCache(
-            lines=["20260610 New A", "20260610 New B"],
+            lines=[None, "20260610 New A", "20260610 New B"],
             latest_artifact=(str(artifact), artifact.stat().st_size, 10, 1),
         )
         captured = {}
@@ -1034,6 +1039,86 @@ class TestDirectCachedResponse:
             assert cache.iter_calls[0][0] == (100, 11, 12)
             assert cache.saved_artifacts[0]["coverage_max_id"] == 12
             assert cache.saved_artifacts[0]["message_count"] == 3
+        finally:
+            p.stop()
+
+    @pytest.mark.asyncio
+    async def test_try_extend_artifact_skips_when_cache_has_no_latest_lookup(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        try:
+            result = await client._try_extend_full_export_artifact(
+                SendResponsePayload(
+                    task_id="direct_artifact_no_latest",
+                    status="completed",
+                    messages=_raising_messages(),
+                    actual_count=1,
+                ),
+                _CacheWithoutLatestArtifact(),
+                {
+                    "chat_id": 100,
+                    "topic_id": 0,
+                    "coverage_max_id": 10,
+                    "message_count": 1,
+                },
+            )
+
+            assert result is None
+        finally:
+            p.stop()
+
+    @pytest.mark.asyncio
+    async def test_try_extend_artifact_skips_when_no_base_artifact(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        cache = _LineCache(latest_artifact=None)
+        try:
+            result = await client._try_extend_full_export_artifact(
+                SendResponsePayload(
+                    task_id="direct_artifact_no_base",
+                    status="completed",
+                    messages=_raising_messages(),
+                    actual_count=1,
+                ),
+                cache,
+                {
+                    "chat_id": 100,
+                    "topic_id": 0,
+                    "coverage_max_id": 10,
+                    "message_count": 1,
+                },
+            )
+
+            assert result is None
+            assert cache.latest_artifact_hits == 1
+        finally:
+            p.stop()
+
+    @pytest.mark.asyncio
+    async def test_try_extend_artifact_skips_when_base_is_not_older(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        artifact = tmp_path / "artifact.txt"
+        artifact.write_text("20260609 Old\n", encoding="utf-8")
+        cache = _LineCache(
+            latest_artifact=(str(artifact), artifact.stat().st_size, 10, 1),
+        )
+        try:
+            result = await client._try_extend_full_export_artifact(
+                SendResponsePayload(
+                    task_id="direct_artifact_base_not_older",
+                    status="completed",
+                    messages=_raising_messages(),
+                    actual_count=1,
+                ),
+                cache,
+                {
+                    "chat_id": 100,
+                    "topic_id": 0,
+                    "coverage_max_id": 10,
+                    "message_count": 1,
+                },
+            )
+
+            assert result is None
+            assert cache.iter_calls == []
         finally:
             p.stop()
 
