@@ -625,14 +625,7 @@ class JavaBotClient:
 
     @staticmethod
     def _count_export_text_bytes(file_path: str) -> int:
-        total = 0
-        with open(file_path, "r", encoding="utf-8") as f:
-            while True:
-                chunk = f.read(1024 * 1024)
-                if not chunk:
-                    break
-                total += len(chunk.encode("utf-8"))
-        return total
+        return os.path.getsize(file_path)
 
     @staticmethod
     def _min_free_disk_bytes() -> int:

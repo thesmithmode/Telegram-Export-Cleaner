@@ -815,6 +815,18 @@ class TestDirectCachedResponse:
             msg, include_keywords=[], exclude_keywords=["gamma"]
         ) is None
 
+    def test_count_export_text_bytes_uses_file_size_without_reading(self, tmp_path, monkeypatch):
+        path = tmp_path / "export.txt"
+        path.write_bytes("20260609 Привет\n".encode("utf-8"))
+        expected = path.stat().st_size
+
+        def fail_open(*args, **kwargs):
+            raise AssertionError("byte count must not read export text")
+
+        monkeypatch.setattr("builtins.open", fail_open)
+
+        assert JavaBotClient._count_export_text_bytes(str(path)) == expected
+
     @pytest.mark.asyncio
     async def test_direct_cached_response_writes_txt_and_skips_java_upload(self, tmp_path):
         client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
