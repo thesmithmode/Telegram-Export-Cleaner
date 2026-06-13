@@ -570,6 +570,28 @@ class TestExportArtifacts:
         finally:
             await c.close()
 
+    async def test_latest_artifact_metadata_is_dropped_when_file_missing(self, tmp_path):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_latest_missing.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        source = tmp_path / "source.txt"
+        source.write_text("old artifact", encoding="utf-8")
+        try:
+            saved = await c.save_full_export_artifact(1, 0, 10, 1, str(source))
+            assert saved is not None
+            os.unlink(saved[0])
+
+            assert await c.get_latest_full_export_artifact(1, 0, 12, 2) is None
+            async with c._db.execute("SELECT COUNT(*) FROM export_artifacts") as cur:
+                row = await cur.fetchone()
+            assert row[0] == 0
+        finally:
+            await c.close()
+
     async def test_artifact_copy_failure_ignores_missing_tmp_file(
         self, tmp_path, monkeypatch
     ):
