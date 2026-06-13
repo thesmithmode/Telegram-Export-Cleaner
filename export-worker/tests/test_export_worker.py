@@ -550,12 +550,20 @@ class TestThreePathCaching:
 
         # Ranges смерджились в один непрерывный [1, 60]
         id_ranges = await worker.message_cache.get_cached_ranges(CHAT_ID)
-        worker.java_client.send_cached_response_direct.assert_not_called()
-        worker.java_client.send_response.assert_awaited_once()
+        worker.java_client.send_cached_response_direct.assert_awaited_once()
+        worker.java_client.send_response.assert_not_called()
+        payload = worker.java_client.send_cached_response_direct.await_args.args[0]
+        cache_context = worker.java_client.send_cached_response_direct.await_args.kwargs["cache_context"]
+        assert payload.status == "completed"
+        assert payload.actual_count == 60
+        assert cache_context["chat_id"] == CHAT_ID
+        assert cache_context["range_type"] == "id"
+        assert cache_context["message_count"] == 60
+        assert cache_context["coverage_max_id"] == 60
         completed_kwargs = worker.queue_consumer.mark_job_completed.call_args.kwargs
-        assert completed_kwargs["bot_user_id"] is None
-        assert completed_kwargs.get("messages_count") is None
-        assert completed_kwargs.get("bytes_count") is None
+        assert completed_kwargs["bot_user_id"] == 1
+        assert completed_kwargs["messages_count"] == 60
+        assert completed_kwargs["bytes_count"] == 123
         assert id_ranges == [[1, 60]], f"Ranges должны смерджиться в [[1,60]], получено: {id_ranges}"
 
     @pytest.mark.asyncio
@@ -694,7 +702,7 @@ class TestThreePathCaching:
         assert await worker.message_cache.get_cached_ranges(CHAT_ID) == [[1, 20]]
 
     @pytest.mark.asyncio
-    async def test_full_miss_uses_java_conversion_path(self, worker_with_cache):
+    async def test_full_miss_warms_artifact_via_direct_cache_export(self, worker_with_cache):
         worker = worker_with_cache
         CHAT_ID = 555005
 
@@ -726,18 +734,19 @@ class TestThreePathCaching:
         result = await worker.process_job(job)
 
         assert result is True
-        worker.java_client.send_cached_response_direct.assert_not_called()
-        worker.java_client.send_response.assert_awaited_once()
+        worker.java_client.send_cached_response_direct.assert_awaited_once()
+        worker.java_client.send_response.assert_not_called()
 
-        payload = worker.java_client.send_response.await_args.args[0]
+        payload = worker.java_client.send_cached_response_direct.await_args.args[0]
+        cache_context = worker.java_client.send_cached_response_direct.await_args.kwargs["cache_context"]
 
         assert payload.task_id == "id_full_miss_warm_artifact"
         assert payload.actual_count == 3
-        sent_messages = [msg async for msg in payload.messages]
-        assert any(
-            msg.id == 1 and msg.text_entities == [MessageEntity(type="bold", offset=0, length=2)]
-            for msg in sent_messages
-        )
+        assert cache_context["chat_id"] == CHAT_ID
+        assert cache_context["range_type"] == "id"
+        assert cache_context["full_export"] is True
+        assert cache_context["coverage_max_id"] == 3
+        assert cache_context["message_count"] == 3
 
         cached = await worker.message_cache.get_messages(CHAT_ID, 1, 3)
         assert len(cached) == 3
@@ -972,9 +981,9 @@ class TestExportWorkerWithCache:
 
         # Verify: Java received ALL 5 messages (3 cached + 2 new).
         # send_response вызывается с SendResponsePayload как позиционный аргумент
-        worker.java_client.send_cached_response_direct.assert_not_called()
-        worker.java_client.send_response.assert_awaited_once()
-        payload = worker.java_client.send_response.await_args.args[0]
+        worker.java_client.send_cached_response_direct.assert_awaited_once()
+        worker.java_client.send_response.assert_not_called()
+        payload = worker.java_client.send_cached_response_direct.await_args.args[0]
         assert payload.status == "completed"
         result_ids = sorted([m.id async for m in payload.messages])
         assert result_ids == [1, 2, 3, 4, 5]
@@ -1087,9 +1096,9 @@ class TestExportWorkerDateCache:
 
         # Verify: Java received all 15 messages.
         # send_response вызывается с SendResponsePayload как позиционный аргумент
-        worker.java_client.send_cached_response_direct.assert_not_called()
-        worker.java_client.send_response.assert_awaited()
-        payload = worker.java_client.send_response.await_args.args[0]
+        worker.java_client.send_cached_response_direct.assert_awaited()
+        worker.java_client.send_response.assert_not_called()
+        payload = worker.java_client.send_cached_response_direct.await_args.args[0]
         result_ids = sorted([m.id async for m in payload.messages])
         assert result_ids == list(range(1, 16))
 

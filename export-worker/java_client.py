@@ -1004,9 +1004,10 @@ class JavaBotClient:
         elif total is not None:
             # total может быть 0 (Telegram ещё не посчитал) — показываем 0% вместо спиннера.
             # "N из M" вместо "N/M" чтобы Telegram не превращал в ссылку на телефон.
+            display_count = min(message_count, total) if total > 0 else message_count
             pct = min(message_count * 100 // total, 100) if total > 0 else 0
             bar = self._build_progress_bar(pct)
-            text = f"📊 {bar} {pct}% ({message_count} из {total})"
+            text = f"📊 {bar} {pct}% ({display_count} из {total})"
             if eta_text:
                 text += f"   ~{eta_text}"
         elif started:
@@ -1120,7 +1121,7 @@ class ProgressTracker:
                 )
             return
         self._total = total
-        self._raise_total_to_observed(max(self._baseline_count, self._last_count))
+        self._raise_total_to_observed(self._last_count)
         if self._message_id:
             await self._client.send_progress_update(
                 self._user_chat_id,
@@ -1153,7 +1154,8 @@ class ProgressTracker:
         self._last_count = count
         if not self._total:
             return
-        self._raise_total_to_observed(count)
+        if self._baseline_count <= 0:
+            self._raise_total_to_observed(count)
         now = time.time()
         pct = min(count * 100 // self._total, 100) if self._total > 0 else 0
 
@@ -1217,7 +1219,8 @@ class ProgressTracker:
     async def on_floodwait(self, wait_seconds: int) -> None:
         if not self._message_id:
             return
-        self._raise_total_to_observed(self._last_count)
+        if self._baseline_count <= 0:
+            self._raise_total_to_observed(self._last_count)
         await self._client.send_progress_update(
             self._user_chat_id,
             self._task_id,
@@ -1229,7 +1232,7 @@ class ProgressTracker:
         )
 
     async def finalize(self, count):
-        final_total = max(self._total or count, count)
+        final_total = self._total if self._total is not None else count
         await self._client.send_progress_update(
             self._user_chat_id,
             self._task_id,
