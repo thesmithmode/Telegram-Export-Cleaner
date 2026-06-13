@@ -1093,9 +1093,9 @@ class TestExportWorkerDateCache:
 
         # Verify: Java received all 15 messages.
         # send_response вызывается с SendResponsePayload как позиционный аргумент
-        worker.java_client.send_cached_response_direct.assert_not_called()
-        worker.java_client.send_response.assert_awaited()
-        payload = worker.java_client.send_response.await_args.args[0]
+        worker.java_client.send_cached_response_direct.assert_awaited()
+        worker.java_client.send_response.assert_not_called()
+        payload = worker.java_client.send_cached_response_direct.await_args.args[0]
         result_ids = sorted([m.id async for m in payload.messages])
         assert result_ids == list(range(1, 16))
 
