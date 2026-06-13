@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from main import ExportWorker
 from java_client import ProgressTracker
 from message_cache import MessageCache
-from models import ExportRequest, ExportedMessage, MessageEntity
+from models import ExportRequest, ExportedMessage
 
 def _make_mock_java_client():
     client = AsyncMock()
@@ -561,9 +561,9 @@ class TestThreePathCaching:
         assert cache_context["message_count"] == 60
         assert cache_context["coverage_max_id"] == 60
         completed_kwargs = worker.queue_consumer.mark_job_completed.call_args.kwargs
-        assert completed_kwargs["bot_user_id"] is None
-        assert completed_kwargs.get("messages_count") is None
-        assert completed_kwargs.get("bytes_count") is None
+        assert completed_kwargs["bot_user_id"] == 1
+        assert completed_kwargs["messages_count"] == 60
+        assert completed_kwargs["bytes_count"] == 123
         assert id_ranges == [[1, 60]], f"Ranges должны смерджиться в [[1,60]], получено: {id_ranges}"
 
     @pytest.mark.asyncio
@@ -702,17 +702,14 @@ class TestThreePathCaching:
         assert await worker.message_cache.get_cached_ranges(CHAT_ID) == [[1, 20]]
 
     @pytest.mark.asyncio
-    async def test_full_miss_uses_java_conversion_path(self, worker_with_cache):
+    async def test_full_miss_warms_artifact_via_direct_cache_export(self, worker_with_cache):
         worker = worker_with_cache
         CHAT_ID = 555005
 
         async def full_history(*args, **kwargs):
             for i in range(1, 4):
                 yield ExportedMessage(
-                    id=i,
-                    date=f"2025-04-01T10:00:0{i}",
-                    text=f"m{i}",
-                    text_entities=[MessageEntity(type="bold", offset=0, length=2)] if i == 1 else None,
+                    id=i, date=f"2025-04-01T10:00:0{i}", text=f"m{i}"
                 )
 
         worker.telegram_client.get_chat_history = full_history
@@ -734,22 +731,19 @@ class TestThreePathCaching:
         result = await worker.process_job(job)
 
         assert result is True
-        worker.java_client.send_cached_response_direct.assert_not_called()
-        worker.java_client.send_response.assert_awaited_once()
+        worker.java_client.send_cached_response_direct.assert_awaited_once()
+        worker.java_client.send_response.assert_not_called()
 
-        payload = worker.java_client.send_response.await_args.args[0]
+        payload = worker.java_client.send_cached_response_direct.await_args.args[0]
+        cache_context = worker.java_client.send_cached_response_direct.await_args.kwargs["cache_context"]
 
         assert payload.task_id == "id_full_miss_warm_artifact"
         assert payload.actual_count == 3
-        sent_messages = [msg async for msg in payload.messages]
-        assert any(
-            msg.id == 1 and msg.text_entities == [MessageEntity(type="bold", offset=0, length=2)]
-            for msg in sent_messages
-        )
-
-        cached = await worker.message_cache.get_messages(CHAT_ID, 1, 3)
-        assert len(cached) == 3
-        assert await worker.message_cache.get_cached_ranges(CHAT_ID) == [[1, 3]]
+        assert cache_context["chat_id"] == CHAT_ID
+        assert cache_context["range_type"] == "id"
+        assert cache_context["full_export"] is True
+        assert cache_context["coverage_max_id"] == 3
+        assert cache_context["message_count"] == 3
 
         cached = await worker.message_cache.get_messages(CHAT_ID, 1, 3)
         assert len(cached) == 3
