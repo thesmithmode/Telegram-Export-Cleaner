@@ -474,7 +474,6 @@ class ExportWorker:
             and self.message_cache.enabled
             and msg_count > 0
             and self._last_export_cache_context
-            and not getattr(self, "_last_export_used_fresh_fetch", False)
         )
 
     async def _run_cache_aware_export(
@@ -491,7 +490,6 @@ class ExportWorker:
         cache_was_tried = False
         self._last_export_direct_cache_eligible = False
         self._last_export_cache_context = None
-        self._last_export_used_fresh_fetch = False
 
         if self.message_cache and self.message_cache.enabled:
             cache_was_tried = True
@@ -887,8 +885,6 @@ class ExportWorker:
         total = await self.telegram_client.get_messages_count(
             job.chat_id, from_dt, to_dt, topic_id=job.topic_id
         )
-        self._last_export_used_fresh_fetch = True
-
         # Cached count at start (for progress offset)
         cached_count = await self.message_cache.count_messages_by_date(
             job.chat_id, from_date_str, to_date_str, topic_id=tid
@@ -1002,7 +998,6 @@ class ExportWorker:
         if await self._bail_if_cancelled_after_counting(job):
             return None
         total = await self.telegram_client.get_messages_count(job.chat_id, topic_id=job.topic_id)
-        self._last_export_used_fresh_fetch = True
         if job.limit and job.limit > 0 and (total is None or job.limit < total):
             total = job.limit
         if tracker:
@@ -1215,7 +1210,6 @@ class ExportWorker:
             await tracker.set_total(total)
 
         use_cache = bool(self.message_cache and self.message_cache.enabled)
-        self._last_export_used_fresh_fetch = True
         batch: list[ExportedMessage] = []
         # Fallback list only used when cache is disabled (edge case)
         nocache_messages: list[ExportedMessage] = []

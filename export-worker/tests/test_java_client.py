@@ -1784,9 +1784,9 @@ class TestProgressTracker:
             text = client._http_client.post.call_args[1]["data"]["text"]
             assert "100%" in text
             assert "103%" not in text
-            assert "253432" in text
-            assert text.count("253432") == 1
+            assert "253432" not in text
             assert "244143" in text
+            assert text.count("244143") == 2
         finally:
             p.stop()
 
@@ -1798,7 +1798,7 @@ class TestProgressTracker:
         assert JavaBotClient._build_progress_bar(100) == "▓▓▓▓▓▓▓▓▓▓"
         assert JavaBotClient._build_progress_bar(110) == "▓▓▓▓▓▓▓▓▓▓"
 
-    async def test_finalize_uses_max_of_total_and_count(self):
+    async def test_finalize_keeps_known_total_if_lower_than_count(self):
         mock_java_client = AsyncMock()
         mock_java_client.send_progress_update = AsyncMock(return_value=None)
 
@@ -1814,7 +1814,7 @@ class TestProgressTracker:
 
         last_call = mock_java_client.send_progress_update.call_args_list[-1]
         assert last_call.args[2] == 110
-        assert last_call.args[3] == 110  # max(100, 110) = 110
+        assert last_call.args[3] == 100
 
     async def test_seed_keeps_telegram_total_when_cache_count_is_higher(self):
         mock_java_client = AsyncMock()
@@ -1849,6 +1849,41 @@ class TestProgressTracker:
         assert tracker._total == 120
         assert caplog.text.count("Progress total estimate adjusted") == 1
 
+    async def test_track_after_cached_seed_does_not_raise_telegram_total(self):
+        mock_java_client = AsyncMock()
+        mock_java_client.send_progress_update = AsyncMock(return_value=777)
+
+        tracker = ProgressTracker(
+            client=mock_java_client,
+            user_chat_id=123,
+            task_id="task_1",
+        )
+
+        await tracker.start(total=353873)
+        await tracker.seed(cached_count=400283)
+        await tracker.track(400284)
+
+        assert tracker._total == 353873
+
+    async def test_cached_count_above_total_displays_capped_numerator(self):
+        client, p = _make_client()
+        try:
+            client._http_client.post = AsyncMock(return_value=MagicMock(status_code=200))
+
+            await client.send_progress_update(
+                user_chat_id=123,
+                task_id="task_1",
+                message_count=400283,
+                total=353873,
+            )
+
+            text = client._http_client.post.call_args[1]["data"]["text"]
+            assert "100%" in text
+            assert "400283" not in text
+            assert "353873 из 353873" in text
+        finally:
+            p.stop()
+
     async def test_set_total_then_seed_displays_cached_count_against_chat_total(self):
         client, p = _make_client()
         try:
@@ -1874,6 +1909,25 @@ class TestProgressTracker:
             assert text.count("400283") == 1
         finally:
             p.stop()
+
+    async def test_finalize_after_cached_seed_keeps_original_total(self):
+        mock_java_client = AsyncMock()
+        mock_java_client.send_progress_update = AsyncMock(return_value=None)
+
+        tracker = ProgressTracker(
+            client=mock_java_client,
+            user_chat_id=123,
+            task_id="task_1",
+        )
+
+        await tracker.start(total=None)
+        await tracker.set_total(400500)
+        await tracker.seed(cached_count=400283)
+        await tracker.finalize(count=400500)
+
+        last_call = mock_java_client.send_progress_update.call_args_list[-1]
+        assert last_call.args[2] == 400500
+        assert last_call.args[3] == 400500
 
     async def test_send_progress_update_with_zero_total_shows_progress_bar(self):
         client, p = _make_client()
