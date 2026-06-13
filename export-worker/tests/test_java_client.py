@@ -84,21 +84,29 @@ async def _raising_messages():
 
 
 class _LineCache:
-    def __init__(self, lines=None, artifact=None):
+    def __init__(self, lines=None, artifact=None, latest_artifact=None):
         self.lines = list(lines or [])
         self.artifact = artifact
+        self.latest_artifact = latest_artifact
         self.saved_artifacts = []
         self.artifact_hits = 0
+        self.latest_artifact_hits = 0
+        self.iter_calls = []
 
     async def get_full_export_artifact(self, *args):
         self.artifact_hits += 1
         return self.artifact
+
+    async def get_latest_full_export_artifact(self, *args):
+        self.latest_artifact_hits += 1
+        return self.latest_artifact
 
     async def save_full_export_artifact(self, **kwargs):
         self.saved_artifacts.append(kwargs)
         return None
 
     async def iter_export_lines(self, *args, **kwargs):
+        self.iter_calls.append((args, kwargs))
         for line in self.lines:
             yield line
 
@@ -930,6 +938,58 @@ class TestDirectCachedResponse:
             assert captured["path"] == str(artifact)
             assert captured["content"] == "20260609 Cached\n"
             assert artifact.exists()
+        finally:
+            p.stop()
+
+    @pytest.mark.asyncio
+    async def test_direct_cached_response_extends_previous_artifact_with_fresh_tail(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
+        artifact = tmp_path / "artifact.txt"
+        artifact.write_text("20260609 Old\n", encoding="utf-8")
+        cache = _LineCache(
+            lines=["20260610 New A", "20260610 New B"],
+            latest_artifact=(str(artifact), artifact.stat().st_size, 10, 1),
+        )
+        captured = {}
+
+        async def fake_send(chat_id, task_id, file_path, filename):
+            captured["path"] = file_path
+            with open(file_path, encoding="utf-8") as f:
+                captured["content"] = f.read()
+            return True
+
+        try:
+            with patch.object(client, "_send_file_path_to_user", side_effect=fake_send):
+                success, bytes_count = await client.send_cached_response_direct(
+                    SendResponsePayload(
+                        task_id="direct_artifact_extend",
+                        status="completed",
+                        messages=_raising_messages(),
+                        actual_count=3,
+                        user_chat_id=42,
+                        chat_title="Direct Artifact",
+                    ),
+                    cache=cache,
+                    cache_context={
+                        "chat_id": 100,
+                        "topic_id": 0,
+                        "range_type": "id",
+                        "low_id": 0,
+                        "high_id": 12,
+                        "coverage_max_id": 12,
+                        "message_count": 3,
+                        "full_export": True,
+                    },
+                )
+
+            assert success is True
+            assert bytes_count == len(captured["content"].encode("utf-8"))
+            assert captured["content"] == "20260609 Old\n20260610 New A\n20260610 New B\n"
+            assert cache.artifact_hits == 1
+            assert cache.latest_artifact_hits == 1
+            assert cache.iter_calls[0][0] == (100, 11, 12)
+            assert cache.saved_artifacts[0]["coverage_max_id"] == 12
+            assert cache.saved_artifacts[0]["message_count"] == 3
         finally:
             p.stop()
 

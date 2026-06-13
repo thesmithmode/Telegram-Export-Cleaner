@@ -498,6 +498,30 @@ class TestExportArtifacts:
         finally:
             await c.close()
 
+    async def test_mismatched_artifact_remains_available_as_incremental_base(self, tmp_path):
+        c = MessageCache(
+            db_path=str(tmp_path / "artifact_incremental.db"),
+            artifact_dir=str(tmp_path / "artifacts"),
+            artifact_min_bytes=1,
+            artifact_max_bytes=10 * 1024,
+        )
+        await c.initialize()
+        source = tmp_path / "source.txt"
+        source.write_text("old artifact", encoding="utf-8")
+        try:
+            saved = await c.save_full_export_artifact(1, 0, 10, 1, str(source))
+            assert saved is not None
+
+            assert await c.get_full_export_artifact(1, 0, 12, 2) is None
+            latest = await c.get_latest_full_export_artifact(1, 0, 12, 2)
+
+            assert latest is not None
+            assert latest[0] == saved[0]
+            assert latest[2:] == (10, 1)
+            assert os.path.exists(saved[0])
+        finally:
+            await c.close()
+
     async def test_save_artifact_fsyncs_artifact_directory(self, tmp_path, monkeypatch):
         c = MessageCache(
             db_path=str(tmp_path / "artifact_dir_fsync.db"),
