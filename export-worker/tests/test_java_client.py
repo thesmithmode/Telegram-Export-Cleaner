@@ -1867,6 +1867,27 @@ class TestNotifyUserFailure:
         finally:
             p.stop()
 
+    async def test_private_chat_forbidden_uses_short_neutral_message(self):
+        client, p = _make_client()
+        try:
+            client._http_client.post = AsyncMock(return_value=MagicMock(status_code=200))
+
+            await client.notify_user_failure(
+                123,
+                "task_1",
+                "Private chat export is not available",
+                "PRIVATE_CHAT_FORBIDDEN",
+            )
+
+            client._http_client.post.assert_called_once()
+            data = client._http_client.post.call_args[1]["data"]
+            assert data["text"] == "⛔ Private chat export is not available"
+            assert "task_1" not in data["text"]
+            assert "Reason" not in data["text"]
+            assert "Экспорт" not in data["text"]
+        finally:
+            p.stop()
+
     async def test_swallows_http_errors(self):
         client, p = _make_client()
         try:

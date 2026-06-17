@@ -42,7 +42,8 @@ class DashboardMePageControllerTest {
     void userSeesMyDashboard() throws Exception {
         mockMvc.perform(get("/dashboard/me").with(user(USER)))
                 .andExpect(status().isOk())
-                .andExpect(content().string(containsString("My Dashboard")))
+                .andExpect(content().string(containsString("user-detail")))
+                .andExpect(content().string(containsString("data-has-bot-user-id=\"true\"")))
                 .andExpect(content().string(containsString("/dashboard/js/pages/me.js")))
                 .andExpect(content().string(not(containsString("/dashboard/users"))));
     }
@@ -52,7 +53,8 @@ class DashboardMePageControllerTest {
     void unboundUserSeesEmptyState() throws Exception {
         mockMvc.perform(get("/dashboard/me").with(user(UNBOUND)))
                 .andExpect(status().isOk())
-                .andExpect(content().string(containsString("No exports yet")));
+                .andExpect(content().string(containsString("empty-state")))
+                .andExpect(content().string(containsString("data-has-bot-user-id=\"false\"")));
     }
 
     @Test
@@ -60,7 +62,7 @@ class DashboardMePageControllerTest {
     void adminCanSeeMePage() throws Exception {
         mockMvc.perform(get("/dashboard/me").with(user(ADMIN)))
                 .andExpect(status().isOk())
-                .andExpect(content().string(containsString("My Dashboard")));
+                .andExpect(content().string(containsString("user-detail")));
     }
 
     @Test

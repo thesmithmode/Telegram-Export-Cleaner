@@ -11,8 +11,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
-import java.util.Locale;
-
 import static org.hamcrest.Matchers.containsString;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -44,11 +42,11 @@ class SubscriptionPageControllerTest {
     @Test
     @DisplayName("GET /dashboard/subscriptions (USER) → 200, title содержит Subscriptions")
     void userGetsSubscriptionsPage() throws Exception {
-        mockMvc.perform(get("/dashboard/subscriptions").with(user(USER)).locale(Locale.ENGLISH))
+        mockMvc.perform(get("/dashboard/subscriptions").with(user(USER)))
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith("text/html"))
                 .andExpect(view().name("dashboard/subscriptions"))
-                .andExpect(content().string(containsString("Subscriptions")));
+                .andExpect(content().string(containsString("subscriptions-page")));
     }
 
     @Test
@@ -62,7 +60,7 @@ class SubscriptionPageControllerTest {
     @Test
     @DisplayName("GET /dashboard/subscriptions (ADMIN) → 200, модель role=ADMIN")
     void adminGetsSubscriptionsPage() throws Exception {
-        mockMvc.perform(get("/dashboard/subscriptions").with(user(ADMIN)).locale(Locale.ENGLISH))
+        mockMvc.perform(get("/dashboard/subscriptions").with(user(ADMIN)))
                 .andExpect(status().isOk())
                 .andExpect(view().name("dashboard/subscriptions"))
                 .andExpect(model().attribute("role", "ADMIN"));
@@ -79,7 +77,7 @@ class SubscriptionPageControllerTest {
     @Test
     @DisplayName("GET /dashboard/subscriptions (USER) → страница содержит форму создания")
     void userSeesCreateForm() throws Exception {
-        mockMvc.perform(get("/dashboard/subscriptions").with(user(USER)).locale(Locale.ENGLISH))
+        mockMvc.perform(get("/dashboard/subscriptions").with(user(USER)))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("create-subscription-form")));
     }
@@ -87,7 +85,7 @@ class SubscriptionPageControllerTest {
     @Test
     @DisplayName("GET /dashboard/subscriptions (USER) → страница содержит таблицу подписок")
     void userSeesTable() throws Exception {
-        mockMvc.perform(get("/dashboard/subscriptions").with(user(USER)).locale(Locale.ENGLISH))
+        mockMvc.perform(get("/dashboard/subscriptions").with(user(USER)))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("subscriptions-table")))
                 .andExpect(content().string(containsString("subscriptions.js")));
