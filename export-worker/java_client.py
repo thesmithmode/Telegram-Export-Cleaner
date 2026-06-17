@@ -99,7 +99,7 @@ class JavaBotClient:
         if payload.status == "failed":
             if payload.error and payload.user_chat_id and self.bot_token:
                 await self.notify_user_failure(
-                    payload.user_chat_id, payload.task_id, payload.error
+                    payload.user_chat_id, payload.task_id, payload.error, payload.error_code
                 )
             return True
 
@@ -981,9 +981,12 @@ class JavaBotClient:
             logger.debug("Java API connectivity check failed: %s", e)
             return False
 
-    async def notify_user_failure(self, chat_id, task_id, error):
+    async def notify_user_failure(self, chat_id, task_id, error, error_code=None):
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-        text = f"❌ Export failed (task {task_id})\n\nReason: {error}"
+        if error_code == "PRIVATE_CHAT_FORBIDDEN":
+            text = "⛔ Private chat export is not available"
+        else:
+            text = f"❌ Export failed (task {task_id})\n\nReason: {error}"
         try:
             await self._http_client.post(
                 url, data={"chat_id": chat_id, "text": text}, timeout=self._tg_timeout

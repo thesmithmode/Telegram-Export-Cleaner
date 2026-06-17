@@ -848,6 +848,29 @@ class TestExportWorkerProgressReporting:
         call_args = worker.java_client.notify_user_failure.call_args
         assert call_args[0][0] == 42  # user_chat_id
 
+    @pytest.mark.asyncio
+    async def test_private_chat_forbidden_failed_payload_is_code_driven(self, worker):
+        job = ExportRequest(
+            task_id="private_1", user_id=1, user_chat_id=42,
+            chat_id=456, limit=0, offset_id=0,
+        )
+        worker.telegram_client.verify_and_get_info = AsyncMock(
+            return_value=(False, None, "PRIVATE_CHAT_FORBIDDEN")
+        )
+        worker.java_client.send_response = AsyncMock(return_value=True)
+        worker.queue_consumer.mark_job_failed = AsyncMock()
+
+        result = await worker.process_job(job)
+
+        assert result is True
+        worker.java_client.send_response.assert_called_once()
+        payload = worker.java_client.send_response.call_args[0][0]
+        assert payload.status == "failed"
+        assert payload.error_code == "PRIVATE_CHAT_FORBIDDEN"
+        assert payload.error == "Private chat export is not available"
+        assert "Экспорт" not in payload.error
+        assert "личных переписок" not in payload.error
+
 class TestExportWorkerCleanup:
 
     @pytest.mark.asyncio
