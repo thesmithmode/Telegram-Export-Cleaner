@@ -868,8 +868,6 @@ class TestExportWorkerProgressReporting:
         assert payload.status == "failed"
         assert payload.error_code == "PRIVATE_CHAT_FORBIDDEN"
         assert payload.error == "Экспорт приватных чатов, личных диалогов и приватных каналов недоступен"
-        assert "Экспорт" not in payload.error
-        assert "личных переписок" not in payload.error
 
 class TestExportWorkerCleanup:
 
