@@ -154,11 +154,27 @@ class ExportBotTest {
         }
 
         @Test
-        @DisplayName("Числовой ID отклоняется")
-        void testNumericRejected() {
+        @DisplayName("Числовой ID отклоняется как приватная/личная цель без меню периода")
+        void testNumericRejectedAsPrivateTarget() {
             bot.consume(createTextMessageUpdate(123L, "-1001234567890"));
 
-            verify(messengerMock).send(eq(123L), contains("Неверный формат"));
+            verify(messengerMock).send(eq(123L), contains("Приватные чаты"));
+            verify(messengerMock, never()).sendWithKeyboard(
+                    eq(123L),
+                    contains("Чат:"),
+                    any(InlineKeyboardMarkup.class));
+        }
+
+        @Test
+        @DisplayName("Invite-ссылка приватного чата отклоняется без меню периода")
+        void testPrivateInviteLinkRejectedBeforeDateChoice() {
+            bot.consume(createTextMessageUpdate(123L, "https://t.me/+privateInviteHash"));
+
+            verify(messengerMock).send(eq(123L), contains("Приватные чаты"));
+            verify(messengerMock, never()).sendWithKeyboard(
+                    eq(123L),
+                    contains("Чат:"),
+                    any(InlineKeyboardMarkup.class));
         }
 
         @Test

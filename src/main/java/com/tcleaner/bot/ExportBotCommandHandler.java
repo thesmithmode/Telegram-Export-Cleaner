@@ -4,6 +4,7 @@ import com.tcleaner.core.BotLanguage;
 import com.tcleaner.dashboard.service.ingestion.BotUserUpserter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
@@ -29,6 +30,7 @@ public class ExportBotCommandHandler {
     private final BotSessionRegistry sessionRegistry;
     private final BotUserUpserter userUpserter;
     private final QueueDisplayBuilder queueDisplayBuilder;
+    private final ChatEligibilityService chatEligibilityService;
 
     public ExportBotCommandHandler(
             ExportJobProducer jobProducer,
@@ -39,6 +41,21 @@ public class ExportBotCommandHandler {
             BotUserUpserter userUpserter,
             QueueDisplayBuilder queueDisplayBuilder
     ) {
+        this(jobProducer, messenger, i18n, keyboards, sessionRegistry, userUpserter,
+                queueDisplayBuilder, new ChatEligibilityService());
+    }
+
+    @Autowired
+    public ExportBotCommandHandler(
+            ExportJobProducer jobProducer,
+            BotMessenger messenger,
+            BotI18n i18n,
+            BotKeyboards keyboards,
+            BotSessionRegistry sessionRegistry,
+            BotUserUpserter userUpserter,
+            QueueDisplayBuilder queueDisplayBuilder,
+            ChatEligibilityService chatEligibilityService
+    ) {
         this.jobProducer = jobProducer;
         this.messenger = messenger;
         this.i18n = i18n;
@@ -46,6 +63,7 @@ public class ExportBotCommandHandler {
         this.sessionRegistry = sessionRegistry;
         this.userUpserter = userUpserter;
         this.queueDisplayBuilder = queueDisplayBuilder;
+        this.chatEligibilityService = chatEligibilityService;
     }
 
     public void handleMessageText(long chatId, long userId, String text) {
@@ -197,15 +215,23 @@ public class ExportBotCommandHandler {
         }
 
         String identifier = BotInputParser.extractUsername(input);
-        if (identifier == null) {
-            messenger.send(chatId, i18n.msg(lang, "bot.error.invalid_format"));
+        Integer topicId = BotInputParser.extractTopicId(input);
+        ChatEligibilityService.ChatEligibility eligibility =
+                chatEligibilityService.check(input, identifier, topicId);
+        if (!eligibility.eligible()) {
+            if ("private_chat_forbidden".equals(eligibility.errorCode())) {
+                getSession(userId).reset();
+                messenger.send(chatId, i18n.msg(lang, "bot.error.private_chat_forbidden"));
+            } else {
+                messenger.send(chatId, i18n.msg(lang, "bot.error.invalid_format"));
+            }
             return;
         }
 
         UserSession session = getSession(userId);
-        session.setChatId(identifier);
-        session.setTopicId(BotInputParser.extractTopicId(input));
-        session.setChatDisplay("@" + identifier);
+        session.setChatId(eligibility.canonicalIdentifier());
+        session.setTopicId(eligibility.topicId());
+        session.setChatDisplay(eligibility.displayName());
         session.setState(UserSession.State.AWAITING_DATE_CHOICE);
 
         messenger.sendWithKeyboard(chatId,
