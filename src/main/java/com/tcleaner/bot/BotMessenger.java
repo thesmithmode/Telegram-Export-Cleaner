@@ -8,7 +8,9 @@ import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
 import org.telegram.telegrambots.meta.api.methods.botapimethods.BotApiMethod;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands;
+import org.telegram.telegrambots.meta.api.methods.groupadministration.GetChat;
 import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText;
+import org.telegram.telegrambots.meta.api.objects.chat.ChatFullInfo;
 import org.telegram.telegrambots.meta.api.objects.commands.BotCommand;
 import org.telegram.telegrambots.meta.api.objects.message.Message;
 import org.telegram.telegrambots.meta.api.objects.commands.scope.BotCommandScopeDefault;
@@ -118,6 +120,14 @@ public class BotMessenger {
         executeQuietly(
                 AnswerCallbackQuery.builder().callbackQueryId(callbackQueryId).build(),
                 "Не удалось подтвердить callback query " + callbackQueryId, false);
+    }
+
+    public ChatFullInfo getChatInfo(String chatIdentifier) {
+        GetChat method = GetChat.builder()
+                .chatId(chatIdentifier)
+                .build();
+        return executeQuietly(method,
+                "Не удалось проверить чат " + chatIdentifier, false);
     }
 
     /**

@@ -368,7 +368,9 @@ class ExportWorker:
                     "Аккаунт worker-а временно ограничен Telegram (flood). "
                     "Попробуйте позже."
                 ),
-                "PRIVATE_CHAT_FORBIDDEN": "Private chat export is not available",
+                "PRIVATE_CHAT_FORBIDDEN": (
+                    "Экспорт приватных чатов, личных диалогов и приватных каналов недоступен"
+                ),
                 "UNKNOWN": (
                     f"Не удалось получить доступ к чату {job.chat_id}. "
                     f"Проверьте логи worker-а для подробностей."

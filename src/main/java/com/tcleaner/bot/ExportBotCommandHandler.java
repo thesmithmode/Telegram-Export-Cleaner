@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Component;
+import org.telegram.telegrambots.meta.api.objects.chat.ChatFullInfo;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardRow;
@@ -14,6 +15,8 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKe
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Locale;
+import java.util.Set;
 
 @Component
 @ConditionalOnExpression("'${telegram.bot.token:}' != ''")
@@ -22,6 +25,7 @@ public class ExportBotCommandHandler {
     private static final Logger log = LoggerFactory.getLogger(ExportBotCommandHandler.class);
 
     private static final LocalTime END_OF_DAY = LocalTime.of(23, 59, 59);
+    private static final Set<String> EXPORTABLE_CHAT_TYPES = Set.of("group", "supergroup", "channel");
 
     private final ExportJobProducer jobProducer;
     private final BotMessenger messenger;
@@ -228,15 +232,41 @@ public class ExportBotCommandHandler {
             return;
         }
 
+        ChatFullInfo chatInfo = messenger.getChatInfo(eligibility.displayName());
+        if (!isExportableChat(chatInfo)) {
+            getSession(userId).reset();
+            messenger.send(chatId, i18n.msg(lang, "bot.error.private_chat_forbidden"));
+            return;
+        }
+
         UserSession session = getSession(userId);
         session.setChatId(eligibility.canonicalIdentifier());
         session.setTopicId(eligibility.topicId());
-        session.setChatDisplay(eligibility.displayName());
+        session.setChatDisplay(chatDisplay(chatInfo, eligibility.displayName()));
         session.setState(UserSession.State.AWAITING_DATE_CHOICE);
 
         messenger.sendWithKeyboard(chatId,
                 i18n.msg(lang, "bot.prompt.choose_range", session.getChatDisplay()),
                 keyboards.dateChoiceKeyboard(lang));
+    }
+
+    private static boolean isExportableChat(ChatFullInfo chatInfo) {
+        if (chatInfo == null || chatInfo.getType() == null) {
+            return false;
+        }
+        return EXPORTABLE_CHAT_TYPES.contains(chatInfo.getType().toLowerCase(Locale.ROOT));
+    }
+
+    private static String chatDisplay(ChatFullInfo chatInfo, String fallback) {
+        String username = chatInfo.getUserName();
+        if (username != null && !username.isBlank()) {
+            return "@" + username;
+        }
+        String title = chatInfo.getTitle();
+        if (title != null && !title.isBlank()) {
+            return title;
+        }
+        return fallback;
     }
 
     private void handleFromDateInput(long chatId, long userId, String text) {

@@ -1875,16 +1875,15 @@ class TestNotifyUserFailure:
             await client.notify_user_failure(
                 123,
                 "task_1",
-                "Private chat export is not available",
+                "Экспорт приватных чатов, личных диалогов и приватных каналов недоступен",
                 "PRIVATE_CHAT_FORBIDDEN",
             )
 
             client._http_client.post.assert_called_once()
             data = client._http_client.post.call_args[1]["data"]
-            assert data["text"] == "⛔ Private chat export is not available"
+            assert data["text"] == "⛔ Экспорт приватных чатов, личных диалогов и приватных каналов недоступен"
             assert "task_1" not in data["text"]
             assert "Reason" not in data["text"]
-            assert "Экспорт" not in data["text"]
         finally:
             p.stop()
 

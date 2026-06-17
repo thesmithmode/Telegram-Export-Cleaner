@@ -867,9 +867,7 @@ class TestExportWorkerProgressReporting:
         payload = worker.java_client.send_response.call_args[0][0]
         assert payload.status == "failed"
         assert payload.error_code == "PRIVATE_CHAT_FORBIDDEN"
-        assert payload.error == "Private chat export is not available"
-        assert "Экспорт" not in payload.error
-        assert "личных переписок" not in payload.error
+        assert payload.error == "Экспорт приватных чатов, личных диалогов и приватных каналов недоступен"
 
 class TestExportWorkerCleanup:
 

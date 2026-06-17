@@ -15,6 +15,7 @@ import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.User;
 import org.telegram.telegrambots.meta.api.objects.chat.Chat;
+import org.telegram.telegrambots.meta.api.objects.chat.ChatFullInfo;
 import org.telegram.telegrambots.meta.api.objects.message.Message;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 
@@ -76,6 +77,10 @@ class ExportBotTest {
         when(jobProducerMock.getQueueLength()).thenReturn(0L);
         when(jobProducerMock.hasActiveProcessingJob()).thenReturn(false);
         when(messengerMock.sendWithKeyboardGetId(anyLong(), anyString(), any())).thenReturn(42);
+        when(messengerMock.getChatInfo(anyString())).thenAnswer(invocation -> {
+            String identifier = invocation.getArgument(0, String.class);
+            return chatInfo("supergroup", stripAt(identifier), "Test Chat");
+        });
 
         i18n = new BotI18n(newTestMessageSource());
         bot = buildBot("https://test.example.com/dashboard/mini-app");
@@ -112,6 +117,22 @@ class ExportBotTest {
         return src;
     }
 
+    private static ChatFullInfo chatInfo(String type, String username, String title) {
+        return ChatFullInfo.builder()
+                .id(-100123L)
+                .type(type)
+                .userName(username)
+                .title(title)
+                .build();
+    }
+
+    private static String stripAt(String identifier) {
+        if (identifier == null) {
+            return "";
+        }
+        return identifier.startsWith("@") ? identifier.substring(1) : identifier;
+    }
+
     @Test
     @DisplayName("При старте регистрируются slash-команды для default + всех локалей")
     void testRegistersSlashCommandsOnStartup() {
@@ -140,6 +161,37 @@ class ExportBotTest {
                     eq(123L),
                     contains("Чат: @test_chat"),
                     any(InlineKeyboardMarkup.class));
+        }
+
+        @Test
+        @DisplayName("@username личного аккаунта отклоняется до меню выбора периода")
+        void testPrivateUsernameRejectedBeforeDateChoice() {
+            when(messengerMock.getChatInfo("@test_chat"))
+                    .thenReturn(chatInfo("private", "test_chat", ""));
+
+            bot.consume(createTextMessageUpdate(123L, "@test_chat"));
+
+            verify(messengerMock).send(eq(123L), contains("Приватные чаты"));
+            verify(messengerMock, never()).sendWithKeyboard(
+                    eq(123L),
+                    contains("Чат:"),
+                    any(InlineKeyboardMarkup.class));
+            verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("Недоступный @username отклоняется до меню выбора периода")
+        void testUnresolvableUsernameRejectedBeforeDateChoice() {
+            when(messengerMock.getChatInfo("@test_chat")).thenReturn(null);
+
+            bot.consume(createTextMessageUpdate(123L, "@test_chat"));
+
+            verify(messengerMock).send(eq(123L), contains("Приватные чаты"));
+            verify(messengerMock, never()).sendWithKeyboard(
+                    eq(123L),
+                    contains("Чат:"),
+                    any(InlineKeyboardMarkup.class));
+            verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString(), any(), any(), any());
         }
 
         @Test
