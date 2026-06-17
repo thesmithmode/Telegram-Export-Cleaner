@@ -984,7 +984,7 @@ class JavaBotClient:
     async def notify_user_failure(self, chat_id, task_id, error, error_code=None):
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
         if error_code == "PRIVATE_CHAT_FORBIDDEN":
-            text = "⛔ Private chat export is not available"
+            text = "⛔ Экспорт приватных чатов, личных диалогов и приватных каналов недоступен"
         else:
             text = f"❌ Export failed (task {task_id})\n\nReason: {error}"
         try:

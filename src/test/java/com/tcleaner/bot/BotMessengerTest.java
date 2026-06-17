@@ -9,9 +9,11 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
 import org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands;
+import org.telegram.telegrambots.meta.api.methods.groupadministration.GetChat;
 import org.telegram.telegrambots.meta.api.methods.menubutton.SetChatMenuButton;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText;
+import org.telegram.telegrambots.meta.api.objects.chat.ChatFullInfo;
 import org.telegram.telegrambots.meta.api.objects.commands.BotCommand;
 import org.telegram.telegrambots.meta.api.objects.message.Message;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
@@ -314,6 +316,43 @@ class BotMessengerTest {
             verify(mockTelegramClient).execute(captor.capture());
             assertEquals("99", captor.getValue().getChatId());
             assertEquals("payload", captor.getValue().getText());
+        }
+    }
+
+    @Nested
+    @DisplayName("getChatInfo()")
+    class GetChatInfoTests {
+
+        @Test
+        @DisplayName("успешный getChat возвращает ChatFullInfo")
+        void shouldReturnChatInfo() throws TelegramApiException {
+            setupMessenger();
+            ChatFullInfo info = ChatFullInfo.builder()
+                    .id(-100123L)
+                    .type("supergroup")
+                    .userName("public_chat")
+                    .title("Public Chat")
+                    .build();
+            when(mockTelegramClient.execute(any(GetChat.class))).thenReturn(info);
+
+            ChatFullInfo result = botMessenger.getChatInfo("@public_chat");
+
+            assertEquals(info, result);
+            ArgumentCaptor<GetChat> captor = ArgumentCaptor.forClass(GetChat.class);
+            verify(mockTelegramClient).execute(captor.capture());
+            assertEquals("@public_chat", captor.getValue().getChatId());
+        }
+
+        @Test
+        @DisplayName("TelegramApiException при getChat возвращает null")
+        void shouldReturnNullOnException() throws TelegramApiException {
+            setupMessenger();
+            when(mockTelegramClient.execute(any(GetChat.class)))
+                    .thenThrow(new TelegramApiException("not found"));
+
+            ChatFullInfo result = botMessenger.getChatInfo("@missing");
+
+            assertEquals(null, result);
         }
     }
 
