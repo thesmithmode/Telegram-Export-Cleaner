@@ -180,18 +180,17 @@ class ExportBotTest {
         }
 
         @Test
-        @DisplayName("Недоступный @username отклоняется до меню выбора периода")
-        void testUnresolvableUsernameRejectedBeforeDateChoice() {
+        @DisplayName("Сбой lookup @username не отклоняет публичный чат до worker")
+        void testLookupFailureFallsBackToDateChoice() {
             when(messengerMock.getChatInfo("@test_chat")).thenReturn(null);
 
             bot.consume(createTextMessageUpdate(123L, "@test_chat"));
 
-            verify(messengerMock).send(eq(123L), contains("Приватные чаты"));
-            verify(messengerMock, never()).sendWithKeyboard(
+            verify(messengerMock, never()).send(eq(123L), contains("Приватные чаты"));
+            verify(messengerMock).sendWithKeyboard(
                     eq(123L),
-                    contains("Чат:"),
+                    contains("Чат: @test_chat"),
                     any(InlineKeyboardMarkup.class));
-            verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString(), any(), any(), any());
         }
 
         @Test
