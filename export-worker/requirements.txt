@@ -20,7 +20,7 @@ pydantic-settings==2.2.0
 psutil==6.1.0
 
 # Serialization (cache)
-msgpack==1.0.7
+msgpack==1.2.1
 
 # SQLite async driver (disk-based message cache)
 aiosqlite==0.20.0
