@@ -463,13 +463,22 @@ code, kbd {
 .data-table tbody tr:hover { background: var(--tec-surface-alt); }
 .data-table code { font-family: var(--tec-font-mono); font-size: var(--tec-fs-body); color: var(--tec-text); background: transparent; }
 .data-table a { color: var(--tec-accent); }
+.telegram-user-col, .telegram-user-cell { text-align: center; width: 54px; }
 .telegram-user-link {
     display: inline-flex;
     align-items: center;
-    margin-left: var(--tec-space-2);
-    font-size: var(--tec-fs-xs);
-    white-space: nowrap;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--tec-radius-pill);
+    color: #229ed9;
+    background: rgba(34, 158, 217, .10);
+    vertical-align: middle;
 }
+.telegram-user-link:hover { background: rgba(34, 158, 217, .18); }
+.telegram-user-link svg { width: 17px; height: 17px; fill: currentColor; }
+.telegram-user-link.is-disabled { color: var(--tec-muted); background: transparent; }
+.muted-cell { color: var(--tec-muted); }
 
 /* ─── Sortable headers ────────────────────────────────────────────── */
 th[data-sort-key] { cursor: pointer; user-select: none; position: relative; padding-right: 22px; }

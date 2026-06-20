@@ -233,7 +233,7 @@ public class ExportBotCommandHandler {
         }
 
         ChatFullInfo chatInfo = messenger.getChatInfo(eligibility.displayName());
-        if (!isExportableChat(chatInfo)) {
+        if (chatInfo != null && !isExportableChat(chatInfo)) {
             getSession(userId).reset();
             messenger.send(chatId, i18n.msg(lang, "bot.error.private_chat_forbidden"));
             return;
@@ -251,13 +251,16 @@ public class ExportBotCommandHandler {
     }
 
     private static boolean isExportableChat(ChatFullInfo chatInfo) {
-        if (chatInfo == null || chatInfo.getType() == null) {
+        if (chatInfo.getType() == null) {
             return false;
         }
         return EXPORTABLE_CHAT_TYPES.contains(chatInfo.getType().toLowerCase(Locale.ROOT));
     }
 
     private static String chatDisplay(ChatFullInfo chatInfo, String fallback) {
+        if (chatInfo == null) {
+            return fallback;
+        }
         String username = chatInfo.getUserName();
         if (username != null && !username.isBlank()) {
             return "@" + username;
