@@ -463,6 +463,13 @@ code, kbd {
 .data-table tbody tr:hover { background: var(--tec-surface-alt); }
 .data-table code { font-family: var(--tec-font-mono); font-size: var(--tec-fs-body); color: var(--tec-text); background: transparent; }
 .data-table a { color: var(--tec-accent); }
+.telegram-user-link {
+    display: inline-flex;
+    align-items: center;
+    margin-left: var(--tec-space-2);
+    font-size: var(--tec-fs-xs);
+    white-space: nowrap;
+}
 
 /* ─── Sortable headers ────────────────────────────────────────────── */
 th[data-sort-key] { cursor: pointer; user-select: none; position: relative; padding-right: 22px; }
