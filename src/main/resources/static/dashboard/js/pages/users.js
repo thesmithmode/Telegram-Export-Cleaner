@@ -6,6 +6,39 @@
     if (!fetchJson) { return; }
     const el = createElement;
 
+    function telegramUserLink(u) {
+        if (u.username) {
+            return { href: `https://t.me/${encodeURIComponent(u.username)}`, external: true };
+        }
+        if (u.botUserId) {
+            return { href: `tg://user?id=${encodeURIComponent(u.botUserId)}`, external: false };
+        }
+        return null;
+    }
+
+    function openTelegramLink(event, telegramLink) {
+        if (!telegramLink) { return; }
+        if (telegramLink.external && window.Telegram?.WebApp?.openTelegramLink) {
+            event.preventDefault();
+            window.Telegram.WebApp.openTelegramLink(telegramLink.href);
+        }
+    }
+
+    function telegramAction(u) {
+        const telegramLink = telegramUserLink(u);
+        if (!telegramLink) { return null; }
+
+        const action = el("a", {
+            href: telegramLink.href,
+            class: "telegram-user-link",
+            title: "Открыть чат в Telegram",
+            "aria-label": "Открыть чат в Telegram",
+            text: "↗ Telegram",
+        });
+        action.addEventListener("click", (event) => openTelegramLink(event, telegramLink));
+        return action;
+    }
+
     function row(u) {
         const link = el("a", { href: `/dashboard/user/${encodeURIComponent(u.botUserId)}`,
                                text: u.displayName || u.username || `id ${u.botUserId}` });
@@ -13,7 +46,7 @@
             ? el("small", { style: "color:var(--muted)" }, " ", el("code", { text: "@" + u.username }))
             : null;
         return el("tr", null,
-            el("td", null, link, small),
+            el("td", null, link, small, telegramAction(u)),
             el("td", { text: formatNumber(u.totalExports) }),
             el("td", { text: formatNumber(u.totalMessages) }),
             el("td", { text: formatBytes(u.totalBytes) }),
