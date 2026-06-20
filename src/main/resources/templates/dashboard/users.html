@@ -20,6 +20,8 @@
             <thead>
             <tr>
                 <th data-sort-key="user" data-sort-type="string" th:text="#{users.col.user}">Пользователь</th>
+                <th data-sort-key="username" data-sort-type="string" th:text="#{users.col.username}">@username</th>
+                <th class="telegram-user-col" th:text="#{users.col.telegram}">Telegram</th>
                 <th data-sort-key="totalExports" data-sort-type="number" th:text="#{users.col.exports}">Экспортов</th>
                 <th data-sort-key="totalMessages" data-sort-type="number" th:text="#{users.col.messages}">Сообщений</th>
                 <th data-sort-key="totalBytes" data-sort-type="number" th:text="#{users.col.bytes}">Объём</th>
@@ -28,7 +30,7 @@
             </thead>
             <tbody id="users-tbody">
             <tr>
-                <td colspan="5" style="text-align:center;color:var(--muted)"
+                <td colspan="7" style="text-align:center;color:var(--muted)"
                     th:text="#{overview.loading}">Загрузка…</td>
             </tr>
             </tbody>
