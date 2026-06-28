@@ -82,6 +82,10 @@ public class ExportBotCallbackHandler {
         String data = callback.getData();
         int messageId = cbMessage.getMessageId();
         messenger.answerCallback(callback.getId());
+        if (data == null || data.isBlank()) {
+            log.warn("Пустой callback от пользователя {}", userId);
+            return;
+        }
 
         if (data.startsWith(ExportBot.CB_LANG_PREFIX)) {
             handleLanguageCallback(chatId, userId, messageId,
@@ -112,19 +116,41 @@ public class ExportBotCallbackHandler {
 
         switch (data) {
             case ExportBot.CB_EXPORT_ALL -> {
+                if (!requireState(chatId, session, lang, UserSession.State.AWAITING_DATE_CHOICE)) {
+                    return;
+                }
                 session.setFromDate(null);
                 session.setToDate(null);
                 commandHandler.startExport(chatId, userId, messageId);
             }
-            case ExportBot.CB_LAST_24H ->
-                    commandHandler.startQuickRangeExport(chatId, userId, messageId, 1);
-            case ExportBot.CB_LAST_3D ->
-                    commandHandler.startQuickRangeExport(chatId, userId, messageId, 3);
-            case ExportBot.CB_LAST_7D ->
-                    commandHandler.startQuickRangeExport(chatId, userId, messageId, 7);
-            case ExportBot.CB_LAST_30D ->
-                    commandHandler.startQuickRangeExport(chatId, userId, messageId, 30);
+            case ExportBot.CB_LAST_24H -> {
+                if (!requireState(chatId, session, lang, UserSession.State.AWAITING_DATE_CHOICE)) {
+                    return;
+                }
+                commandHandler.startQuickRangeExport(chatId, userId, messageId, 1);
+            }
+            case ExportBot.CB_LAST_3D -> {
+                if (!requireState(chatId, session, lang, UserSession.State.AWAITING_DATE_CHOICE)) {
+                    return;
+                }
+                commandHandler.startQuickRangeExport(chatId, userId, messageId, 3);
+            }
+            case ExportBot.CB_LAST_7D -> {
+                if (!requireState(chatId, session, lang, UserSession.State.AWAITING_DATE_CHOICE)) {
+                    return;
+                }
+                commandHandler.startQuickRangeExport(chatId, userId, messageId, 7);
+            }
+            case ExportBot.CB_LAST_30D -> {
+                if (!requireState(chatId, session, lang, UserSession.State.AWAITING_DATE_CHOICE)) {
+                    return;
+                }
+                commandHandler.startQuickRangeExport(chatId, userId, messageId, 30);
+            }
             case ExportBot.CB_DATE_RANGE -> {
+                if (!requireState(chatId, session, lang, UserSession.State.AWAITING_DATE_CHOICE)) {
+                    return;
+                }
                 session.setState(UserSession.State.AWAITING_FROM_DATE);
                 messenger.editMessage(chatId, messageId,
                         i18n.msg(lang, "bot.prompt.from_range_header", session.getChatDisplay())
@@ -132,6 +158,9 @@ public class ExportBotCallbackHandler {
                         keyboards.fromDateKeyboard(lang));
             }
             case ExportBot.CB_FROM_START -> {
+                if (!requireState(chatId, session, lang, UserSession.State.AWAITING_FROM_DATE)) {
+                    return;
+                }
                 session.setFromDate(null);
                 session.setState(UserSession.State.AWAITING_TO_DATE);
                 messenger.editMessage(chatId, messageId,
@@ -141,6 +170,9 @@ public class ExportBotCallbackHandler {
                         keyboards.toDateKeyboard(lang));
             }
             case ExportBot.CB_TO_TODAY -> {
+                if (!requireState(chatId, session, lang, UserSession.State.AWAITING_TO_DATE)) {
+                    return;
+                }
                 session.setToDate(null);
                 commandHandler.startExport(chatId, userId, messageId);
             }
@@ -151,6 +183,10 @@ public class ExportBotCallbackHandler {
                         keyboards.mainMenuKeyboard(lang));
             }
             case ExportBot.CB_BACK_TO_DATE_CHOICE -> {
+                if (!requireState(chatId, session, lang,
+                        UserSession.State.AWAITING_FROM_DATE, UserSession.State.AWAITING_TO_DATE)) {
+                    return;
+                }
                 session.setFromDate(null);
                 session.setToDate(null);
                 session.setState(UserSession.State.AWAITING_DATE_CHOICE);
@@ -159,6 +195,9 @@ public class ExportBotCallbackHandler {
                         keyboards.dateChoiceKeyboard(lang));
             }
             case ExportBot.CB_BACK_TO_FROM_DATE -> {
+                if (!requireState(chatId, session, lang, UserSession.State.AWAITING_TO_DATE)) {
+                    return;
+                }
                 session.setToDate(null);
                 session.setState(UserSession.State.AWAITING_FROM_DATE);
                 messenger.editMessage(chatId, messageId,
@@ -166,14 +205,38 @@ public class ExportBotCallbackHandler {
                                 + i18n.msg(lang, "bot.prompt.from_date"),
                         keyboards.fromDateKeyboard(lang));
             }
-            case ExportBot.CB_CANCEL_EXPORT -> {
-                jobProducer.cancelExport(userId);
-                messenger.editMessage(chatId, messageId,
-                        i18n.msg(lang, "bot.cancel.ok_simple"), null);
-                session.reset();
+            default -> {
+                if (data.startsWith(ExportBot.CB_CANCEL_EXPORT + ":")) {
+                    handleCancelExportCallback(chatId, userId, messageId, data, lang, session);
+                    return;
+                }
+                log.warn("Неизвестный callback: {}", data);
             }
-            default -> log.warn("Неизвестный callback: {}", data);
         }
+    }
+
+    private boolean requireState(long chatId, UserSession session, BotLanguage lang,
+                                 UserSession.State... expected) {
+        for (UserSession.State state : expected) {
+            if (session.getState() == state) {
+                return true;
+            }
+        }
+        messenger.send(chatId, i18n.msg(lang, "bot.error.session_expired"));
+        return false;
+    }
+
+    private void handleCancelExportCallback(long chatId, long userId, int messageId, String data,
+                                            BotLanguage lang, UserSession session) {
+        String taskId = data.substring((ExportBot.CB_CANCEL_EXPORT + ":").length());
+        String activeTaskId = jobProducer.getActiveExport(userId);
+        if (activeTaskId == null || !activeTaskId.equals(taskId)) {
+            messenger.editMessage(chatId, messageId, i18n.msg(lang, "bot.cancel.no_active"), null);
+            return;
+        }
+        jobProducer.cancelExport(userId);
+        messenger.editMessage(chatId, messageId, i18n.msg(lang, "bot.cancel.ok_simple"), null);
+        session.reset();
     }
 
     private void handleLanguageCallback(long chatId, long userId, int messageId, String code) {
