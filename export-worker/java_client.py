@@ -86,10 +86,7 @@ class JavaBotClient:
             write=300.0,
             connect=30.0
         )
-        default_headers = {}
-        if settings.JAVA_API_KEY:
-            default_headers["X-API-Key"] = settings.JAVA_API_KEY
-        self._http_client = httpx.AsyncClient(timeout=custom_timeout, headers=default_headers)
+        self._http_client = httpx.AsyncClient(timeout=custom_timeout)
         # Отдельный клиент для Telegram Bot API: ограниченное чтение, чтобы зависший
         # сетевой запрос не повисал бесконечно (read=None из основного клиента не подходит).
         self._tg_timeout = httpx.Timeout(timeout=300.0, read=300.0, write=300.0, connect=30.0)
@@ -656,6 +653,13 @@ class JavaBotClient:
     async def _iter_list(self, lst):
         for item in lst: yield item
 
+
+    @staticmethod
+    def _java_api_headers() -> dict[str, str]:
+        if settings.JAVA_API_KEY:
+            return {"X-API-Key": settings.JAVA_API_KEY}
+        return {}
+
     async def _upload_file_to_java(
         self,
         file_path: str,
@@ -695,6 +699,7 @@ class JavaBotClient:
                         url,
                         files=files,
                         data=data,
+                        headers=self._java_api_headers(),
                     ) as response:
                         if response.status_code == 200:
                             output_path = await self._stream_convert_response_to_file(
