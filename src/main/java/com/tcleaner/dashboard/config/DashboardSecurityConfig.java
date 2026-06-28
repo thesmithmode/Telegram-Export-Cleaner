@@ -12,7 +12,6 @@ import org.springframework.security.web.context.HttpSessionSecurityContextReposi
 import org.springframework.security.web.context.SecurityContextRepository;
 
 @Configuration
-@Order(1)
 public class DashboardSecurityConfig {
 
     @Bean
@@ -21,32 +20,49 @@ public class DashboardSecurityConfig {
     }
 
     @Bean
+    @Order(1)
+    public SecurityFilterChain miniAppFilterChain(HttpSecurity http) throws Exception {
+        http
+            .securityMatcher("/dashboard/mini-app", "/dashboard/login/telegram")
+            .headers(headers -> headers
+                // X-Frame-Options не поддерживает allowlist — только DENY или SAMEORIGIN.
+                // Ослабляем framing только для Telegram Mini App entry/auth routes, где
+                // iframe внутри web.telegram.org является частью ожидаемого login flow.
+                .frameOptions(frame -> frame.disable())
+                .cacheControl(Customizer.withDefaults())
+                .contentSecurityPolicy(csp -> csp.policyDirectives(dashboardCsp(
+                    "frame-ancestors 'self' https://web.telegram.org")))
+            )
+            .sessionManagement(session -> session
+                .sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
+            .authorizeHttpRequests(auth -> auth.anyRequest().permitAll())
+            // Mini App POST приходит из iframe Telegram WebView, нет Referer/Origin,
+            // CSRF token из cookie невозможен. Защита от подделки запроса —
+            // HMAC-SHA256 проверка initData (TelegramMiniAppAuthVerifier):
+            // подделать может только владелец bot_token. Эквивалент CSRF token.
+            .csrf(csrf -> csrf
+                .ignoringRequestMatchers("/dashboard/login/telegram"));
+
+        return http.build();
+    }
+
+    @Bean
+    @Order(2)
     public SecurityFilterChain dashboardFilterChain(HttpSecurity http,
                                                      DashboardAccessDeniedHandler accessDeniedHandler) throws Exception {
         http
             .securityMatcher("/dashboard/**")
             .headers(headers -> headers
-                // X-Frame-Options отключён намеренно: он не поддерживает allowlist — только
-                // DENY или SAMEORIGIN. Framing-политика задаётся через CSP frame-ancestors ниже,
-                // что позволяет разрешить web.telegram.org и 'self' одновременно.
-                // Для браузеров без CSP (IE 11) clickjacking защита отсутствует — приемлемо
-                // для Telegram Mini App (целевая аудитория использует современные браузеры).
-                .frameOptions(frame -> frame.disable())
+                .frameOptions(frame -> frame.deny())
                 // no-store для HTML дашборда — см. DashboardAccessIsolationIntegrationTest#htmlPagesAreNoStore
                 .cacheControl(Customizer.withDefaults())
-                .contentSecurityPolicy(csp -> csp.policyDirectives(
-                    "default-src 'self'; " +
-                    "script-src 'self' https://telegram.org; " +
-                    "style-src 'self' 'unsafe-inline'; " +
-                    "img-src 'self' data: https://t.me; " +
-                    "frame-ancestors 'self' https://web.telegram.org"))
+                .contentSecurityPolicy(csp -> csp.policyDirectives(dashboardCsp("frame-ancestors 'none'")))
             )
             .sessionManagement(session -> session
                 .sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(
-                    "/dashboard/login", "/dashboard/login/telegram",
-                    "/dashboard/mini-app",
+                    "/dashboard/login",
                     "/dashboard/assets/**", "/dashboard/css/**",
                     "/dashboard/js/**", "/dashboard/vendor/**",
                     "/dashboard/img/**").permitAll()
@@ -83,14 +99,6 @@ public class DashboardSecurityConfig {
             .exceptionHandling(ex -> ex
                 .authenticationEntryPoint(new LoginUrlAuthenticationEntryPoint("/dashboard/login"))
                 .accessDeniedHandler(accessDeniedHandler))
-            // CSRF: отключён ТОЛЬКО для /dashboard/login/telegram.
-            // Mini App POST приходит из iframe Telegram WebView, нет Referer/Origin,
-            // CSRF token из cookie невозможен. Защита от подделки запроса —
-            // HMAC-SHA256 проверка initData (TelegramMiniAppAuthVerifier):
-            // подделать может только владелец bot_token. Эквивалент CSRF token.
-            // Все остальные mutating endpoints под /dashboard/** остаются с CSRF.
-            .csrf(csrf -> csrf
-                .ignoringRequestMatchers("/dashboard/login/telegram"))
             .logout(logout -> logout
                 .logoutUrl("/dashboard/logout")
                 .logoutSuccessUrl("/dashboard/login?logout")
@@ -101,4 +109,13 @@ public class DashboardSecurityConfig {
 
         return http.build();
     }
+
+    private static String dashboardCsp(String frameAncestors) {
+        return "default-src 'self'; " +
+            "script-src 'self' https://telegram.org; " +
+            "style-src 'self' 'unsafe-inline'; " +
+            "img-src 'self' data: https://t.me; " +
+            frameAncestors;
+    }
+
 }
