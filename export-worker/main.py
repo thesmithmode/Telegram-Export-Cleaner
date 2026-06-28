@@ -349,7 +349,10 @@ class ExportWorker:
             (access_ok, possibly-normalized job, chat_info|None, topic_name|None).
             Если access_ok=False — caller возвращает True (failed-ответ уже отправлен).
         """
-        accessible, chat_info, error_reason = await self.telegram_client.verify_and_get_info(job.chat_id)
+        accessible, chat_info, error_reason = await self.telegram_client.verify_and_get_info(
+            job.chat_id,
+            is_cancelled_fn=self._make_cancel_checker(job.task_id),
+        )
         if not accessible:
             error_messages = {
                 "CHANNEL_PRIVATE": f"Канал {job.chat_id} приватный. Аккаунт worker-а должен быть участником.",
