@@ -114,6 +114,41 @@ class TestExportWorkerJobProcessing:
         assert len(payload.messages) == 2
 
     @pytest.mark.asyncio
+    async def test_process_job_rejects_non_public_group_before_history(self, worker):
+        job = ExportRequest(
+            task_id="test_task_private_group",
+            user_id=123,
+            user_chat_id=123,
+            chat_id=-100456,
+            limit=0,
+            offset_id=0,
+        )
+
+        worker.telegram_client.verify_and_get_info = AsyncMock(
+            return_value=(True, {
+                "id": -100456,
+                "title": "Private Group",
+                "type": "supergroup",
+                "username": "",
+                "is_bot": False,
+                "is_self": False,
+            }, None)
+        )
+        worker.telegram_client.get_chat_history = AsyncMock()
+        worker.java_client.send_response = AsyncMock(return_value=True)
+        worker.queue_consumer.mark_job_processing = AsyncMock()
+        worker.queue_consumer.mark_job_failed = AsyncMock()
+
+        result = await worker.process_job(job)
+
+        assert result is True
+        worker.java_client.send_response.assert_called_once()
+        payload = worker.java_client.send_response.call_args[0][0]
+        assert payload.status == "failed"
+        assert payload.error_code == "PUBLIC_CHAT_REQUIRED"
+        worker.telegram_client.get_chat_history.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_process_job_chat_not_accessible(self, worker):
         job = ExportRequest(
             task_id="test_task_456",

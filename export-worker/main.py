@@ -370,6 +370,10 @@ class ExportWorker:
                     "⛔ Экспорт личных переписок недоступен. "
                     "Бот работает только с группами, супергруппами и каналами."
                 ),
+                "PUBLIC_CHAT_REQUIRED": (
+                    "⛔ Экспорт доступен только для публичных групп, супергрупп и каналов "
+                    "с username. Приватные чаты без публичного @username не экспортируются."
+                ),
                 "UNKNOWN": (
                     f"Не удалось получить доступ к чату {job.chat_id}. "
                     f"Проверьте логи worker-а для подробностей."
@@ -414,9 +418,26 @@ class ExportWorker:
                     f"Бот работает только с группами, супергруппами и каналами. "
                     f"Личные переписки и боты экспортировать нельзя."
                 )
+                error_code = "CHAT_PRIVATE"
+            elif (
+                    chat_info.get("is_bot")
+                    or chat_info.get("is_self")
+                    or ("username" in chat_info and not chat_info.get("username"))
+            ):
+                error = (
+                    "⛔ Экспорт недоступен: чат должен быть публичной группой, "
+                    "супергруппой или каналом с username. "
+                    "Приватные чаты без публичного @username не экспортируются."
+                )
+                error_code = "PUBLIC_CHAT_REQUIRED"
+            else:
+                error = None
+                error_code = None
+
+            if error:
                 logger.warning(
                     f"⛔ Blocked export of {chat_type!r} chat {job.chat_id} "
-                    f"for user {job.user_id}"
+                    f"for user {job.user_id}: {error_code}"
                 )
                 await self.java_client.send_response(
                     SendResponsePayload(
@@ -424,7 +445,7 @@ class ExportWorker:
                         status="failed",
                         messages=[],
                         error=error,
-                        error_code="CHAT_PRIVATE",
+                        error_code=error_code,
                         user_chat_id=job.user_chat_id,
                     )
                 )
