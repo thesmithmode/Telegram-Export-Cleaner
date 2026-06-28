@@ -299,6 +299,59 @@ class ExportEventIngestionServiceTest {
         assertThat(after.getConsecutiveFailures()).isEqualTo(2);
     }
 
+
+    @Test
+    @DisplayName("late final COMPLETED with subscriptionId records success after conversion completed without subscription")
+    void lateSubscriptionCompletedRecordsSuccess() {
+        ChatSubscription sub = newActiveSubscription(USER_ID, 1);
+
+        service.ingest(started());
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_COMPLETED)
+                .taskId(TASK).botUserId(USER_ID)
+                .messagesCount(10L).bytesCount(100L)
+                .status("completed").ts(TS.plusSeconds(30)).build());
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_COMPLETED)
+                .taskId(TASK).botUserId(USER_ID)
+                .subscriptionId(sub.getId())
+                .status("completed").ts(TS.plusSeconds(40)).build());
+
+        ExportEvent event = events.findByTaskId(TASK).orElseThrow();
+        ChatSubscription after = subscriptions.findById(sub.getId()).orElseThrow();
+        assertThat(event.getStatus()).isEqualTo(ExportStatus.COMPLETED);
+        assertThat(event.getSubscriptionId()).isEqualTo(sub.getId());
+        assertThat(after.getLastSuccessAt()).isNotNull();
+        assertThat(after.getConsecutiveFailures()).isZero();
+    }
+
+    @Test
+    @DisplayName("delivery FAILED with subscriptionId overrides conversion completed without subscription")
+    void lateSubscriptionFailureOverridesConversionCompleted() {
+        ChatSubscription sub = newActiveSubscription(USER_ID, 1);
+
+        service.ingest(started());
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_COMPLETED)
+                .taskId(TASK).botUserId(USER_ID)
+                .messagesCount(10L).bytesCount(100L)
+                .status("completed").ts(TS.plusSeconds(30)).build());
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_FAILED)
+                .taskId(TASK).botUserId(USER_ID)
+                .subscriptionId(sub.getId())
+                .error("telegram delivery failed").status("failed")
+                .ts(TS.plusSeconds(40)).build());
+
+        ExportEvent event = events.findByTaskId(TASK).orElseThrow();
+        ChatSubscription after = subscriptions.findById(sub.getId()).orElseThrow();
+        assertThat(event.getStatus()).isEqualTo(ExportStatus.FAILED);
+        assertThat(event.getSubscriptionId()).isEqualTo(sub.getId());
+        assertThat(after.getLastFailureAt()).isNotNull();
+        assertThat(after.getConsecutiveFailures()).isEqualTo(2);
+        assertThat(after.getStatus()).isEqualTo(SubscriptionStatus.PAUSED);
+    }
+
     @Test
     @DisplayName("terminal CANCELLED с subscriptionId → lifecycle не трогается (ручная отмена юзером)")
     void cancelledDoesNotMutateSubscription() {

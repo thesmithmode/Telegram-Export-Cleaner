@@ -620,7 +620,7 @@ class ExportWorker:
             await self.queue_consumer.mark_job_completed(
                 job.task_id,
                 bot_user_id=bot_user_id_for_event,
-                subscription_id=job.subscription_id if direct_cache_export else None,
+                subscription_id=job.subscription_id,
                 messages_count=msg_count if direct_cache_export else None,
                 bytes_count=direct_bytes_count if direct_cache_export else None,
             )
