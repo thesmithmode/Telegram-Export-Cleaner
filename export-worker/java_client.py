@@ -564,7 +564,10 @@ class JavaBotClient:
                     encoded_len = len(line.encode("utf-8")) + 1
                     bytes_since_disk_check += encoded_len
                     if bytes_since_disk_check >= _DISK_FREE_CHECK_INTERVAL_BYTES:
-                        if not self._has_free_disk_for_write(output_path, encoded_len):
+                        if not self._has_free_disk_for_write(
+                            output_path,
+                            _DISK_FREE_CHECK_INTERVAL_BYTES,
+                        ):
                             logger.error("Export temp disk reserve exhausted for task %s", payload.task_id)
                             disk_exhausted = True
                             break
@@ -759,7 +762,10 @@ class JavaBotClient:
                         write_len = len(buffered) - len(_CONVERT_SENTINEL)
                         bytes_since_disk_check += write_len
                         if bytes_since_disk_check >= _DISK_FREE_CHECK_INTERVAL_BYTES:
-                            if not self._has_free_disk_for_write(output_path, write_len):
+                            if not self._has_free_disk_for_write(
+                                output_path,
+                                _DISK_FREE_CHECK_INTERVAL_BYTES,
+                            ):
                                 logger.error("Export temp disk reserve exhausted for task %s", task_id)
                                 return None
                             bytes_since_disk_check = 0
