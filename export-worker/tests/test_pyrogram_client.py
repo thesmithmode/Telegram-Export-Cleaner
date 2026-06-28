@@ -278,6 +278,24 @@ class TestTelegramClientVerifyAccess:
         mock_pyrogram.invoke.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_resolve_numeric_chat_id_caps_floodwait_and_keeps_cancel_check(self):
+        client = TelegramClient()
+        cancel_checker = AsyncMock(return_value=False)
+
+        with patch("pyrogram_client.cancellable_floodwait_sleep", new=AsyncMock()) as sleep_mock:
+            await client._sleep_for_resolve_floodwait(
+                "fallback 1 (get_dialogs)",
+                -1001234567890,
+                FloodWait(1234),
+                cancel_checker,
+            )
+
+        sleep_mock.assert_awaited_once_with(
+            client._RESOLVE_FLOODWAIT_MAX_SECONDS,
+            is_cancelled_fn=cancel_checker,
+        )
+
+    @pytest.mark.asyncio
     async def test_verify_and_get_info_value_error_non_peer_propagates(self):
         client = TelegramClient()
         mock_pyrogram = AsyncMock()
