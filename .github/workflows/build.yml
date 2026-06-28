@@ -239,7 +239,7 @@ jobs:
             echo "--- socket-proxy reachability from traefik container ---"
             # Проверяем: может ли Traefik говорить с socket-proxy на порту 2375
             docker exec telegram-cleaner-traefik \
-              wget -qO- "http://socket-proxy:2375/v1.41/containers/json?limit=5" 2>/dev/null \
+              wget -qO /dev/null "http://socket-proxy:2375/v1.41/containers/json?limit=5" 2>/dev/null \
               && echo "socket-proxy: OK" \
               || echo "socket-proxy: UNREACHABLE from traefik"
 
