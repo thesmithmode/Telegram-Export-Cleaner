@@ -53,7 +53,7 @@ public class StatsQueryService {
         return botUserId != null && botUserId > 0;
     }
 
-    @Cacheable(value = LIVE, key = "#period.toString() + '_' + #botUserId")
+    @Cacheable(value = LIVE, key = "'overview:' + #period.toString() + ':' + #botUserId")
     public OverviewDto overview(StatsPeriod period, Long botUserId) {
         long[] totals = periodTotals(period, botUserId);
         long users = activeUsers(period, botUserId);
@@ -96,7 +96,7 @@ public class StatsQueryService {
      * Overview + дельта vs предыдущий период той же длины.
      * Delta = ((current - prev) / prev) * 100. prev==0 → null.
      */
-    @Cacheable(value = LIVE, key = "'wd_' + #period.toString() + '_' + #botUserId")
+    @Cacheable(value = LIVE, key = "'overviewWithDelta:' + #period.toString() + ':' + #botUserId")
     public OverviewDto overviewWithDelta(StatsPeriod period, Long botUserId) {
         long[] current = periodTotals(period, botUserId);
         long[] prev = periodTotals(period.previous(), botUserId);
@@ -121,7 +121,7 @@ public class StatsQueryService {
         return ((double) (current - previous) / previous) * 100.0;
     }
 
-    @Cacheable(value = HISTORICAL, key = "#limit + '_' + #botUserId")
+    @Cacheable(value = HISTORICAL, key = "'topUsers:' + #limit + ':' + #botUserId")
     public List<UserStatsRow> topUsers(int limit, Long botUserId) {
         String base = "SELECT bot_user_id, username, display_name, total_exports, "
                 + "total_messages, total_bytes, last_seen FROM bot_users ";
@@ -133,7 +133,7 @@ public class StatsQueryService {
                 userStatsMapper(), limit);
     }
 
-    @Cacheable(value = HISTORICAL, key = "#period.toString() + '_users_' + #limit + '_' + #botUserId")
+    @Cacheable(value = HISTORICAL, key = "'topUsersByPeriod:' + #period.toString() + ':' + #limit + ':' + #botUserId")
     public List<UserStatsRow> topUsersByPeriod(StatsPeriod period, int limit, Long botUserId) {
         // Atomicity: оба jdbc.query() работают в одной транзакции (классовый @Transactional)
         // → один connection через DataSourceUtils → один WAL snapshot SQLite. Без транзакции
@@ -188,7 +188,7 @@ public class StatsQueryService {
                 rs.getString("last_seen"));
     }
 
-    @Cacheable(value = HISTORICAL, key = "#period.toString() + '_' + #botUserId + '_' + #limit")
+    @Cacheable(value = HISTORICAL, key = "'topChats:' + #period.toString() + ':' + #botUserId + ':' + #limit")
     public List<ChatStatsRow> topChats(StatsPeriod period, Long botUserId, int limit) {
         // Atomicity: см. topUsersByPeriod — split на 2 query безопасен внутри @Transactional.
         String from = period.fromSql();
@@ -231,7 +231,7 @@ public class StatsQueryService {
         }).toList();
     }
 
-    @Cacheable(value = HISTORICAL, key = "#period.toString() + '_' + #botUserId")
+    @Cacheable(value = HISTORICAL, key = "'statusBreakdown:' + #period.toString() + ':' + #botUserId")
     public Map<String, Long> statusBreakdown(StatsPeriod period, Long botUserId) {
         String from = period.fromSql();
         String to = period.toSql();
@@ -254,7 +254,7 @@ public class StatsQueryService {
 
     private record StatusBreakdownRow(String status, long count) {}
 
-    @Cacheable(value = HISTORICAL, key = "#period.toString() + '_' + #metric + '_' + #botUserId")
+    @Cacheable(value = HISTORICAL, key = "'timeSeries:' + #period.toString() + ':' + (#metric == null ? 'exports' : #metric) + ':' + #botUserId")
     public List<TimeSeriesPointDto> timeSeries(StatsPeriod period, String metric, Long botUserId) {
         String fmt = period.strftimeFormat();
         String from = period.fromSql();
@@ -290,7 +290,7 @@ public class StatsQueryService {
      * Последние N событий с опциональными фильтрами. Чувствительно к RBAC —
      * контроллер обязан передать эффективный botUserId (0 = «все», только ADMIN).
      */
-    @Cacheable(value = LIVE, key = "#botUserId + '_' + #chatRefId + '_' + #status + '_' + #limit")
+    @Cacheable(value = LIVE, key = "'recentEvents:' + #botUserId + ':' + #chatRefId + ':' + #status + ':' + #limit")
     public List<EventRowDto> recentEvents(Long botUserId, Long chatRefId,
                                           String status, int limit) {
         StringBuilder sql = new StringBuilder(
@@ -361,7 +361,7 @@ public class StatsQueryService {
         return sqlite.replace(' ', 'T') + "Z";
     }
 
-    @Cacheable(value = PROFILE, key = "#botUserId")
+    @Cacheable(value = PROFILE, key = "'userDetail:' + #botUserId")
     public UserDetailDto userDetail(long botUserId) {
         return jdbc.queryForObject(
                 "SELECT bot_user_id, username, display_name, total_exports, "
