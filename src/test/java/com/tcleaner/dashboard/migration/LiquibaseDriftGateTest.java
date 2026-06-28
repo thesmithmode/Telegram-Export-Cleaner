@@ -33,11 +33,11 @@ import static org.assertj.core.api.Assertions.assertThatCode;
  *      ValidationFailedException — ровно так же как падает прод.
  *
  * Тест читает оба changelog через `git show <ref>:<path>` (raw blob = LF, CRLF
- * на Windows-working-dir не влияет). При отсутствии git выключается через
- * @EnabledIf, чтобы не ломать сборку в средах без VCS.
+ * на Windows-working-dir не влияет). При отсутствии git или нужных git refs
+ * выключается через @EnabledIf, чтобы не ломать сборку в средах без VCS.
  */
 @DisplayName("Liquibase drift gate")
-@EnabledIf("isGitAvailable")
+@EnabledIf("hasRequiredGitChangelogs")
 class LiquibaseDriftGateTest {
 
     private static final String CHANGELOG_PATH = "src/main/resources/db/changelog/db.changelog-master.sql";
@@ -91,9 +91,14 @@ class LiquibaseDriftGateTest {
         return out;
     }
 
-    static boolean isGitAvailable() {
+    static boolean hasRequiredGitChangelogs() {
+        return canGitShow("origin/main:" + CHANGELOG_PATH)
+                && canGitShow("HEAD:" + CHANGELOG_PATH);
+    }
+
+    private static boolean canGitShow(String ref) {
         try {
-            Process p = new ProcessBuilder("git", "--version").redirectErrorStream(true).start();
+            Process p = new ProcessBuilder("git", "show", ref).redirectErrorStream(true).start();
             p.getInputStream().readAllBytes();
             return p.waitFor() == 0;
         } catch (Exception e) {
