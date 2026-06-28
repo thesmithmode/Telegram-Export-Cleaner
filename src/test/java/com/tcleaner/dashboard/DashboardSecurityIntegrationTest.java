@@ -113,11 +113,22 @@ class DashboardSecurityIntegrationTest {
     }
 
     @Test
-    @DisplayName("dashboard CSP содержит frame-ancestors для Telegram Web (Mini App iframe)")
-    void dashboardCspAllowsTelegramFrameAncestors() throws Exception {
-        mockMvc.perform(get("/dashboard/login"))
+    @DisplayName("Mini App CSP содержит frame-ancestors для Telegram Web iframe")
+    void miniAppCspAllowsTelegramFrameAncestors() throws Exception {
+        mockMvc.perform(get("/dashboard/mini-app"))
                 .andExpect(header().string("Content-Security-Policy",
                         org.hamcrest.Matchers.containsString("frame-ancestors 'self' https://web.telegram.org")));
+    }
+
+    @Test
+    @DisplayName("обычный dashboard CSP запрещает embedding")
+    void dashboardCspDisallowsFrameAncestors() throws Exception {
+        mockMvc.perform(get("/dashboard/login"))
+                .andExpect(header().string("Content-Security-Policy",
+                        org.hamcrest.Matchers.containsString("frame-ancestors 'none'")))
+                .andExpect(header().string("Content-Security-Policy",
+                        org.hamcrest.Matchers.not(
+                                org.hamcrest.Matchers.containsString("frame-ancestors 'self' https://web.telegram.org"))));
     }
 
     @Test
@@ -130,9 +141,16 @@ class DashboardSecurityIntegrationTest {
     }
 
     @Test
-    @DisplayName("dashboard не отправляет X-Frame-Options (использует frame-ancestors CSP)")
-    void dashboardDoesNotSendXFrameOptions() throws Exception {
+    @DisplayName("обычный dashboard отправляет X-Frame-Options DENY")
+    void dashboardSendsDenyXFrameOptions() throws Exception {
         mockMvc.perform(get("/dashboard/login"))
+                .andExpect(header().string("X-Frame-Options", "DENY"));
+    }
+
+    @Test
+    @DisplayName("Mini App не отправляет X-Frame-Options (использует route-scoped frame-ancestors CSP)")
+    void miniAppDoesNotSendXFrameOptions() throws Exception {
+        mockMvc.perform(get("/dashboard/mini-app"))
                 .andExpect(header().doesNotExist("X-Frame-Options"));
     }
 
