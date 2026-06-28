@@ -545,6 +545,39 @@ class MessageCache:
                 chat_id_int, exc,
             )
 
+
+    async def _invalidate_cache_ranges_in_redis(self, chat_id_int: int) -> None:
+        """Best-effort removal of Redis cache ranges after SQLite cache eviction.
+
+        Java routes exports to the express queue from cache:ranges:{canonical}.
+        Once topic_id=0 rows are evicted from SQLite, keeping these keys would
+        create a stale positive cache signal, so remove both numeric and known
+        username aliases. Redis failures must not break eviction.
+        """
+        if self.redis_client is None:
+            return
+
+        keys = [f"cache:ranges:{chat_id_int}"]
+        try:
+            username = await self.redis_client.get(f"canonical:{chat_id_int}")
+            if username:
+                if isinstance(username, bytes):
+                    username = username.decode("utf-8", "ignore")
+                keys.append(f"cache:ranges:{username}")
+        except Exception as username_exc:
+            logger.debug(
+                "invalidate cache:ranges username lookup skipped chat=%s: %s",
+                chat_id_int, username_exc,
+            )
+
+        try:
+            await self.redis_client.delete(*keys)
+        except Exception as exc:
+            logger.debug(
+                "invalidate cache:ranges:%s skipped: %s",
+                chat_id_int, exc,
+            )
+
     # ------------------------------------------------------------------ #
     # Core read API
     # ------------------------------------------------------------------ #
@@ -1371,6 +1404,7 @@ class MessageCache:
             candidates = await cur.fetchall()
 
         evicted = 0
+        evicted_topic0_chat_ids: list[int] = []
         try:
             for chat_id, topic_id, size in candidates:
                 if total_with_artifacts <= target:
@@ -1394,6 +1428,8 @@ class MessageCache:
                     artifact_bytes -= chat_artifact_bytes
                     total_with_artifacts -= chat_artifact_bytes
                 await self._delete_chat_cache_rows(chat_id, topic_id)
+                if topic_id == 0:
+                    evicted_topic0_chat_ids.append(int(chat_id))
                 # Также убираем lock — иначе dict растёт unbounded при долгом uptime
                 self._chat_locks.pop(chat_id, None)
                 total_bytes -= size
@@ -1414,6 +1450,9 @@ class MessageCache:
             except Exception as rb_exc:
                 logger.warning(f"rollback failed during evict: {rb_exc}")
             raise
+
+        for chat_id in evicted_topic0_chat_ids:
+            await self._invalidate_cache_ranges_in_redis(chat_id)
 
         return evicted
 
