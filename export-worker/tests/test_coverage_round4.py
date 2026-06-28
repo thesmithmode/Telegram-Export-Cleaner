@@ -190,19 +190,21 @@ class TestVerifyAndNormalizeChat:
         assert ok is True
         assert topic_name == "My Topic"
 
-    async def test_accessible_false_session_invalid_triggers_recovery(self):
-        """error_reason=SESSION_INVALID → _try_session_recovery → True → return."""
+    async def test_accessible_false_session_invalid_alerts_and_exits(self):
+        """error_reason=SESSION_INVALID → alert admin and terminate without Redis recovery."""
         w = _wire_common(_bare_worker())
         w._cleanup_job = AsyncMock()
+        w._alert_admin_session_invalid = AsyncMock()
         w.telegram_client.verify_and_get_info = AsyncMock(
             return_value=(False, None, "SESSION_INVALID")
         )
-        w._try_session_recovery = AsyncMock(return_value=True)
 
         job = make_job()
-        ok, *_ = await w._verify_and_normalize_chat(job)
+        with patch("main.sys.exit") as mock_exit:
+            ok, *_ = await w._verify_and_normalize_chat(job)
         assert ok is False
-        w._try_session_recovery.assert_awaited_once()
+        w._alert_admin_session_invalid.assert_awaited_once()
+        mock_exit.assert_called_once_with(1)
 
     async def test_accessible_false_unknown_reason_uses_fallback_message(self):
         w = _wire_common(_bare_worker())
