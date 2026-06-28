@@ -282,19 +282,24 @@ services:
     container_name: telegram-export-redis
     labels:
       - "project=telegram-cleaner"
-    command: >
-      redis-server
-      --appendonly yes
-      --appendfsync everysec
-      --maxmemory 256mb
-      --maxmemory-policy noeviction
-      --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD обязателен}
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - noeviction
+      - --requirepass
+      - "${REDIS_PASSWORD:?REDIS_PASSWORD обязателен}"
     volumes:
       - redis-data:/data
     networks:
       - internal
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a ${REDIS_PASSWORD} ping"]
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
