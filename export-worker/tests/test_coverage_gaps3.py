@@ -662,6 +662,7 @@ class TestExportWithDateCache:
         job = make_job(from_date="2025-01-01", to_date="2025-01-31")
         result = await w._export_with_date_cache(job)
         assert result is not None  # swallowed
+        w.message_cache.mark_date_range_checked.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_empty_gap_marks_date_range_checked(self):

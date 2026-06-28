@@ -912,6 +912,7 @@ class ExportWorker:
                 is_cancelled_fn=self._make_cancel_checker(job.task_id),
             )
             gap_fetched = 0
+            gap_fetch_failed = False
             try:
                 new_count = await self._run_batch_loop(
                     job, iter_msgs, tracker, initial_count=fetched_count
@@ -923,10 +924,16 @@ class ExportWorker:
             except ExportCancelled:
                 raise
             except Exception as e:
+                gap_fetch_failed = True
                 logger.warning(f"Failed fetching date gap [{gap_from} - {gap_to}]: {e}")
 
             if gap_fetched:
                 logger.info(f"  Fetched {gap_fetched} messages for [{gap_from} - {gap_to}]")
+            elif gap_fetch_failed:
+                logger.info(
+                    f"  Gap [{gap_from} - {gap_to}] was not marked as checked "
+                    "because Telegram fetch failed"
+                )
             elif self.message_cache and self.message_cache.enabled:
                 # Telegram вернул 0 сообщений — диапазон проверен, фиксируем чтобы не ходить снова
                 await self.message_cache.mark_date_range_checked(job.chat_id, gap_from, gap_to, topic_id=tid)
