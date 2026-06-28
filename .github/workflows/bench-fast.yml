@@ -7,10 +7,6 @@ on:
 jobs:
   bench:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: export-worker
-
     steps:
       - uses: actions/checkout@v4
 
@@ -22,27 +18,19 @@ jobs:
 
       - name: Install deps
         run: |
-          pip install -r requirements.txt
-          pip install psutil fakeredis
+          pip install -r export-worker/requirements.txt
+          pip install psutil
 
-      - name: bench_cache (N=1, baseline single-thread)
-        timeout-minutes: 2
-        run: python ../.claude/autoresearch/bench_cache.py 1 | tee ../.claude/autoresearch/run_cache_n1.log
-
-      - name: bench_cache (N=4, concurrent contention)
-        timeout-minutes: 2
-        run: python ../.claude/autoresearch/bench_cache.py 4 | tee ../.claude/autoresearch/run_cache_n4.log
-
-      - name: bench_idle (50k pending jobs)
+      - name: bench_dashboard
         timeout-minutes: 3
-        run: python ../.claude/autoresearch/bench_idle.py | tee ../.claude/autoresearch/run_idle.log
+        run: python .codex/autoresearch/bench_dashboard.py | tee .codex/autoresearch/run_dashboard.log
 
       - name: Summary
         if: always()
         run: |
           echo "## bench results" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          for f in ../.claude/autoresearch/run_*.log; do
+          for f in .codex/autoresearch/run_*.log; do
             echo "=== $f ===" >> $GITHUB_STEP_SUMMARY
             grep -E "^[a-z_]+:" "$f" >> $GITHUB_STEP_SUMMARY || true
           done
