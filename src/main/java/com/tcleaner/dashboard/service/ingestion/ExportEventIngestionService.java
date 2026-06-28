@@ -130,6 +130,7 @@ public class ExportEventIngestionService {
         }
 
         ExportStatus prev = existing.getStatus();
+        Long prevSubscriptionId = existing.getSubscriptionId();
         coalesce(payload.getMessagesCount(), existing::setMessagesCount);
         coalesce(payload.getBytesCount(), existing::setBytesCount);
         coalesce(parseDate(payload.getFromDate()), existing::setFromDate);
@@ -145,7 +146,10 @@ public class ExportEventIngestionService {
                     payload.getCanonicalChatId(), payload.getChatIdRaw(),
                     payload.getTopicId(), payload.getChatTitle(), payload.getTs());
         }
-        if (desiredStatus != null && canAdvanceStatus(prev, desiredStatus)) {
+        boolean deliveryOutcomeCorrection = isDeliveryOutcomeCorrection(
+                prev, desiredStatus, prevSubscriptionId, payload.getSubscriptionId());
+        boolean statusAdvanced = desiredStatus != null && canAdvanceStatus(prev, desiredStatus);
+        if (statusAdvanced || deliveryOutcomeCorrection) {
             existing.setStatus(desiredStatus);
             if (isTerminal(desiredStatus) && existing.getFinishedAt() == null) {
                 existing.setFinishedAt(payload.getTs() != null ? payload.getTs() : now);
@@ -159,6 +163,9 @@ public class ExportEventIngestionService {
                     saved.getBotUserId(), payload.getUsername(),
                     payload.getDisplayName(), payload.getTs());
             maybeBumpUserTotals(user, prev, saved);
+            updateSubscriptionOnTerminal(saved);
+        } else if (shouldApplyLateSubscriptionOutcome(
+                prev, desiredStatus, prevSubscriptionId, payload.getSubscriptionId())) {
             updateSubscriptionOnTerminal(saved);
         }
     }
@@ -223,6 +230,23 @@ public class ExportEventIngestionService {
             return false;
         }
         return true;
+    }
+
+    private static boolean isDeliveryOutcomeCorrection(
+            ExportStatus prev, ExportStatus next, Long prevSubscriptionId, Long nextSubscriptionId) {
+        return prev == ExportStatus.COMPLETED
+                && next == ExportStatus.FAILED
+                && prevSubscriptionId == null
+                && nextSubscriptionId != null;
+    }
+
+    private static boolean shouldApplyLateSubscriptionOutcome(
+            ExportStatus prev, ExportStatus next, Long prevSubscriptionId, Long nextSubscriptionId) {
+        return next != null
+                && isTerminal(next)
+                && prevSubscriptionId == null
+                && nextSubscriptionId != null
+                && (prev == next || isDeliveryOutcomeCorrection(prev, next, prevSubscriptionId, nextSubscriptionId));
     }
 
     private static <T> void coalesce(T value, java.util.function.Consumer<T> setter) {

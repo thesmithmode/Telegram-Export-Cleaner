@@ -146,7 +146,6 @@ class JavaBotClient:
                 bot_user_id=payload.user_id,
                 chat_title=payload.chat_title,
                 messages_count=payload.actual_count,
-                subscription_id=payload.subscription_id,
             )
         finally:
             try:
