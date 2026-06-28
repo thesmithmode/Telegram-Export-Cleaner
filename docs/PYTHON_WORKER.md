@@ -65,6 +65,11 @@ docker exec -it telegram-cleaner-redis-1 redis-cli --scan --pattern 'worker:hear
 
 BLPOP: `express` (1 с) → `main` (2 с) → `subscription` (2 с). Scheduler ставит в `subscription` только когда `hasActiveProcessingJob == false && queueLength == 0`.
 
+
+### Граница доступа к чатам
+
+Перед чтением истории или обращением к кэшу worker проверяет результат `get_chat()`: разрешены только `group`, `supergroup` и `channel` с публичным `username`. Личные переписки, боты, self-chat и приватные группы/каналы без username возвращают failed-ответ (`PRIVATE_CHAT_FORBIDDEN` или `PUBLIC_CHAT_REQUIRED`) и не доходят до `get_chat_history`.
+
 ## Конфигурация (env)
 
 Обязательные: `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_BOT_TOKEN`, `JAVA_API_KEY`.

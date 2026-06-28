@@ -846,6 +846,19 @@ class TestTelegramClientResolveCanonical:
         result = await tc._resolve_via_canonical_mapping(-100123)
         assert result == (False, None, "PRIVATE_CHAT_FORBIDDEN")
 
+
+    async def test_canonical_non_public_group_blocked(self):
+        tc = _bare_tc()
+        tc.redis_client = AsyncMock()
+        tc.redis_client.get = AsyncMock(return_value="private_group")
+        chat = MagicMock()
+        chat.id = -100123; chat.title = "Private Group"; chat.username = None
+        chat.type = MagicMock(); chat.type.__str__ = lambda s: "ChatType.SUPERGROUP"
+        chat.is_bot = False; chat.is_self = False
+        tc.client.get_chat = AsyncMock(return_value=chat)
+        result = await tc._resolve_via_canonical_mapping(-100123)
+        assert result == (False, None, "PUBLIC_CHAT_REQUIRED")
+
     async def test_canonical_exception_returns_none(self):
         tc = _bare_tc()
         tc.redis_client = AsyncMock()

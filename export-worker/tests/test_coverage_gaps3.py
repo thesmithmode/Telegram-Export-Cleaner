@@ -1133,27 +1133,25 @@ class TestPyrogramResolveNumericRawMTProto:
         assert reason == "CHAT_NOT_ACCESSIBLE"
 
     @pytest.mark.asyncio
-    async def test_raw_mtproto_no_username_falls_to_numeric(self):
-        """709-712: raw_username is None → fallback к numeric get_chat."""
+    async def test_raw_mtproto_no_username_rejected(self):
+        """Raw MTProto without username is non-public and must not fetch history."""
         tc = self._make_client()
 
         async def empty_dialogs():
             if False:
                 yield
         tc.client.get_dialogs = empty_dialogs
-        tc.client.get_chat = AsyncMock(side_effect=[
-            RuntimeError("sync failed"),
-            MagicMock(id=-1001234567890, title="Private", username=None,
-                      type="channel", is_bot=False, is_self=False, is_contact=False,
-                      members_count=0, description=""),
-        ])
+        tc.client.get_chat = AsyncMock(side_effect=RuntimeError("sync failed"))
         raw_channel = MagicMock()
         raw_channel.username = None
         raw_result = MagicMock()
         raw_result.chats = [raw_channel]
         tc.client.invoke = AsyncMock(return_value=raw_result)
         ok, info, reason = await tc._resolve_numeric_chat_id(-1001234567890)
-        assert ok is True
+        assert ok is False
+        assert info is None
+        assert reason == "PUBLIC_CHAT_REQUIRED"
+        assert tc.client.get_chat.await_count == 1
 
     @pytest.mark.asyncio
     async def test_canonical_mapping_success(self):
