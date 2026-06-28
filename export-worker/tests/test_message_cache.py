@@ -2210,6 +2210,28 @@ class TestPageSizeMigration:
             await c.close()
 
     @pytest.mark.asyncio
+    async def test_evict_invalidates_cache_ranges_in_redis(self, tmp_path):
+        """Eviction must remove Redis cache:ranges hints used for express routing."""
+        from unittest.mock import AsyncMock
+        c = MessageCache(db_path=str(tmp_path / "ranges_evict.db"))
+        await c.initialize()
+        try:
+            redis_mock = AsyncMock()
+            redis_mock.get = AsyncMock(return_value="mychat")
+            c.redis_client = redis_mock
+
+            await c.store_messages(-100123, _make_messages([1, 2, 3]))
+            c.max_disk_bytes = 1
+
+            assert await c.evict_if_needed() == 1
+            redis_mock.delete.assert_awaited_with(
+                "cache:ranges:-100123",
+                "cache:ranges:mychat",
+            )
+        finally:
+            await c.close()
+
+    @pytest.mark.asyncio
     async def test_publish_cache_ranges_swallows_redis_errors(self, tmp_path):
         """T22: Redis down не должен ронять ingestion — SQLite уже зафиксирован."""
         from unittest.mock import AsyncMock
