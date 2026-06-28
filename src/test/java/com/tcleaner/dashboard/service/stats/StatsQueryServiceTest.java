@@ -293,6 +293,20 @@ class StatsQueryServiceTest {
                 .containsExactly(0L, 0L, 100L, 0L, 200L, 0L, 0L, 0L);
     }
 
+    @Test
+    @DisplayName("timeSeries: cache key is isolated from topChats key shape")
+    void timeSeriesCacheKeyDoesNotCollideWithTopChats() {
+        List<ChatStatsRow> cachedChats = svc.topChats(PERIOD, 2L, 1);
+        assertThat(cachedChats).hasSize(1);
+
+        List<TimeSeriesPointDto> pts = svc.timeSeries(PERIOD, "2", 1L);
+
+        assertThat(pts).hasSize(8);
+        assertThat(pts).allMatch(TimeSeriesPointDto.class::isInstance);
+        assertThat(pts).extracting(TimeSeriesPointDto::value)
+                .containsExactly(0L, 0L, 1L, 0L, 1L, 0L, 0L, 0L);
+    }
+
     // ─── recentEvents ──────────────────────────────────────────────────────────
 
     @ParameterizedTest(name = "status=\"{0}\" → expectedSize={1}")
