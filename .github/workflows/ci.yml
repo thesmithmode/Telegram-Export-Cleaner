@@ -137,6 +137,9 @@ jobs:
       - name: Build JAR (skip tests)
         run: mvn package -DskipTests -q
 
+      - name: Generate smoke API key
+        run: echo "JAVA_API_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+
       - name: Start JAR in background
         run: |
           JAR_FILE="$(find target -maxdepth 1 -name 'telegram-cleaner-*.jar' \
@@ -150,7 +153,15 @@ jobs:
           fi
 
           java -jar "$JAR_FILE" \
-            --spring.profiles.active=smoke \
+            --spring.servlet.multipart.location=/tmp \
+            --spring.datasource.url='jdbc:sqlite:/tmp/smoke-test.db?date_class=text' \
+            --dashboard.stats.stream.enabled=false \
+            --dashboard.auth.bootstrap.enabled=false \
+            --dashboard.auth.admin.telegram-id=1 \
+            --dashboard.mini-app.url=http://localhost:8080/dashboard/mini-app \
+            --spring.data.redis.host=localhost \
+            --spring.data.redis.port=6379 \
+            --spring.data.redis.password= \
             > /tmp/smoke-app.log 2>&1 &
           echo $! > /tmp/smoke-app.pid
 
@@ -172,7 +183,7 @@ jobs:
 
       - name: Smoke assertions
         run: |
-          API_KEY="smoke-ci-test-key-dev"
+          API_KEY="$JAVA_API_KEY"
           BASE="http://localhost:8080"
           FAIL=0
 
