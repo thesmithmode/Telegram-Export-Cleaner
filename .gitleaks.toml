@@ -19,5 +19,4 @@ regexes = [
     '''idem-test-key-[a-z0-9]+''',
     '''test-api-key-[a-z0-9]+''',
     '''totally-wrong-key''',
-    '''smoke-ci-test-key''',
 ]
