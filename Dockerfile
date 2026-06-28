@@ -35,4 +35,4 @@ ENV JAVA_OPTS="-Xms256m -Xmx640m -XX:+UseG1GC -XX:MaxGCPauseMillis=100 -XX:+UseS
 
 EXPOSE 8080
 STOPSIGNAL SIGTERM
-ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]
+ENTRYPOINT ["sh", "-c", "umask 077 && exec java $JAVA_OPTS -jar app.jar"]

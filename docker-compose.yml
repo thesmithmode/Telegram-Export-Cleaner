@@ -73,7 +73,7 @@ services:
       - java_import:/data/import
       - java_export:/data/export
       # Dashboard БД (статистика, логины) — bind mount, переживает любые compose операции.
-      # Перед первым запуском: mkdir -p ./dashboard && sudo chown 100:101 ./dashboard
+      # Перед первым запуском: mkdir -p ./dashboard && sudo chown 100:101 ./dashboard && chmod 700 ./dashboard
       - ./dashboard:/data/stats
     # Снижено с 1024m: кэш сообщений больше не в JVM, достаточно 768m.
     mem_limit: 768m
@@ -162,7 +162,7 @@ services:
       # Logs (optional)
       - ./export-worker/logs:/app/logs
       # SQLite message cache — bind mount на хост, переживает любые compose операции.
-      # Перед первым запуском: mkdir -p ./cache && sudo chown 999:999 ./cache
+      # Перед первым запуском: mkdir -p ./cache && sudo chown 999:999 ./cache && chmod 700 ./cache
       - ./cache:/data/cache
 
     networks:
