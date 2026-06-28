@@ -42,4 +42,4 @@ HEALTHCHECK --interval=15s --timeout=5s --retries=3 --start-period=10s \
 STOPSIGNAL SIGTERM
 
 # Run worker
-CMD ["python", "-u", "main.py"]
+CMD ["sh", "-c", "umask 077 && exec python -u main.py"]

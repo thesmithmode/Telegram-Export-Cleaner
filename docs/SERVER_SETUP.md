@@ -77,6 +77,17 @@ TRAEFIK_ACME_EMAIL=your@email.com
 TRAEFIK_DASHBOARD_DOMAIN=your-domain.example.com
 ```
 
+
+### Права на host bind mounts
+
+SQLite-файлы cache/dashboard и gzip-бэкапы содержат сообщения, Telegram ID, события экспорта и hash'и dashboard-пользователей. Перед первым запуском создайте каталоги с закрытыми правами:
+
+```bash
+sudo install -d -m 700 -o 100 -g 101 ${HOST_DATA_PATH}/dashboard
+sudo install -d -m 700 -o 999 -g 999 ${HOST_DATA_PATH}/cache
+sudo install -d -m 700 -o root -g root ${HOST_DATA_PATH}/backups
+```
+
 ## 4. Запуск
 
 ```bash
@@ -110,11 +121,9 @@ docker compose -f docker-compose.prod.yml --env-file .env up -d --remove-orphans
 
 ```bash
 # Добавить в crontab (crontab -e):
-# Ежедневно в 3:00 — бэкап dashboard.db и redis RDB
-0 3 * * * docker exec telegram-export-redis redis-cli BGSAVE && \
-    cp ${HOST_DATA_PATH}/dashboard/dashboard.db \
-       ~/backups/dashboard-$(date +%F).db && \
-    find ~/backups -name "dashboard-*.db" -mtime +30 -delete
+# Ежедневно в 4:00 — WAL-safe gzip-бэкап cache/messages.db и dashboard/dashboard.db
+0 4 * * * root TELEGRAM_CLEANER_BASE=${HOST_DATA_PATH} /opt/telegram-cleaner/ops/backup-cache.sh \
+    >> /var/log/telegram-cleaner-backup.log 2>&1
 ```
 
 ## 7. Мониторинг
@@ -153,7 +162,7 @@ docker system df
 | Порт 80 занят | `ss -tlnp \| grep :80` — найти и остановить nginx/apache |
 | java-bot не стартует | `docker logs telegram-export-java-bot` — Liquibase error? |
 | Ошибка Pyrogram | Обновить `TELEGRAM_SESSION_STRING` через `python get_session.py` |
-| dashboard.db permission denied | `chown -R 100:101 ${HOST_DATA_PATH}/dashboard` |
+| dashboard.db permission denied | `chown -R 100:101 ${HOST_DATA_PATH}/dashboard && chmod 700 ${HOST_DATA_PATH}/dashboard` |
 
 ## 10. Изоляция /api от интернета
 

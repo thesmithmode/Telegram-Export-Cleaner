@@ -192,7 +192,7 @@ services:
       - export-data:/data/export
       # Dashboard SQLite — host bind mount вне docker volumes, чтобы переживать
       # compose down / volume rm. Путь на хосте задаётся ${HOST_DATA_PATH} в .env,
-      # директорию готовит админ (chown uid:gid соответствует user'у java-bot).
+      # директорию готовит админ: chown 100:101 и chmod 700; файлы создаются с umask 077.
       - ${HOST_DATA_PATH:-/var/lib/telegram-cleaner}/dashboard:/data/stats
     networks:
       - traefik-proxy
@@ -252,7 +252,7 @@ services:
     volumes:
       # Message cache SQLite — host bind mount вне docker volumes, чтобы переживать
       # compose down / volume rm. Путь на хосте задаётся ${HOST_DATA_PATH} в .env,
-      # бэкапится cron'ом на хосте через ops/backup-cache.sh.
+      # бэкапится cron'ом на хосте через ops/backup-cache.sh; chown 999:999 и chmod 700.
       - ${HOST_DATA_PATH:-/var/lib/telegram-cleaner}/cache:/data/cache
     depends_on:
       java-bot:
