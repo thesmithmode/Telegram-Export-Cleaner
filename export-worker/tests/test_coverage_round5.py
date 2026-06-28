@@ -11,7 +11,6 @@ message_cache.py (92%):
 - partial branches: 235->exit (cache enabled false), 328->333 (no dates), etc.
 
 pyrogram_client.py (92%):
-- try_reconnect: 188-201 (success + failure branches)
 - _get_topic_history exception/empty-message paths: 428-429, 464, 486-487,
   509, 547-554
 - get_chat_messages_count / get_date_range_count / get_topic_messages_count
@@ -21,7 +20,6 @@ pyrogram_client.py (92%):
 
 main.py (94%):
 - _run_batch_loop exception fallback storing partial batch: 137
-- vault recovery edges 292-294, 301-302
 - _verify_and_normalize_chat private/topic edges 453-455, 465-467
 - _send_completed_result 520, 877 (n/a — wrong file)
 - _fetch_all_messages ValueError date parse: trivial cover via mock 898-900
@@ -483,7 +481,7 @@ class TestMessageCacheExceptionPaths:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# pyrogram_client — try_reconnect, topic edges, count fallbacks
+# pyrogram_client — topic edges, count fallbacks
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _bare_tc() -> TelegramClient:
@@ -496,47 +494,6 @@ def _bare_tc() -> TelegramClient:
     tc._TOPIC_NAME_CACHE_MAX = 500
     return tc
 
-
-class TestTelegramClientReconnect:
-    """try_reconnect: success + exception path (188-201)."""
-
-    async def test_try_reconnect_success(self):
-        tc = _bare_tc()
-        tc.disconnect = AsyncMock()
-        tc.connect = AsyncMock(return_value=True)
-        with patch("pyrogram_client.Client") as MockClient, \
-             patch("pyrogram_client.settings") as s:
-            s.TELEGRAM_API_ID = 1
-            s.TELEGRAM_API_HASH = "h"
-            s.MAX_WORKERS = 4
-            MockClient.return_value = MagicMock()
-            ok = await tc.try_reconnect("new_session_string")
-        assert ok is True
-        tc.connect.assert_awaited_once()
-
-    async def test_try_reconnect_client_construction_raises(self):
-        tc = _bare_tc()
-        tc.disconnect = AsyncMock()
-        with patch("pyrogram_client.Client", side_effect=RuntimeError("bad session")), \
-             patch("pyrogram_client.settings") as s:
-            s.TELEGRAM_API_ID = 1
-            s.TELEGRAM_API_HASH = "h"
-            s.MAX_WORKERS = 4
-            ok = await tc.try_reconnect("bad")
-        assert ok is False
-
-    async def test_try_reconnect_connect_returns_false(self):
-        tc = _bare_tc()
-        tc.disconnect = AsyncMock()
-        tc.connect = AsyncMock(return_value=False)
-        with patch("pyrogram_client.Client") as MockClient, \
-             patch("pyrogram_client.settings") as s:
-            s.TELEGRAM_API_ID = 1
-            s.TELEGRAM_API_HASH = "h"
-            s.MAX_WORKERS = 4
-            MockClient.return_value = MagicMock()
-            ok = await tc.try_reconnect("session")
-        assert ok is False
 
 
 class TestEnsureUtc:
@@ -985,51 +942,6 @@ class TestMainAlertAdminSessionInvalid:
             with patch("httpx.AsyncClient", side_effect=RuntimeError("net")):
                 await w._alert_admin_session_invalid()
 
-
-class TestMainSessionRecovery:
-    """_try_session_recovery (279-294)."""
-
-    async def test_no_vault_key_returns_false(self):
-        w = _bare_worker()
-        w.control_redis = AsyncMock()
-        w.control_redis.get = AsyncMock(return_value=None)
-        with patch("main.settings") as s:
-            s.REDIS_SESSION_VAULT_KEY = "k"
-            ok = await w._try_session_recovery()
-        assert ok is False
-
-    async def test_vault_bytes_decoded_reconnect_success(self):
-        w = _bare_worker()
-        w.control_redis = AsyncMock()
-        w.control_redis.get = AsyncMock(return_value=b"new_session")
-        w.control_redis.delete = AsyncMock()
-        w.telegram_client = AsyncMock()
-        w.telegram_client.try_reconnect = AsyncMock(return_value=True)
-        with patch("main.settings") as s:
-            s.REDIS_SESSION_VAULT_KEY = "k"
-            ok = await w._try_session_recovery()
-        assert ok is True
-        w.control_redis.delete.assert_awaited_once()
-
-    async def test_vault_reconnect_fails_returns_false(self):
-        w = _bare_worker()
-        w.control_redis = AsyncMock()
-        w.control_redis.get = AsyncMock(return_value="session")
-        w.telegram_client = AsyncMock()
-        w.telegram_client.try_reconnect = AsyncMock(return_value=False)
-        with patch("main.settings") as s:
-            s.REDIS_SESSION_VAULT_KEY = "k"
-            ok = await w._try_session_recovery()
-        assert ok is False
-
-    async def test_vault_exception_returns_false(self):
-        w = _bare_worker()
-        w.control_redis = AsyncMock()
-        w.control_redis.get = AsyncMock(side_effect=RuntimeError("redis"))
-        with patch("main.settings") as s:
-            s.REDIS_SESSION_VAULT_KEY = "k"
-            ok = await w._try_session_recovery()
-        assert ok is False
 
 
 class TestMainNotifyQueuePosition:
