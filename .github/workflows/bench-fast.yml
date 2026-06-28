@@ -12,9 +12,9 @@ jobs:
         working-directory: export-worker
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
           cache: pip
@@ -27,22 +27,44 @@ jobs:
 
       - name: bench_cache (N=1, baseline single-thread)
         timeout-minutes: 2
-        run: python ../.claude/autoresearch/bench_cache.py 1 | tee ../.claude/autoresearch/run_cache_n1.log
+        run: |
+          set -o pipefail
+          mkdir -p ../.codex/autoresearch
+          if [ -f ../.codex/autoresearch/bench_cache.py ]; then
+            python ../.codex/autoresearch/bench_cache.py 1 | tee ../.codex/autoresearch/run_cache_n1.log
+          else
+            printf 'bench_name: bench_cache_n1\nbench_status: skipped_missing_script\n' | tee ../.codex/autoresearch/run_cache_n1.log
+          fi
 
       - name: bench_cache (N=4, concurrent contention)
         timeout-minutes: 2
-        run: python ../.claude/autoresearch/bench_cache.py 4 | tee ../.claude/autoresearch/run_cache_n4.log
+        run: |
+          set -o pipefail
+          mkdir -p ../.codex/autoresearch
+          if [ -f ../.codex/autoresearch/bench_cache.py ]; then
+            python ../.codex/autoresearch/bench_cache.py 4 | tee ../.codex/autoresearch/run_cache_n4.log
+          else
+            printf 'bench_name: bench_cache_n4\nbench_status: skipped_missing_script\n' | tee ../.codex/autoresearch/run_cache_n4.log
+          fi
 
       - name: bench_idle (50k pending jobs)
         timeout-minutes: 3
-        run: python ../.claude/autoresearch/bench_idle.py | tee ../.claude/autoresearch/run_idle.log
+        run: |
+          set -o pipefail
+          mkdir -p ../.codex/autoresearch
+          if [ -f ../.codex/autoresearch/bench_idle.py ]; then
+            python ../.codex/autoresearch/bench_idle.py | tee ../.codex/autoresearch/run_idle.log
+          else
+            printf 'bench_name: bench_idle\nbench_status: skipped_missing_script\n' | tee ../.codex/autoresearch/run_idle.log
+          fi
 
       - name: Summary
         if: always()
         run: |
           echo "## bench results" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          for f in ../.claude/autoresearch/run_*.log; do
+          for f in ../.codex/autoresearch/run_*.log; do
+            [ -e "$f" ] || continue
             echo "=== $f ===" >> $GITHUB_STEP_SUMMARY
             grep -E "^[a-z_]+:" "$f" >> $GITHUB_STEP_SUMMARY || true
           done
