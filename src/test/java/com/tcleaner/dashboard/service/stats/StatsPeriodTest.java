@@ -52,6 +52,20 @@ class StatsPeriodTest {
         assertThat(prev.to()).isEqualTo(LocalDate.of(2024, 2, 29));
     }
 
+
+    @Test
+    @DisplayName("previous() clamps at LocalDate.MIN instead of overflowing")
+    void previousAtLocalDateMinDoesNotOverflow() {
+        StatsPeriod period = new StatsPeriod(
+                LocalDate.MIN, LocalDate.MAX, StatsPeriod.Granularity.MONTH);
+
+        StatsPeriod prev = period.previous();
+
+        assertThat(prev.from()).isEqualTo(LocalDate.MIN);
+        assertThat(prev.to()).isEqualTo(LocalDate.MIN);
+        assertThat(prev.granularity()).isEqualTo(StatsPeriod.Granularity.MONTH);
+    }
+
     // ─── allPeriodKeys ────────────────────────────────────────────────────────
 
     @Test

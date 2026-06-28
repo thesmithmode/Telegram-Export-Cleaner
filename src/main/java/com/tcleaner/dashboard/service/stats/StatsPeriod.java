@@ -79,8 +79,10 @@ public record StatsPeriod(LocalDate from, LocalDate to, Granularity granularity)
      */
     public StatsPeriod previous() {
         long days = ChronoUnit.DAYS.between(from, to);
-        LocalDate prevTo = from.minusDays(1);
-        LocalDate prevFrom = prevTo.minusDays(days);
+        long prevToEpoch = Math.max(LocalDate.MIN.toEpochDay(), from.toEpochDay() - 1);
+        long prevFromEpoch = Math.max(LocalDate.MIN.toEpochDay(), prevToEpoch - days);
+        LocalDate prevTo = LocalDate.ofEpochDay(prevToEpoch);
+        LocalDate prevFrom = LocalDate.ofEpochDay(prevFromEpoch);
         return new StatsPeriod(prevFrom, prevTo, granularity);
     }
 }
