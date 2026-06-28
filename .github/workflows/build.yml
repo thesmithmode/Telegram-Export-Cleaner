@@ -107,7 +107,56 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Copy docker-compose.prod.yml to server
+      - name: Create production env file
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          TELEGRAM_SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
+          DASHBOARD_ADMIN_TG_ID: ${{ secrets.DASHBOARD_ADMIN_TG_ID }}
+          TRAEFIK_DASHBOARD_DOMAIN: ${{ secrets.TRAEFIK_DASHBOARD_DOMAIN }}
+          TRAEFIK_ACME_EMAIL: ${{ secrets.TRAEFIK_ACME_EMAIL }}
+          TRAEFIK_DATA_PATH: ${{ secrets.TRAEFIK_DATA_PATH }}
+          HOST_DATA_PATH: ${{ secrets.HOST_DATA_PATH }}
+          TELEGRAM_BOT_USERNAME: ${{ secrets.TELEGRAM_BOT_USERNAME }}
+          JAVA_API_KEY: ${{ secrets.JAVA_API_KEY }}
+          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+          DONATE_TON: ${{ secrets.DONATE_TON }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          write_env() {
+            local name="$1"
+            local value="${!name}"
+            if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+              echo "::error title=Invalid secret::${name} must not contain newline characters for .env deployment"
+              exit 1
+            fi
+            value=${value//\'/\'\\\'\'}
+            printf "%s='%s'\n" "$name" "$value"
+          }
+
+          IMAGE_TAG="${IMAGE_TAG:0:7}"
+
+          umask 077
+          {
+            write_env TELEGRAM_BOT_TOKEN
+            write_env TELEGRAM_API_ID
+            write_env TELEGRAM_API_HASH
+            write_env TELEGRAM_SESSION_STRING
+            write_env DASHBOARD_ADMIN_TG_ID
+            write_env TRAEFIK_DASHBOARD_DOMAIN
+            write_env TRAEFIK_ACME_EMAIL
+            write_env TRAEFIK_DATA_PATH
+            write_env HOST_DATA_PATH
+            write_env TELEGRAM_BOT_USERNAME
+            write_env JAVA_API_KEY
+            write_env REDIS_PASSWORD
+            write_env DONATE_TON
+            write_env IMAGE_TAG
+          } > .env
+
+      - name: Copy deployment files to server
         # SECURITY: pinned to SHA to prevent supply-chain attack (tag can be moved).
         # SHA = appleboy/scp-action@v0.1.7
         # To bump: gh api repos/appleboy/scp-action/git/refs/tags/<TAG> --jq '.object.sha'
@@ -117,7 +166,7 @@ jobs:
           port: ${{ secrets.SERVER_PORT }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          source: docker-compose.prod.yml
+          source: docker-compose.prod.yml,.env
           target: ${{ secrets.SERVER_DEPLOY_PATH }}/
           strip_components: 0
 
@@ -142,26 +191,8 @@ jobs:
             docker network inspect traefik-proxy >/dev/null 2>&1 \
               || docker network create traefik-proxy
 
-            # ── Секреты в .env (не коммитится) ──────────────────────────────
-            # Структура сервисов — в docker-compose.prod.yml (в репо).
-            # Разделение: конфиг → git, секреты → GitHub Secrets → .env на сервере.
-            umask 077
-            {
-              echo "TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}"
-              echo "TELEGRAM_API_ID=${{ secrets.TELEGRAM_API_ID }}"
-              echo "TELEGRAM_API_HASH=${{ secrets.TELEGRAM_API_HASH }}"
-              echo "TELEGRAM_SESSION_STRING=${{ secrets.TELEGRAM_SESSION_STRING }}"
-              echo "DASHBOARD_ADMIN_TG_ID=${{ secrets.DASHBOARD_ADMIN_TG_ID }}"
-              echo "TRAEFIK_DASHBOARD_DOMAIN=${{ secrets.TRAEFIK_DASHBOARD_DOMAIN }}"
-              echo "TRAEFIK_ACME_EMAIL=${{ secrets.TRAEFIK_ACME_EMAIL }}"
-              echo "TRAEFIK_DATA_PATH=${{ secrets.TRAEFIK_DATA_PATH }}"
-              echo "HOST_DATA_PATH=${{ secrets.HOST_DATA_PATH }}"
-              echo "TELEGRAM_BOT_USERNAME=${{ secrets.TELEGRAM_BOT_USERNAME }}"
-              echo "JAVA_API_KEY=${{ secrets.JAVA_API_KEY }}"
-              echo "REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}"
-              echo "DONATE_TON=${{ secrets.DONATE_TON }}"
-              echo "IMAGE_TAG=$(echo '${{ github.sha }}' | cut -c1-7)"
-            } > .env
+            # .env is generated on the GitHub runner and copied with scp so
+            # secrets are not interpolated into this remote shell script.
             chmod 600 .env
 
             echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
