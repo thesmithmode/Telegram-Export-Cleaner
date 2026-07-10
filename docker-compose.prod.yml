@@ -76,7 +76,7 @@ services:
   # File provider (/config) позволяет добавлять маршруты без изменения этого файла.
   # ===========================================================================
   traefik:
-    image: traefik:v3.0
+    image: traefik:v3.6.13
     container_name: telegram-cleaner-traefik
     labels:
       - "project=telegram-cleaner"
