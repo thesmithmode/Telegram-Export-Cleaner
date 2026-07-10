@@ -5,6 +5,8 @@
             setCountBadge, initSortableTable, onReady, createElement } = window.Dashboard || {};
     if (!fetchJson) { return; }
     const el = createElement;
+    // Give Telegram a short handoff window before closing the Mini App after opening an external chat.
+    const TELEGRAM_WEBAPP_CLOSE_DELAY_MS = 120;
 
     function normalizeUsername(username) {
         if (!username) { return null; }
@@ -30,7 +32,7 @@
     function closeMiniAppAfterOpening() {
         const webApp = window.Telegram?.WebApp;
         if (webApp?.close) {
-            window.setTimeout(() => webApp.close(), 120);
+            window.setTimeout(() => webApp.close(), TELEGRAM_WEBAPP_CLOSE_DELAY_MS);
         }
     }
 
@@ -45,7 +47,9 @@
             return;
         }
 
-        window.location.href = telegramLink.appHref;
+        const targetHref = telegramLink.appHref || telegramLink.href;
+        if (!targetHref) { return; }
+        window.location.href = targetHref;
         closeMiniAppAfterOpening();
     }
 

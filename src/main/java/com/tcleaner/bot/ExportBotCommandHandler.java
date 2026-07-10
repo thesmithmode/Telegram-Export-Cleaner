@@ -251,7 +251,7 @@ public class ExportBotCommandHandler {
     }
 
     private static boolean isExportableChat(ChatFullInfo chatInfo) {
-        if (chatInfo.getType() == null) {
+        if (chatInfo == null || chatInfo.getType() == null) {
             return false;
         }
         return EXPORTABLE_CHAT_TYPES.contains(chatInfo.getType().toLowerCase(Locale.ROOT));
