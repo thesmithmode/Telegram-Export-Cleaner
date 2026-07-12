@@ -13,11 +13,6 @@
         return String(username).replace(/^@+/, "");
     }
 
-    function normalizeUsername(username) {
-        if (!username) { return null; }
-        return String(username).replace(/^@+/, "");
-    }
-
     function telegramUserLink(u) {
         const username = normalizeUsername(u.username);
         if (username) {
@@ -37,11 +32,10 @@
     function closeMiniAppAfterOpening() {
         const webApp = window.Telegram?.WebApp;
         if (webApp?.close) {
-<<<<<<< dev
-            window.setTimeout(() => webApp.close(), TELEGRAM_WEBAPP_CLOSE_DELAY_MS);
-=======
-            window.setTimeout(() => webApp.close(), 120);
->>>>>>> main
+            window.setTimeout(
+                () => webApp.close(),
+                TELEGRAM_WEBAPP_CLOSE_DELAY_MS
+            );
         }
     }
 
@@ -56,13 +50,9 @@
             return;
         }
 
-<<<<<<< dev
         const targetHref = telegramLink.appHref || telegramLink.href;
         if (!targetHref) { return; }
         window.location.href = targetHref;
-=======
-        window.location.href = telegramLink.appHref;
->>>>>>> main
         closeMiniAppAfterOpening();
     }
 
