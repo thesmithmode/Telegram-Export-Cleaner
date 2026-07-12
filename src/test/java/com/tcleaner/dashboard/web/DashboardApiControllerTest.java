@@ -167,6 +167,20 @@ class DashboardApiControllerTest {
                         org.hamcrest.Matchers.greaterThanOrEqualTo(2))));
     }
 
+
+    @Test
+    @DisplayName("ADMIN: /stats/users — пустой список возвращается как []")
+    void usersListAdminEmpty() throws Exception {
+        eventRepo.deleteAll();
+        botUserRepo.deleteAll();
+        em.flush();
+        cacheManager.getCacheNames().forEach(n -> cacheManager.getCache(n).clear());
+
+        mockMvc.perform(get("/dashboard/api/stats/users").with(user(ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", org.hamcrest.Matchers.hasSize(0)));
+    }
+
     @Test
     @DisplayName("USER: /stats/users — 403 (URL-guard в security config)")
     void usersListUserForbidden() throws Exception {

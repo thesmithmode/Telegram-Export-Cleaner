@@ -390,7 +390,7 @@ class MessageCache:
             )
 
         # Publish cache:ranges ВНЕ lock — Redis socket_timeout=10с не должен
-        # блокировать следующий store на этот же чат. SQLite уже commited,
+        # блокировать следующий store на этот же чат. SQLite уже committed,
         # publish best-effort: при provider outage Java увидит stale ranges
         # (до следующего успешного store), но не зомби-блок на чат.
         # Topic-aware skip оставлен здесь же — Java логика без topic-awareness.
