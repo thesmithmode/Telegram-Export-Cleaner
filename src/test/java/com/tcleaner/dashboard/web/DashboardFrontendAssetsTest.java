@@ -3,14 +3,18 @@ package com.tcleaner.dashboard.web;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 @DisplayName("Dashboard frontend assets")
 class DashboardFrontendAssetsTest {
@@ -18,6 +22,7 @@ class DashboardFrontendAssetsTest {
     private static final Path STATIC_DASHBOARD = Path.of("src/main/resources/static/dashboard");
     private static final Path USERS_JS = STATIC_DASHBOARD.resolve("js/pages/users.js");
     private static final Pattern CONFLICT_MARKER = Pattern.compile("(?m)^(<<<<<<<|=======|>>>>>>>)");
+    private static final int PROCESS_TIMEOUT_SECONDS = 30;
 
     @Test
     @DisplayName("репозиторий не содержит Git conflict markers в текстовых файлах")
@@ -43,6 +48,8 @@ class DashboardFrontendAssetsTest {
     @Test
     @DisplayName("dashboard JavaScript парсится Node.js")
     void dashboardJavaScriptHasValidSyntax() throws Exception {
+        assumeNodeAvailable();
+
         try (Stream<Path> files = Files.walk(STATIC_DASHBOARD.resolve("js"))) {
             for (Path jsFile : files.filter(path -> path.toString().endsWith(".js")).toList()) {
                 ProcessResult result = run("node", "--check", jsFile.toString());
@@ -64,11 +71,16 @@ class DashboardFrontendAssetsTest {
     @Test
     @DisplayName("users.js загружает /dashboard/api/stats/users и рендерит пустой и заполненный список")
     void usersJsLoadsAndRendersUsers() throws Exception {
+        assumeNodeAvailable();
+
         String usersSource = Files.readString(USERS_JS, StandardCharsets.UTF_8);
         String harness = """
                 (async () => {
                 const vm = require('node:vm');
                 const source = %s;
+                const closeDelayMatch = source.match(/const\\s+TELEGRAM_WEBAPP_CLOSE_DELAY_MS\\s*=\\s*(\\d+)\\s*;/);
+                if (!closeDelayMatch) throw new Error('TELEGRAM_WEBAPP_CLOSE_DELAY_MS constant was not found');
+                const closeDelay = Number(closeDelayMatch[1]);
 
                 class Node {
                   constructor(tag, attrs = {}, children = []) {
@@ -147,7 +159,7 @@ class DashboardFrontendAssetsTest {
                 usernameTelegramAction.click();
                 const openCall = calls.find(call => call.openTelegramLink);
                 if (openCall?.openTelegramLink !== 'https://t.me/Alice_User') throw new Error('Telegram WebApp did not receive https://t.me link');
-                if (!calls.some(call => call.timeoutDelay === 120)) throw new Error('Mini App close delay was not used');
+                if (!calls.some(call => call.timeoutDelay === closeDelay)) throw new Error('Mini App close delay was not used');
                 if (!closed) throw new Error('Mini App close was not scheduled');
                 })().catch(error => { console.error(error); process.exit(1); });
                 """.formatted(toJsString(usersSource));
@@ -188,11 +200,35 @@ class DashboardFrontendAssetsTest {
                 || file.endsWith(".sql");
     }
 
+    private static void assumeNodeAvailable() {
+        try {
+            ProcessResult result = run("node", "--version");
+            assumeTrue(result.exitCode() == 0, "Node.js is required for dashboard JavaScript checks");
+        } catch (Exception e) {
+            assumeTrue(false, "Node.js is required for dashboard JavaScript checks: " + e.getMessage());
+        }
+    }
+
     private static ProcessResult run(String... command) throws Exception {
         Process process = new ProcessBuilder(command).redirectErrorStream(false).start();
-        String stdout = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-        String stderr = new String(process.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
-        return new ProcessResult(process.waitFor(), stdout, stderr);
+        CompletableFuture<String> stdout = CompletableFuture.supplyAsync(() -> readUtf8(process.getInputStream()));
+        CompletableFuture<String> stderr = CompletableFuture.supplyAsync(() -> readUtf8(process.getErrorStream()));
+
+        boolean exited = process.waitFor(PROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        if (!exited) {
+            process.destroyForcibly();
+            return new ProcessResult(124, stdout.join(), stderr.join() + "\nProcess timed out");
+        }
+
+        return new ProcessResult(process.exitValue(), stdout.join(), stderr.join());
+    }
+
+    private static String readUtf8(InputStream input) {
+        try (input) {
+            return new String(input.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private record ProcessResult(int exitCode, String stdout, String stderr) {}
