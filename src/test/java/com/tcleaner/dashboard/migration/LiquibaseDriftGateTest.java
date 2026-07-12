@@ -37,7 +37,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
  * @EnabledIf, чтобы не ломать сборку в средах без VCS.
  */
 @DisplayName("Liquibase drift gate")
-@EnabledIf("isGitAvailable")
+@EnabledIf("hasMainChangelogRef")
 class LiquibaseDriftGateTest {
 
     private static final String CHANGELOG_PATH = "src/main/resources/db/changelog/db.changelog-master.sql";
@@ -91,9 +91,14 @@ class LiquibaseDriftGateTest {
         return out;
     }
 
-    static boolean isGitAvailable() {
+    static boolean hasMainChangelogRef() {
+        return commandSucceeds("git", "--version")
+                && commandSucceeds("git", "cat-file", "-e", "origin/main:" + CHANGELOG_PATH);
+    }
+
+    private static boolean commandSucceeds(String... command) {
         try {
-            Process p = new ProcessBuilder("git", "--version").redirectErrorStream(true).start();
+            Process p = new ProcessBuilder(command).redirectErrorStream(true).start();
             p.getInputStream().readAllBytes();
             return p.waitFor() == 0;
         } catch (Exception e) {
