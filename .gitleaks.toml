@@ -8,6 +8,7 @@ useDefault = true
 # (длина+энтропия), чтобы покрывать валидацию formata. Это НЕ настоящие секреты.
 [allowlist]
 description = "Test fixtures и snapshot ключи — не настоящие секреты"
+condition = "AND"
 paths = [
     '''src/test/.*\.(java|kt)$''',
     '''export-worker/tests/.*\.py$''',
