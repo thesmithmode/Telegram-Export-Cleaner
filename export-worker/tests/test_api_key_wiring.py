@@ -108,8 +108,14 @@ class TestDeploymentWiring:
 
     def test_build_workflow_writes_key_to_env_file(self):
         build = (REPO_ROOT / ".github/workflows/build.yml").read_text()
-        assert "JAVA_API_KEY=${{ secrets.JAVA_API_KEY }}" in build, (
-            "build.yml должен писать JAVA_API_KEY в .env на сервере из GitHub Secrets"
+        assert "JAVA_API_KEY: ${{ secrets.JAVA_API_KEY }}" in build, (
+            "build.yml должен передавать JAVA_API_KEY в безопасное окружение шага deploy"
+        )
+        assert "write_env JAVA_API_KEY" in build, (
+            "build.yml должен записывать JAVA_API_KEY в .env через экранирующий helper"
+        )
+        assert "echo \"JAVA_API_KEY=${{ secrets.JAVA_API_KEY }}\"" not in build, (
+            "build.yml не должен подставлять секрет в удалённый shell-скрипт"
         )
 
 
