@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # Daily SQLite backup for message cache and dashboard DBs.
 #
-# Usage on host (cron):
-#   BASE=/var/lib/telegram-cleaner (or override via env)
-#   0 4 * * * root TELEGRAM_CLEANER_BASE=/path /opt/telegram-cleaner/backup-cache.sh \
-#       >> /var/log/telegram-cleaner-backup.log 2>&1
+# Usage in root user crontab (`sudo crontab -e`):
+#   0 4 * * * TELEGRAM_CLEANER_BASE=/root/telegram-cleaner /root/telegram-export-cleaner/ops/backup-cache.sh >> /var/log/telegram-cleaner-backup.log 2>&1
 #
 # Expects the following layout under $BASE:
 #   cache/messages.db        — written by python-worker
@@ -49,6 +47,7 @@ backup_db() {
     local start=$SECONDS
 
     sqlite3 "$src" ".backup '$tmp'"
+    chmod 600 "$tmp" || { echo "[$(date -u +%FT%TZ)] ERROR: chmod 600 failed for $name tmp backup" >&2; rm -f "$tmp"; return 1; }
 
     # Integrity check before compressing — catch corruption early.
     # PRAGMA integrity_check returns "ok" or one error per line.
@@ -62,6 +61,7 @@ backup_db() {
 
     gzip -f "$tmp" || { echo "[$(date -u +%FT%TZ)] ERROR: gzip failed for $name" >&2; rm -f "$tmp"; return 1; }
     mv "${tmp}.gz" "$out" || { echo "[$(date -u +%FT%TZ)] ERROR: mv failed for $name" >&2; return 1; }
+    chmod 600 "$out" || { echo "[$(date -u +%FT%TZ)] ERROR: chmod 600 failed for $name backup" >&2; rm -f "$out"; return 1; }
 
     local elapsed=$((SECONDS - start))
     local size

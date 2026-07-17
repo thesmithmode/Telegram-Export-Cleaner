@@ -277,24 +277,6 @@ class ExportWorker:
         await self.clear_active_processing_job()
         await self.clear_heartbeat(job.task_id)
 
-    async def _try_session_recovery(self) -> bool:
-        try:
-            raw = await self.control_redis.get(settings.REDIS_SESSION_VAULT_KEY)
-            if not raw:
-                logger.warning("SESSION_INVALID: vault key absent, cannot auto-recover")
-                return False
-            new_session = raw.decode() if isinstance(raw, bytes) else raw
-            logger.info("SESSION_INVALID: vault key found, attempting reconnect")
-            if await self.telegram_client.try_reconnect(new_session):
-                await self.control_redis.delete(settings.REDIS_SESSION_VAULT_KEY)
-                logger.info("SESSION_INVALID: auto-recovery succeeded, resuming worker")
-                return True
-            logger.warning("SESSION_INVALID: reconnect with vault session failed")
-            return False
-        except Exception as e:
-            logger.warning(f"SESSION_INVALID: vault recovery error: {e}")
-            return False
-
     async def _alert_admin_session_invalid(self) -> None:
         """Уведомляет администратора о невалидной MTProto-сессии напрямую через
         Bot API (httpx). Не зависит от Pyrogram и MTProto. Никогда не бросает —
@@ -392,12 +374,10 @@ class ExportWorker:
             await self.queue_consumer.mark_job_failed(job.task_id, error, job.subscription_id, job.user_id)
             await self._cleanup_job(job)
 
-            # SESSION_INVALID = permanent без recovery. Пробуем vault-ключ в Redis:
-            # если там лежит свежий session string — переподключаемся и продолжаем.
-            # При успехе текущий job уже зафейлен, но следующие пойдут нормально.
+            # SESSION_INVALID means the configured MTProto session is no longer valid.
+            # Do not recover from Redis: MTProto session strings are bearer credentials
+            # and must not be read from the shared queue/status database.
             if error_reason == "SESSION_INVALID":
-                if await self._try_session_recovery():
-                    return False, job, None, None
                 await self._alert_admin_session_invalid()
                 logger.critical("SESSION_INVALID — terminating worker, requires manual session refresh")
                 sys.exit(1)
@@ -620,7 +600,7 @@ class ExportWorker:
             await self.queue_consumer.mark_job_completed(
                 job.task_id,
                 bot_user_id=bot_user_id_for_event,
-                subscription_id=job.subscription_id if direct_cache_export else None,
+                subscription_id=job.subscription_id,
                 messages_count=msg_count if direct_cache_export else None,
                 bytes_count=direct_bytes_count if direct_cache_export else None,
             )
@@ -912,6 +892,7 @@ class ExportWorker:
                 is_cancelled_fn=self._make_cancel_checker(job.task_id),
             )
             gap_fetched = 0
+            gap_fetch_failed = False
             try:
                 new_count = await self._run_batch_loop(
                     job, iter_msgs, tracker, initial_count=fetched_count
@@ -923,10 +904,16 @@ class ExportWorker:
             except ExportCancelled:
                 raise
             except Exception as e:
+                gap_fetch_failed = True
                 logger.warning(f"Failed fetching date gap [{gap_from} - {gap_to}]: {e}")
 
             if gap_fetched:
                 logger.info(f"  Fetched {gap_fetched} messages for [{gap_from} - {gap_to}]")
+            elif gap_fetch_failed:
+                logger.info(
+                    f"  Gap [{gap_from} - {gap_to}] was not marked as checked "
+                    "because Telegram fetch failed"
+                )
             elif self.message_cache and self.message_cache.enabled:
                 # Telegram вернул 0 сообщений — диапазон проверен, фиксируем чтобы не ходить снова
                 await self.message_cache.mark_date_range_checked(job.chat_id, gap_from, gap_to, topic_id=tid)

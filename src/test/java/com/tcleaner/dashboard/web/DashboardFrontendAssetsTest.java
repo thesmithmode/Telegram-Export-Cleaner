@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
@@ -23,6 +24,8 @@ class DashboardFrontendAssetsTest {
     private static final Path USERS_JS = STATIC_DASHBOARD.resolve("js/pages/users.js");
     private static final Pattern CONFLICT_MARKER = Pattern.compile("(?m)^(<<<<<<<|=======|>>>>>>>)");
     private static final int PROCESS_TIMEOUT_SECONDS = 30;
+    private static final Set<String> IGNORED_REPOSITORY_DIRECTORIES = Set.of(
+            ".git", "target", ".venv", ".uv-cache", ".pytest_cache", "__pycache__", "node_modules");
 
     @Test
     @DisplayName("репозиторий не содержит Git conflict markers в текстовых файлах")
@@ -177,9 +180,12 @@ class DashboardFrontendAssetsTest {
     }
 
     private static boolean isRepositoryFile(Path path) {
-        String normalized = path.normalize().toString();
-        return !normalized.startsWith(".git/")
-                && !normalized.startsWith("target/");
+        for (Path segment : path.normalize()) {
+            if (IGNORED_REPOSITORY_DIRECTORIES.contains(segment.toString())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static boolean isTextSourceFile(Path path) {

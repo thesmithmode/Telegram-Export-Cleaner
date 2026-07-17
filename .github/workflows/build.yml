@@ -49,7 +49,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Extract image metadata
         id: meta
@@ -107,7 +107,61 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Copy docker-compose.prod.yml to server
+      - name: Create production env file
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          TELEGRAM_SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
+          DASHBOARD_ADMIN_TG_ID: ${{ secrets.DASHBOARD_ADMIN_TG_ID }}
+          TRAEFIK_DASHBOARD_DOMAIN: ${{ secrets.TRAEFIK_DASHBOARD_DOMAIN }}
+          TRAEFIK_ACME_EMAIL: ${{ secrets.TRAEFIK_ACME_EMAIL }}
+          TRAEFIK_DATA_PATH: ${{ secrets.TRAEFIK_DATA_PATH }}
+          HOST_DATA_PATH: ${{ secrets.HOST_DATA_PATH }}
+          TELEGRAM_BOT_USERNAME: ${{ secrets.TELEGRAM_BOT_USERNAME }}
+          JAVA_API_KEY: ${{ secrets.JAVA_API_KEY }}
+          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+          DONATE_TON: ${{ secrets.DONATE_TON }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          write_env() {
+            local name="$1"
+            local value="${!name}"
+            if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+              echo "::error title=Invalid secret::${name} must not contain newline characters for .env deployment"
+              exit 1
+            fi
+            # Docker Compose dotenv: double-quoted values support predictable
+            # escaping. Escape backslash/quote and double dollar so interpolation
+            # preserves the original secret byte-for-byte.
+            value=${value//\\/\\\\}
+            value=${value//\"/\\\"}
+            value=${value//\$/\$\$}
+            printf '%s="%s"\n' "$name" "$value"
+          }
+
+          IMAGE_TAG="${IMAGE_TAG:0:7}"
+
+          umask 077
+          {
+            write_env TELEGRAM_BOT_TOKEN
+            write_env TELEGRAM_API_ID
+            write_env TELEGRAM_API_HASH
+            write_env TELEGRAM_SESSION_STRING
+            write_env DASHBOARD_ADMIN_TG_ID
+            write_env TRAEFIK_DASHBOARD_DOMAIN
+            write_env TRAEFIK_ACME_EMAIL
+            write_env TRAEFIK_DATA_PATH
+            write_env HOST_DATA_PATH
+            write_env TELEGRAM_BOT_USERNAME
+            write_env JAVA_API_KEY
+            write_env REDIS_PASSWORD
+            write_env DONATE_TON
+            write_env IMAGE_TAG
+          } > .env
+
+      - name: Copy deployment files to server
         # SECURITY: pinned to SHA to prevent supply-chain attack (tag can be moved).
         # SHA = appleboy/scp-action@v0.1.7
         # To bump: gh api repos/appleboy/scp-action/git/refs/tags/<TAG> --jq '.object.sha'
@@ -117,7 +171,7 @@ jobs:
           port: ${{ secrets.SERVER_PORT }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          source: docker-compose.prod.yml
+          source: docker-compose.prod.yml,.env
           target: ${{ secrets.SERVER_DEPLOY_PATH }}/
           strip_components: 0
 
@@ -142,42 +196,34 @@ jobs:
             docker network inspect traefik-proxy >/dev/null 2>&1 \
               || docker network create traefik-proxy
 
-            # ── Секреты в .env (не коммитится) ──────────────────────────────
-            # Структура сервисов — в docker-compose.prod.yml (в репо).
-            # Разделение: конфиг → git, секреты → GitHub Secrets → .env на сервере.
-            umask 077
-            {
-              echo "TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}"
-              echo "TELEGRAM_API_ID=${{ secrets.TELEGRAM_API_ID }}"
-              echo "TELEGRAM_API_HASH=${{ secrets.TELEGRAM_API_HASH }}"
-              echo "TELEGRAM_SESSION_STRING=${{ secrets.TELEGRAM_SESSION_STRING }}"
-              echo "DASHBOARD_ADMIN_TG_ID=${{ secrets.DASHBOARD_ADMIN_TG_ID }}"
-              echo "TRAEFIK_DASHBOARD_DOMAIN=${{ secrets.TRAEFIK_DASHBOARD_DOMAIN }}"
-              echo "TRAEFIK_ACME_EMAIL=${{ secrets.TRAEFIK_ACME_EMAIL }}"
-              echo "TRAEFIK_DATA_PATH=${{ secrets.TRAEFIK_DATA_PATH }}"
-              echo "HOST_DATA_PATH=${{ secrets.HOST_DATA_PATH }}"
-              echo "TELEGRAM_BOT_USERNAME=${{ secrets.TELEGRAM_BOT_USERNAME }}"
-              echo "JAVA_API_KEY=${{ secrets.JAVA_API_KEY }}"
-              echo "REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}"
-              echo "DONATE_TON=${{ secrets.DONATE_TON }}"
-              echo "IMAGE_TAG=$(echo '${{ github.sha }}' | cut -c1-7)"
-            } > .env
+            # .env is generated on the GitHub runner and copied with scp so
+            # secrets are not interpolated into this remote shell script.
             chmod 600 .env
 
             echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
 
-            # ── Atomic deploy: pin предыдущие :latest как :rollback ─────────
+            # ── Atomic deploy: pin запущенные образы как :rollback ──────────
             # Требование: либо весь стек поднялся и здоров, либо никакого
             # частичного состояния. Раньше при health fail новые контейнеры
             # оставались запущенными (сломанные), а старые :latest уже были
             # перетёрты pull'ом — откатываться было нечем. Теперь перед pull
-            # сохраняем текущие image id как :rollback и восстанавливаем их
+            # сохраняем image id реально запущенных контейнеров как :rollback и
+            # восстанавливаем их с IMAGE_TAG=rollback. Локальный :latest нельзя
+            # использовать как источник истины: compose запускает SHA-тег и
+            # :latest на сервере может отсутствовать или указывать на старый релиз.
             # при любой ошибке в критическом блоке.
             JAVA_IMG=ghcr.io/${{ github.repository_owner }}/telegram-export-cleaner
             WORKER_IMG=ghcr.io/${{ github.repository_owner }}/telegram-export-python-worker
 
-            PREV_JAVA_ID=$(docker image inspect "$JAVA_IMG:latest" --format='{{.Id}}' 2>/dev/null || echo "")
-            PREV_WORKER_ID=$(docker image inspect "$WORKER_IMG:latest" --format='{{.Id}}' 2>/dev/null || echo "")
+            DEPLOY_IMAGE_TAG=$(docker compose -f docker-compose.prod.yml --env-file .env \
+              config --environment | sed -n 's/^IMAGE_TAG=//p')
+            if [ -z "$DEPLOY_IMAGE_TAG" ]; then
+              echo "FAIL: IMAGE_TAG отсутствует в .env"
+              exit 1
+            fi
+
+            PREV_JAVA_ID=$(docker inspect --format='{{.Image}}' telegram-export-java-bot 2>/dev/null || echo "")
+            PREV_WORKER_ID=$(docker inspect --format='{{.Image}}' telegram-export-worker 2>/dev/null || echo "")
             # if-форма обязательна под `set -e`: `[ -n "" ] && cmd` exit 1 уронит скрипт.
             if [ -n "$PREV_JAVA_ID" ];   then docker tag "$PREV_JAVA_ID"   "$JAVA_IMG:rollback";   fi
             if [ -n "$PREV_WORKER_ID" ]; then docker tag "$PREV_WORKER_ID" "$WORKER_IMG:rollback"; fi
@@ -185,14 +231,14 @@ jobs:
 
             rollback() {
               echo "Откат стека на предыдущие образы..."
-              if [ -n "$PREV_JAVA_ID" ];   then docker tag "$JAVA_IMG:rollback"   "$JAVA_IMG:latest";   fi
-              if [ -n "$PREV_WORKER_ID" ]; then docker tag "$WORKER_IMG:rollback" "$WORKER_IMG:latest"; fi
-              if [ -z "$PREV_JAVA_ID" ] && [ -z "$PREV_WORKER_ID" ]; then
-                echo "Нет rollback-точки (первый деплой) — останавливаем стек, прод в down state"
+              if [ -z "$PREV_JAVA_ID" ] || [ -z "$PREV_WORKER_ID" ]; then
+                echo "Rollback-точка неполная — останавливаем стек, чтобы не запускать смешанную версию"
                 docker compose -f docker-compose.prod.yml --env-file .env down || true
                 return
               fi
-              docker compose -f docker-compose.prod.yml --env-file .env up -d --force-recreate --remove-orphans
+
+              IMAGE_TAG=rollback docker compose -f docker-compose.prod.yml --env-file .env \
+                up -d --force-recreate --remove-orphans
             }
 
             docker compose -f docker-compose.prod.yml --env-file .env pull
@@ -239,7 +285,7 @@ jobs:
             echo "--- socket-proxy reachability from traefik container ---"
             # Проверяем: может ли Traefik говорить с socket-proxy на порту 2375
             docker exec telegram-cleaner-traefik \
-              wget -qO- "http://socket-proxy:2375/containers/json?limit=5" 2>/dev/null \
+              wget -qO /dev/null "http://socket-proxy:2375/containers/json?limit=5" 2>/dev/null \
               && echo "socket-proxy: OK" \
               || echo "socket-proxy: UNREACHABLE from traefik"
 
@@ -250,7 +296,17 @@ jobs:
               || echo "traefik-proxy network inspect failed"
 
             echo "--- real Traefik HTTP smoke test (through routing, NOT bypass) ---"
-            DOMAIN=$(grep '^TRAEFIK_DASHBOARD_DOMAIN=' .env | cut -d= -f2- || echo "")
+            # Значение разбирает сам Docker Compose: dotenv-кавычки снимаются,
+            # а секреты не исполняются как shell-код и не печатаются в лог.
+            DOMAIN=$(docker compose -f docker-compose.prod.yml --env-file .env \
+              config --environment | sed -n 's/^TRAEFIK_DASHBOARD_DOMAIN=//p')
+            case "$DOMAIN" in
+              ""|*[!A-Za-z0-9.-]*)
+                echo "FAIL: TRAEFIK_DASHBOARD_DOMAIN отсутствует или не является hostname"
+                rollback
+                exit 1
+                ;;
+            esac
             if [ -n "$DOMAIN" ]; then
               HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
                 --connect-timeout 5 --max-time 10 \

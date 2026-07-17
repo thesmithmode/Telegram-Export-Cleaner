@@ -348,6 +348,26 @@ class TestUploadFileToJava:
         finally:
             p.stop()
 
+    async def test_stream_disk_checkpoint_reserves_next_unchecked_window(self, tmp_path):
+        client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path), EXPORT_MIN_FREE_DISK_MB=1)
+        try:
+            with (
+                patch("java_client._DISK_FREE_CHECK_INTERVAL_BYTES", 10),
+                patch.object(client, "_has_free_disk_for_write", return_value=True) as guard,
+            ):
+                result = await client._stream_convert_response_to_file(
+                    _StreamResponse(200, chunks=[b"x" * 11, b"\n##OK##"]),
+                    task_id="reserve-next-window",
+                )
+            try:
+                assert result is not None
+                assert [call.args[1] for call in guard.call_args_list] == [10, 10]
+            finally:
+                if result:
+                    os.unlink(result)
+        finally:
+            p.stop()
+
     async def test_missing_sentinel_cleanup_ignores_already_removed_file(self, tmp_path):
         client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
         try:
@@ -1006,7 +1026,7 @@ class TestDirectCachedResponse:
     async def test_direct_cached_response_extends_previous_artifact_with_fresh_tail(self, tmp_path):
         client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
         artifact = tmp_path / "artifact.txt"
-        artifact.write_text("20260609 Old\n", encoding="utf-8")
+        artifact.write_text("20260609 Old\n", encoding="utf-8", newline="\n")
         cache = _LineCache(
             lines=[None, "20260610 New A", "20260610 New B"],
             latest_artifact=(str(artifact), artifact.stat().st_size, 10, 1),
@@ -1308,7 +1328,7 @@ class TestDirectCachedResponse:
         client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
         try:
             path = tmp_path / "result.txt"
-            path.write_text("20260609 hello\n", encoding="utf-8")
+            path.write_text("20260609 hello\n", encoding="utf-8", newline="\n")
             with patch.object(
                 client, "_stream_messages_to_cleaned_text", new_callable=AsyncMock
             ) as mock_stream, patch.object(
@@ -1340,7 +1360,7 @@ class TestDirectCachedResponse:
         client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
         try:
             path = tmp_path / "result.txt"
-            path.write_text("20260609 hello\n", encoding="utf-8")
+            path.write_text("20260609 hello\n", encoding="utf-8", newline="\n")
             with patch.object(
                 client, "_stream_messages_to_cleaned_text", new_callable=AsyncMock
             ) as mock_stream, patch.object(
@@ -1368,7 +1388,7 @@ class TestDirectCachedResponse:
         client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
         try:
             path = tmp_path / "result.txt"
-            path.write_text("20260609 hello\n", encoding="utf-8")
+            path.write_text("20260609 hello\n", encoding="utf-8", newline="\n")
 
             async def remove_before_send(*args, **kwargs):
                 path.unlink()
