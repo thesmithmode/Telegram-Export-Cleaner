@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # Daily SQLite backup for message cache and dashboard DBs.
 #
-# Usage on host (cron):
-#   BASE=/var/lib/telegram-cleaner (or override via env)
-#   0 4 * * * root TELEGRAM_CLEANER_BASE=/path /opt/telegram-cleaner/backup-cache.sh \
-#       >> /var/log/telegram-cleaner-backup.log 2>&1
+# Usage in root user crontab (`sudo crontab -e`):
+#   0 4 * * * TELEGRAM_CLEANER_BASE=/root/telegram-cleaner /root/telegram-export-cleaner/ops/backup-cache.sh >> /var/log/telegram-cleaner-backup.log 2>&1
 #
 # Expects the following layout under $BASE:
 #   cache/messages.db        — written by python-worker

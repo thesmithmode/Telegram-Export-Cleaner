@@ -151,7 +151,15 @@ public class ExportEventIngestionService {
         boolean statusAdvanced = desiredStatus != null && canAdvanceStatus(prev, desiredStatus);
         if (statusAdvanced || deliveryOutcomeCorrection) {
             existing.setStatus(desiredStatus);
-            if (isTerminal(desiredStatus) && existing.getFinishedAt() == null) {
+            if (deliveryOutcomeCorrection) {
+                // A terminal event without subscriptionId describes an intermediate
+                // conversion attempt. The later terminal event with subscriptionId is
+                // the authoritative delivery outcome for the same task.
+                existing.setFinishedAt(payload.getTs() != null ? payload.getTs() : now);
+                if (desiredStatus == ExportStatus.COMPLETED) {
+                    existing.setErrorMessage(null);
+                }
+            } else if (isTerminal(desiredStatus) && existing.getFinishedAt() == null) {
                 existing.setFinishedAt(payload.getTs() != null ? payload.getTs() : now);
             }
         }
@@ -166,6 +174,14 @@ public class ExportEventIngestionService {
             updateSubscriptionOnTerminal(saved);
         } else if (shouldApplyLateSubscriptionOutcome(
                 prev, desiredStatus, prevSubscriptionId, payload.getSubscriptionId())) {
+            if (prev == ExportStatus.FAILED
+                    && desiredStatus == ExportStatus.COMPLETED
+                    && deliveryOutcomeCorrection) {
+                BotUser user = botUserUpserter.upsert(
+                        saved.getBotUserId(), payload.getUsername(),
+                        payload.getDisplayName(), payload.getTs());
+                addSuccessfulRetryMetrics(user, saved);
+            }
             updateSubscriptionOnTerminal(saved);
         }
     }
@@ -209,6 +225,15 @@ public class ExportEventIngestionService {
         }
     }
 
+    private static void addSuccessfulRetryMetrics(BotUser user, ExportEvent event) {
+        if (event.getMessagesCount() != null) {
+            user.setTotalMessages(user.getTotalMessages() + event.getMessagesCount());
+        }
+        if (event.getBytesCount() != null) {
+            user.setTotalBytes(user.getTotalBytes() + event.getBytesCount());
+        }
+    }
+
     private static boolean hasMinimalFieldsForInsert(StatsEventPayload p) {
         return p.getBotUserId() != null
                 && ((p.getChatIdRaw() != null && !p.getChatIdRaw().isBlank())
@@ -234,8 +259,9 @@ public class ExportEventIngestionService {
 
     private static boolean isDeliveryOutcomeCorrection(
             ExportStatus prev, ExportStatus next, Long prevSubscriptionId, Long nextSubscriptionId) {
-        return prev == ExportStatus.COMPLETED
-                && next == ExportStatus.FAILED
+        boolean correctedTerminalOutcome = (prev == ExportStatus.COMPLETED && next == ExportStatus.FAILED)
+                || (prev == ExportStatus.FAILED && next == ExportStatus.COMPLETED);
+        return correctedTerminalOutcome
                 && prevSubscriptionId == null
                 && nextSubscriptionId != null;
     }

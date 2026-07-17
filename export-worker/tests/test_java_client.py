@@ -1026,7 +1026,7 @@ class TestDirectCachedResponse:
     async def test_direct_cached_response_extends_previous_artifact_with_fresh_tail(self, tmp_path):
         client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
         artifact = tmp_path / "artifact.txt"
-        artifact.write_text("20260609 Old\n", encoding="utf-8")
+        artifact.write_text("20260609 Old\n", encoding="utf-8", newline="\n")
         cache = _LineCache(
             lines=[None, "20260610 New A", "20260610 New B"],
             latest_artifact=(str(artifact), artifact.stat().st_size, 10, 1),
@@ -1328,7 +1328,7 @@ class TestDirectCachedResponse:
         client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
         try:
             path = tmp_path / "result.txt"
-            path.write_text("20260609 hello\n", encoding="utf-8")
+            path.write_text("20260609 hello\n", encoding="utf-8", newline="\n")
             with patch.object(
                 client, "_stream_messages_to_cleaned_text", new_callable=AsyncMock
             ) as mock_stream, patch.object(
@@ -1360,7 +1360,7 @@ class TestDirectCachedResponse:
         client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
         try:
             path = tmp_path / "result.txt"
-            path.write_text("20260609 hello\n", encoding="utf-8")
+            path.write_text("20260609 hello\n", encoding="utf-8", newline="\n")
             with patch.object(
                 client, "_stream_messages_to_cleaned_text", new_callable=AsyncMock
             ) as mock_stream, patch.object(
@@ -1388,7 +1388,7 @@ class TestDirectCachedResponse:
         client, p = _make_client(EXPORT_TEMP_DIR=str(tmp_path))
         try:
             path = tmp_path / "result.txt"
-            path.write_text("20260609 hello\n", encoding="utf-8")
+            path.write_text("20260609 hello\n", encoding="utf-8", newline="\n")
 
             async def remove_before_send(*args, **kwargs):
                 path.unlink()

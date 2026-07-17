@@ -31,6 +31,8 @@ dig +short your-domain.example.com
 ```bash
 # Установка Docker (официальный способ)
 curl -fsSL https://get.docker.com | sh
+sudo apt-get update
+sudo apt-get install -y sqlite3
 sudo usermod -aG docker $USER
 newgrp docker
 
@@ -120,11 +122,12 @@ docker compose -f docker-compose.prod.yml --env-file .env up -d --remove-orphans
 ## 6. Бэкапы
 
 ```bash
-# Добавить в crontab (crontab -e):
+# Добавить в root crontab (sudo crontab -e; поле пользователя здесь не указывается):
 # Ежедневно в 4:00 — WAL-safe gzip-бэкап cache/messages.db и dashboard/dashboard.db
-0 4 * * * root TELEGRAM_CLEANER_BASE=${HOST_DATA_PATH} /opt/telegram-cleaner/ops/backup-cache.sh \
-    >> /var/log/telegram-cleaner-backup.log 2>&1
+0 4 * * * TELEGRAM_CLEANER_BASE=/root/telegram-cleaner /root/telegram-export-cleaner/ops/backup-cache.sh >> /var/log/telegram-cleaner-backup.log 2>&1
 ```
+
+Значение `TELEGRAM_CLEANER_BASE` должно совпадать с `HOST_DATA_PATH` из `.env`. Если репозиторий или данные размещены в других каталогах, обновите оба абсолютных пути в cron-команде.
 
 ## 7. Мониторинг
 

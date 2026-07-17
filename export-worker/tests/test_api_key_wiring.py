@@ -86,28 +86,28 @@ class TestJavaClientApiKeyHeader:
 class TestDeploymentWiring:
 
     def test_application_properties_maps_env_to_api_key(self):
-        props = (REPO_ROOT / "src/main/resources/application.properties").read_text()
+        props = (REPO_ROOT / "src/main/resources/application.properties").read_text(encoding="utf-8")
         assert re.search(r"^api\.key=\$\{JAVA_API_KEY:?\}?", props, re.MULTILINE), (
             "application.properties должен содержать 'api.key=${JAVA_API_KEY:}', "
             "иначе Spring не увидит env var и ApiKeyFilter упадёт на старте."
         )
 
     def test_compose_prod_exposes_key_to_java_bot(self):
-        compose = (REPO_ROOT / "docker-compose.prod.yml").read_text()
+        compose = (REPO_ROOT / "docker-compose.prod.yml").read_text(encoding="utf-8")
         java_bot_block = _extract_service_block(compose, "java-bot")
         assert "JAVA_API_KEY=${JAVA_API_KEY}" in java_bot_block, (
             "java-bot должен получать JAVA_API_KEY из .env"
         )
 
     def test_compose_prod_exposes_key_to_python_worker(self):
-        compose = (REPO_ROOT / "docker-compose.prod.yml").read_text()
+        compose = (REPO_ROOT / "docker-compose.prod.yml").read_text(encoding="utf-8")
         worker_block = _extract_service_block(compose, "python-worker")
         assert "JAVA_API_KEY=${JAVA_API_KEY}" in worker_block, (
             "python-worker должен получать JAVA_API_KEY — иначе 401 на /api/convert"
         )
 
     def test_build_workflow_writes_key_to_env_file(self):
-        build = (REPO_ROOT / ".github/workflows/build.yml").read_text()
+        build = (REPO_ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
         assert "JAVA_API_KEY: ${{ secrets.JAVA_API_KEY }}" in build, (
             "build.yml должен передавать JAVA_API_KEY в безопасное окружение шага deploy"
         )
@@ -116,6 +116,45 @@ class TestDeploymentWiring:
         )
         assert "echo \"JAVA_API_KEY=${{ secrets.JAVA_API_KEY }}\"" not in build, (
             "build.yml не должен подставлять секрет в удалённый shell-скрипт"
+        )
+
+    def test_traefik_smoke_reads_unquoted_domain_from_generated_env(self):
+        build = (REPO_ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
+        assert "config --environment | sed -n 's/^TRAEFIK_DASHBOARD_DOMAIN=//p'" in build, (
+            "Traefik smoke должен получить значение через Compose parser без dotenv-кавычек"
+        )
+        assert "grep '^TRAEFIK_DASHBOARD_DOMAIN=' .env" not in build, (
+            "сырой grep сохраняет кавычки write_env и ломает Traefik Host matcher"
+        )
+        assert ". ./.env" not in build, (
+            "Compose dotenv нельзя исполнять как shell-файл: правила escaping различаются"
+        )
+
+    def test_env_writer_uses_compose_compatible_escaping(self):
+        build = (REPO_ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
+        assert r"value=${value//\\/\\\\}" in build, (
+            "write_env должен сначала экранировать backslash для Compose dotenv"
+        )
+        assert r'value=${value//\"/\\\"}' in build, (
+            "write_env должен экранировать двойную кавычку в double-quoted dotenv"
+        )
+        assert r"value=${value//\$/\$\$}" in build, (
+            "write_env должен удваивать dollar, чтобы Compose не интерполировал секрет"
+        )
+        assert "printf '%s=\"%s\"\\n' \"$name\" \"$value\"" in build
+        assert "value=${value//\'/\'\\\'\'}" not in build, (
+            "shell-конкатенация кавычек не поддерживается Docker Compose dotenv parser"
+        )
+
+    def test_rollback_restarts_compose_with_rollback_tag(self):
+        build = (REPO_ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
+        assert "PREV_JAVA_ID=$(docker inspect --format='{{.Image}}' telegram-export-java-bot" in build
+        assert "PREV_WORKER_ID=$(docker inspect --format='{{.Image}}' telegram-export-worker" in build
+        assert "IMAGE_TAG=rollback docker compose" in build, (
+            "compose использует фиксированный IMAGE_TAG, поэтому смены :latest недостаточно для отката"
+        )
+        assert 'if [ -z "$PREV_JAVA_ID" ] || [ -z "$PREV_WORKER_ID" ]; then' in build, (
+            "неполная rollback-точка должна останавливать стек, а не запускать смешанную версию"
         )
 
 

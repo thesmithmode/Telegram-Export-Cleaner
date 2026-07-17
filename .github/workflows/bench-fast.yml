@@ -25,38 +25,37 @@ jobs:
           pip install -r requirements.txt
           pip install psutil fakeredis
 
+      - name: Validate benchmark scripts
+        run: |
+          missing=0
+          for script in bench_cache.py bench_idle.py; do
+            if [ ! -f "../.codex/autoresearch/$script" ]; then
+              echo "::error file=.codex/autoresearch/$script::Required benchmark script is missing"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
       - name: bench_cache (N=1, baseline single-thread)
         timeout-minutes: 2
         run: |
           set -o pipefail
           mkdir -p ../.codex/autoresearch
-          if [ -f ../.codex/autoresearch/bench_cache.py ]; then
-            python ../.codex/autoresearch/bench_cache.py 1 | tee ../.codex/autoresearch/run_cache_n1.log
-          else
-            printf 'bench_name: bench_cache_n1\nbench_status: skipped_missing_script\n' | tee ../.codex/autoresearch/run_cache_n1.log
-          fi
+          python ../.codex/autoresearch/bench_cache.py 1 | tee ../.codex/autoresearch/run_cache_n1.log
 
       - name: bench_cache (N=4, concurrent contention)
         timeout-minutes: 2
         run: |
           set -o pipefail
           mkdir -p ../.codex/autoresearch
-          if [ -f ../.codex/autoresearch/bench_cache.py ]; then
-            python ../.codex/autoresearch/bench_cache.py 4 | tee ../.codex/autoresearch/run_cache_n4.log
-          else
-            printf 'bench_name: bench_cache_n4\nbench_status: skipped_missing_script\n' | tee ../.codex/autoresearch/run_cache_n4.log
-          fi
+          python ../.codex/autoresearch/bench_cache.py 4 | tee ../.codex/autoresearch/run_cache_n4.log
 
       - name: bench_idle (50k pending jobs)
         timeout-minutes: 3
         run: |
           set -o pipefail
           mkdir -p ../.codex/autoresearch
-          if [ -f ../.codex/autoresearch/bench_idle.py ]; then
-            python ../.codex/autoresearch/bench_idle.py | tee ../.codex/autoresearch/run_idle.log
-          else
-            printf 'bench_name: bench_idle\nbench_status: skipped_missing_script\n' | tee ../.codex/autoresearch/run_idle.log
-          fi
+          python ../.codex/autoresearch/bench_idle.py | tee ../.codex/autoresearch/run_idle.log
 
       - name: Summary
         if: always()

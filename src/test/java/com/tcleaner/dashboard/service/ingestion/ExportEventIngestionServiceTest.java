@@ -353,6 +353,79 @@ class ExportEventIngestionServiceTest {
     }
 
     @Test
+    @DisplayName("successful subscription retry overrides failed conversion attempt without subscription")
+    void successfulSubscriptionRetryOverridesFailedConversionAttempt() {
+        ChatSubscription sub = newActiveSubscription(USER_ID, 1);
+        Instant failedAt = TS.plusSeconds(30);
+        Instant completedAt = TS.plusSeconds(40);
+
+        service.ingest(started());
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_FAILED)
+                .taskId(TASK).botUserId(USER_ID)
+                .error("truncated stream").status("failed")
+                .ts(failedAt).build());
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_COMPLETED)
+                .taskId(TASK).botUserId(USER_ID)
+                .subscriptionId(sub.getId())
+                .messagesCount(10L).bytesCount(100L)
+                .status("completed").ts(completedAt).build());
+
+        ExportEvent event = events.findByTaskId(TASK).orElseThrow();
+        BotUser user = users.findById(USER_ID).orElseThrow();
+        ChatSubscription after = subscriptions.findById(sub.getId()).orElseThrow();
+        assertThat(event.getStatus()).isEqualTo(ExportStatus.COMPLETED);
+        assertThat(event.getSubscriptionId()).isEqualTo(sub.getId());
+        assertThat(event.getErrorMessage()).isNull();
+        assertThat(event.getFinishedAt()).isEqualTo(completedAt);
+        assertThat(user.getTotalExports()).isEqualTo(1);
+        assertThat(user.getTotalMessages()).isEqualTo(10L);
+        assertThat(user.getTotalBytes()).isEqualTo(100L);
+        assertThat(after.getLastSuccessAt()).isNotNull();
+        assertThat(after.getConsecutiveFailures()).isZero();
+        assertThat(after.getStatus()).isEqualTo(SubscriptionStatus.ACTIVE);
+    }
+
+    @Test
+    @DisplayName("replayed successful subscription retry is idempotent")
+    void replayedSuccessfulSubscriptionRetryIsIdempotent() {
+        ChatSubscription sub = newActiveSubscription(USER_ID, 1);
+        Instant completedAt = TS.plusSeconds(40);
+        StatsEventPayload completed = StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_COMPLETED)
+                .taskId(TASK).botUserId(USER_ID)
+                .subscriptionId(sub.getId())
+                .messagesCount(10L).bytesCount(100L)
+                .status("completed").ts(completedAt).build();
+
+        service.ingest(started());
+        service.ingest(StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_FAILED)
+                .taskId(TASK).botUserId(USER_ID)
+                .error("truncated stream").status("failed")
+                .ts(TS.plusSeconds(30)).build());
+        service.ingest(completed);
+        ChatSubscription afterFirstSuccess = subscriptions.findById(sub.getId()).orElseThrow();
+        Instant firstSuccessAt = afterFirstSuccess.getLastSuccessAt();
+
+        service.ingest(completed);
+
+        ExportEvent event = events.findByTaskId(TASK).orElseThrow();
+        BotUser user = users.findById(USER_ID).orElseThrow();
+        ChatSubscription afterReplay = subscriptions.findById(sub.getId()).orElseThrow();
+        assertThat(events.count()).isEqualTo(1);
+        assertThat(event.getStatus()).isEqualTo(ExportStatus.COMPLETED);
+        assertThat(event.getFinishedAt()).isEqualTo(completedAt);
+        assertThat(event.getErrorMessage()).isNull();
+        assertThat(user.getTotalExports()).isEqualTo(1);
+        assertThat(user.getTotalMessages()).isEqualTo(10L);
+        assertThat(user.getTotalBytes()).isEqualTo(100L);
+        assertThat(afterReplay.getLastSuccessAt()).isEqualTo(firstSuccessAt);
+        assertThat(afterReplay.getConsecutiveFailures()).isZero();
+    }
+
+    @Test
     @DisplayName("terminal CANCELLED с subscriptionId → lifecycle не трогается (ручная отмена юзером)")
     void cancelledDoesNotMutateSubscription() {
         ChatSubscription sub = newActiveSubscription(USER_ID, 0);
