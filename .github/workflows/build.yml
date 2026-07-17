@@ -161,6 +161,12 @@ jobs:
             write_env IMAGE_TAG
           } > .env
 
+      - name: Allow SCP container to read deployment env file
+        # appleboy/scp-action packages sources in a separate container. The runner
+        # creates .env with umask 077, so this container otherwise cannot read it.
+        # The GitHub-hosted runner is ephemeral; the remote copy is chmod 600 later.
+        run: chmod 644 .env
+
       - name: Copy deployment files to server
         # SECURITY: pinned to SHA to prevent supply-chain attack (tag can be moved).
         # SHA = appleboy/scp-action@v0.1.7
