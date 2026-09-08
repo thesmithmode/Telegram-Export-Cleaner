@@ -6,19 +6,26 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.data.domain.Range;
 import org.springframework.data.redis.connection.stream.MapRecord;
+import org.springframework.data.redis.connection.stream.PendingMessage;
+import org.springframework.data.redis.connection.stream.PendingMessages;
 import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.connection.stream.StreamRecords;
 import org.springframework.data.redis.core.StreamOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
+import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -27,16 +34,14 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Проверяет, что consumer десериализует payload в {@link StatsEventPayload},
- * вызывает {@code handle()} и ACK'ает запись — даже если обработка бросила
- * исключение (at-least-once на уровне стрима, идемпотентность — выше).
+ * Проверяет десериализацию, ACK-стратегию и восстановление transient-событий из Redis PEL.
  */
 @DisplayName("StatsStreamConsumer")
 class StatsStreamConsumerTest {
 
     private ObjectMapper mapper;
     private StringRedisTemplate redis;
-    private StreamOperations<String, Object, Object> streamOps;
+    private StreamOperations<String, String, String> streamOps;
     private StatsStreamProperties props;
     private AtomicReference<StatsEventPayload> captured;
     private StatsStreamConsumer consumer;
@@ -131,7 +136,6 @@ class StatsStreamConsumerTest {
     @DisplayName("transient exception в handle (не JsonProcessing) → НЕТ ACK (будет retry)")
     @SuppressWarnings("unchecked")
     void transientExceptionInHandleSkipsAck() throws Exception {
-        // consumer кидает RuntimeException из handle → catch(Exception) → ack остаётся false
         ObjectProvider<com.tcleaner.dashboard.service.ingestion.ExportEventIngestionService> noIngestion =
                 mock(ObjectProvider.class);
         when(noIngestion.getIfAvailable()).thenReturn(null);
@@ -151,8 +155,74 @@ class StatsStreamConsumerTest {
 
         throwingConsumer.onMessage(record);
 
-        // ACK НЕ должен быть вызван — иначе сообщение потеряется из PEL
         verify(streamOps, never()).acknowledge(anyString(), anyString(), any(String[].class));
+    }
+
+    @Test
+    @DisplayName("stale PEL → XCLAIM → повторная обработка → XACK")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void retryPendingClaimsStaleAndProcesses() throws Exception {
+        PendingMessages pending = pendingWith("0-9", Duration.ofMinutes(1));
+        when(streamOps.pending(eq(props.key()), eq(props.group()), any(Range.class), anyLong()))
+                .thenReturn(pending);
+
+        StatsEventPayload original = StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_STARTED)
+                .taskId("task-retry")
+                .ts(Instant.now())
+                .build();
+        MapRecord<String, String, String> record = StreamRecords.newRecord()
+                .in(props.key())
+                .withId(RecordId.of("0-9"))
+                .ofMap(Map.of("payload", mapper.writeValueAsString(original)));
+        when(streamOps.claim(
+                eq(props.key()), eq(props.group()), eq(props.consumer()),
+                eq(Duration.ofSeconds(30)), any(RecordId[].class)))
+                .thenReturn(List.of(record));
+
+        consumer.retryPending();
+
+        assertThat(captured.get()).isNotNull();
+        assertThat(captured.get().getTaskId()).isEqualTo("task-retry");
+        verify(streamOps).acknowledge(props.key(), props.group(), "0-9");
+    }
+
+    @Test
+    @DisplayName("свежий PEL младше 30 секунд → не claim")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void retryPendingSkipsFreshEntries() {
+        when(streamOps.pending(eq(props.key()), eq(props.group()), any(Range.class), anyLong()))
+                .thenReturn(pendingWith("0-10", Duration.ofSeconds(5)));
+
+        consumer.retryPending();
+
+        verify(streamOps, never()).claim(
+                anyString(), anyString(), anyString(), any(Duration.class), any(RecordId[].class));
+    }
+
+    @Test
+    @DisplayName("пустой PEL → retry ничего не делает")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void retryPendingEmptyIsNoop() {
+        PendingMessages pending = mock(PendingMessages.class);
+        when(pending.isEmpty()).thenReturn(true);
+        when(streamOps.pending(eq(props.key()), eq(props.group()), any(Range.class), anyLong()))
+                .thenReturn(pending);
+
+        consumer.retryPending();
+
+        verify(streamOps, never()).claim(
+                anyString(), anyString(), anyString(), any(Duration.class), any(RecordId[].class));
+    }
+
+    @Test
+    @DisplayName("ошибка Redis при retry PEL → scheduler не падает")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void retryPendingRedisFailureIsGraceful() {
+        when(streamOps.pending(eq(props.key()), eq(props.group()), any(Range.class), anyLong()))
+                .thenThrow(new RuntimeException("Redis down"));
+
+        consumer.retryPending();
     }
 
     @Test
@@ -164,9 +234,8 @@ class StatsStreamConsumerTest {
         MapRecord<String, String, String> record = StreamRecords.newRecord()
                 .in(props.key())
                 .withId(RecordId.of("0-6"))
-                .ofMap(Map.of("payload", "{not-json"));  // JsonProcessingException → ack=true
+                .ofMap(Map.of("payload", "{not-json"));
 
-        // Не должно бросить ничего наружу — log.warn внутри try/catch
         consumer.onMessage(record);
 
         verify(streamOps).acknowledge(props.key(), props.group(), "0-6");
@@ -200,8 +269,6 @@ class StatsStreamConsumerTest {
     @Test
     @DisplayName("handle без ingestion service → log.debug, не падает")
     void handleWithoutIngestionServiceIsSilent() throws Exception {
-        // captured.get() остаётся null т.к. в setUp() handle переопределён
-        // — но в этом тесте нужно проверить default handle (с service==null)
         StatsStreamConsumer defaultConsumer = new StatsStreamConsumer(mapper, redis, props,
                 mockedNullProvider());
 
@@ -215,6 +282,17 @@ class StatsStreamConsumerTest {
         defaultConsumer.onMessage(record);
 
         verify(streamOps).acknowledge(props.key(), props.group(), "0-8");
+    }
+
+    @SuppressWarnings("unchecked")
+    private PendingMessages pendingWith(String id, Duration idle) {
+        PendingMessages pending = mock(PendingMessages.class);
+        PendingMessage message = mock(PendingMessage.class);
+        when(pending.isEmpty()).thenReturn(false);
+        when(pending.iterator()).thenReturn(List.of(message).iterator());
+        when(message.getElapsedTimeSinceLastDelivery()).thenReturn(idle);
+        when(message.getId()).thenReturn(RecordId.of(id));
+        return pending;
     }
 
     @SuppressWarnings("unchecked")
