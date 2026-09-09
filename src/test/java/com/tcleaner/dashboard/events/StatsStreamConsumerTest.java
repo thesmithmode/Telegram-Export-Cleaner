@@ -14,6 +14,7 @@ import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.connection.stream.StreamRecords;
 import org.springframework.data.redis.core.StreamOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.scheduling.TaskScheduler;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -34,7 +35,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Проверяет десериализацию, ACK-стратегию и восстановление transient-событий из Redis PEL.
+ * Проверяет десериализацию, ACK-стратегию и event-driven восстановление transient-событий из Redis PEL.
  */
 @DisplayName("StatsStreamConsumer")
 class StatsStreamConsumerTest {
@@ -43,6 +44,7 @@ class StatsStreamConsumerTest {
     private StringRedisTemplate redis;
     private StreamOperations<String, String, String> streamOps;
     private StatsStreamProperties props;
+    private TaskScheduler retryScheduler;
     private AtomicReference<StatsEventPayload> captured;
     private StatsStreamConsumer consumer;
 
@@ -52,6 +54,7 @@ class StatsStreamConsumerTest {
         mapper = new ObjectMapper().registerModule(new JavaTimeModule());
         redis = mock(StringRedisTemplate.class);
         streamOps = mock(StreamOperations.class);
+        retryScheduler = mock(TaskScheduler.class);
         when(redis.opsForStream()).thenReturn((StreamOperations) streamOps);
         props = new StatsStreamProperties("stats:events", "dashboard-writer", "java-bot-1", 1000, true);
 
@@ -60,7 +63,7 @@ class StatsStreamConsumerTest {
         ObjectProvider<com.tcleaner.dashboard.service.ingestion.ExportEventIngestionService> noIngestion =
                 mock(ObjectProvider.class);
         when(noIngestion.getIfAvailable()).thenReturn(null);
-        consumer = new StatsStreamConsumer(mapper, redis, props, noIngestion) {
+        consumer = new StatsStreamConsumer(mapper, redis, props, noIngestion, retryScheduler) {
             @Override
             void handle(StatsEventPayload payload) {
                 captured.set(payload);
@@ -69,7 +72,7 @@ class StatsStreamConsumerTest {
     }
 
     @Test
-    @DisplayName("успешная обработка → handle + XACK")
+    @DisplayName("успешная обработка → handle + XACK без фонового retry")
     void handlesAndAcks() throws Exception {
         StatsEventPayload original = StatsEventPayload.builder()
                 .type(StatsEventType.EXPORT_STARTED)
@@ -88,6 +91,7 @@ class StatsStreamConsumerTest {
         assertThat(captured.get().getType()).isEqualTo(StatsEventType.EXPORT_STARTED);
         assertThat(captured.get().getTaskId()).isEqualTo("task-123");
         verify(streamOps, times(1)).acknowledge(props.key(), props.group(), "0-1");
+        verify(retryScheduler, never()).schedule(any(Runnable.class), any(Instant.class));
     }
 
     @Test
@@ -133,18 +137,19 @@ class StatsStreamConsumerTest {
     }
 
     @Test
-    @DisplayName("transient exception в handle (не JsonProcessing) → НЕТ ACK (будет retry)")
+    @DisplayName("transient exception → НЕТ ACK и планируется один retry")
     @SuppressWarnings("unchecked")
-    void transientExceptionInHandleSkipsAck() throws Exception {
+    void transientExceptionInHandleSkipsAckAndSchedulesRetry() throws Exception {
         ObjectProvider<com.tcleaner.dashboard.service.ingestion.ExportEventIngestionService> noIngestion =
                 mock(ObjectProvider.class);
         when(noIngestion.getIfAvailable()).thenReturn(null);
-        StatsStreamConsumer throwingConsumer = new StatsStreamConsumer(mapper, redis, props, noIngestion) {
-            @Override
-            void handle(StatsEventPayload payload) {
-                throw new RuntimeException("DB transient error");
-            }
-        };
+        StatsStreamConsumer throwingConsumer =
+                new StatsStreamConsumer(mapper, redis, props, noIngestion, retryScheduler) {
+                    @Override
+                    void handle(StatsEventPayload payload) {
+                        throw new RuntimeException("DB transient error");
+                    }
+                };
 
         StatsEventPayload original = StatsEventPayload.builder()
                 .type(StatsEventType.EXPORT_STARTED).taskId("task-x").ts(Instant.now()).build();
@@ -154,8 +159,19 @@ class StatsStreamConsumerTest {
                 .ofMap(Map.of("payload", mapper.writeValueAsString(original)));
 
         throwingConsumer.onMessage(record);
+        throwingConsumer.onMessage(record);
 
         verify(streamOps, never()).acknowledge(anyString(), anyString(), any(String[].class));
+        verify(retryScheduler, times(1)).schedule(any(Runnable.class), any(Instant.class));
+    }
+
+    @Test
+    @DisplayName("startup → один recovery retry для хвоста прошлого процесса")
+    void startupSchedulesSingleRecovery() {
+        consumer.recoverPendingOnStartup();
+        consumer.recoverPendingOnStartup();
+
+        verify(retryScheduler, times(1)).schedule(any(Runnable.class), any(Instant.class));
     }
 
     @Test
@@ -185,12 +201,13 @@ class StatsStreamConsumerTest {
         assertThat(captured.get()).isNotNull();
         assertThat(captured.get().getTaskId()).isEqualTo("task-retry");
         verify(streamOps).acknowledge(props.key(), props.group(), "0-9");
+        verify(retryScheduler, never()).schedule(any(Runnable.class), any(Instant.class));
     }
 
     @Test
-    @DisplayName("свежий PEL младше 30 секунд → не claim")
+    @DisplayName("свежий PEL младше 30 секунд → не claim, retry только пока pending реально существует")
     @SuppressWarnings({"unchecked", "rawtypes"})
-    void retryPendingSkipsFreshEntries() {
+    void retryPendingSkipsFreshEntriesAndReschedules() {
         PendingMessages pending = pendingWith("0-10", Duration.ofSeconds(5));
         when(streamOps.pending(eq(props.key()), eq(props.group()), any(Range.class), anyLong()))
                 .thenReturn(pending);
@@ -199,10 +216,11 @@ class StatsStreamConsumerTest {
 
         verify(streamOps, never()).claim(
                 anyString(), anyString(), anyString(), any(Duration.class), any(RecordId[].class));
+        verify(retryScheduler, times(1)).schedule(any(Runnable.class), any(Instant.class));
     }
 
     @Test
-    @DisplayName("пустой PEL → retry ничего не делает")
+    @DisplayName("пустой PEL → retry ничего не делает и больше не планируется")
     @SuppressWarnings({"unchecked", "rawtypes"})
     void retryPendingEmptyIsNoop() {
         PendingMessages pending = mock(PendingMessages.class);
@@ -214,21 +232,24 @@ class StatsStreamConsumerTest {
 
         verify(streamOps, never()).claim(
                 anyString(), anyString(), anyString(), any(Duration.class), any(RecordId[].class));
+        verify(retryScheduler, never()).schedule(any(Runnable.class), any(Instant.class));
     }
 
     @Test
-    @DisplayName("ошибка Redis при retry PEL → scheduler не падает")
+    @DisplayName("ошибка Redis при retry PEL → scheduler не падает и повторяет позже")
     @SuppressWarnings({"unchecked", "rawtypes"})
     void retryPendingRedisFailureIsGraceful() {
         when(streamOps.pending(eq(props.key()), eq(props.group()), any(Range.class), anyLong()))
                 .thenThrow(new RuntimeException("Redis down"));
 
         consumer.retryPending();
+
+        verify(retryScheduler, times(1)).schedule(any(Runnable.class), any(Instant.class));
     }
 
     @Test
-    @DisplayName("XACK сам бросает exception → consumer не падает (graceful warn)")
-    void xackFailureIsGraceful() {
+    @DisplayName("XACK бросает exception → consumer не падает и планирует retry")
+    void xackFailureIsGracefulAndSchedulesRetry() {
         doThrow(new RuntimeException("Redis down"))
                 .when(streamOps).acknowledge(anyString(), anyString(), any(String[].class));
 
@@ -240,6 +261,7 @@ class StatsStreamConsumerTest {
         consumer.onMessage(record);
 
         verify(streamOps).acknowledge(props.key(), props.group(), "0-6");
+        verify(retryScheduler, times(1)).schedule(any(Runnable.class), any(Instant.class));
     }
 
     @Test
@@ -252,7 +274,7 @@ class StatsStreamConsumerTest {
                 mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(realService);
 
-        StatsStreamConsumer realConsumer = new StatsStreamConsumer(mapper, redis, props, provider);
+        StatsStreamConsumer realConsumer = new StatsStreamConsumer(mapper, redis, props, provider, retryScheduler);
 
         StatsEventPayload original = StatsEventPayload.builder()
                 .type(StatsEventType.EXPORT_STARTED).taskId("task-real").ts(Instant.now()).build();
@@ -270,8 +292,8 @@ class StatsStreamConsumerTest {
     @Test
     @DisplayName("handle без ingestion service → log.debug, не падает")
     void handleWithoutIngestionServiceIsSilent() throws Exception {
-        StatsStreamConsumer defaultConsumer = new StatsStreamConsumer(mapper, redis, props,
-                mockedNullProvider());
+        StatsStreamConsumer defaultConsumer = new StatsStreamConsumer(
+                mapper, redis, props, mockedNullProvider(), retryScheduler);
 
         StatsEventPayload original = StatsEventPayload.builder()
                 .type(StatsEventType.EXPORT_STARTED).taskId("task-no-svc").ts(Instant.now()).build();
