@@ -22,6 +22,7 @@ import org.springframework.stereotype.Component;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -29,7 +30,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 // ACK-стратегия: poison (JsonProcessingException, пустой payload) → ACK, иначе PEL блокируется навсегда.
 // Transient (DB/Redis/downstream) → no ACK; runtime retry забирает конкретный RecordId без фонового XPENDING.
-// XPENDING используется только для recovery хвоста после старта процесса и редкого race-check после пустого XCLAIM.
+// XPENDING используется только для однократного постраничного recovery после старта
+// и редкого race-check после пустого XCLAIM. Никакого постоянного 30-секундного polling нет.
 // ObjectProvider: ingestion bean может отсутствовать в unit-тестах без Spring-контекста.
 @Component
 public class StatsStreamConsumer implements StreamListener<String, MapRecord<String, String, String>> {
@@ -108,58 +110,74 @@ public class StatsStreamConsumer implements StreamListener<String, MapRecord<Str
      * Startup/backlog recovery. XPENDING здесь нужен только потому, что после рестарта RecordId заранее неизвестны.
      */
     void retryPending() {
+        retryPendingAfter(null);
+    }
+
+    private void retryPendingAfter(String startAfterId) {
         if (!props.enabled()) {
             return;
         }
 
         try {
             StreamOperations<String, String, String> stream = redis.opsForStream();
+            Range<String> range = startAfterId == null
+                    ? Range.unbounded()
+                    : Range.rightUnbounded(Range.Bound.exclusive(startAfterId));
             PendingMessages pending = stream.pending(
-                    props.key(), props.group(), Range.unbounded(), PENDING_RETRY_BATCH_SIZE);
+                    props.key(), props.group(), range, PENDING_RETRY_BATCH_SIZE);
             if (pending == null || pending.isEmpty()) {
                 return;
             }
 
             int observed = 0;
+            String lastObservedId = null;
             List<RecordId> staleIds = new ArrayList<>();
             for (PendingMessage message : pending) {
                 observed++;
-                if (message.getElapsedTimeSinceLastDelivery().compareTo(PENDING_RETRY_MIN_IDLE) >= 0) {
+                lastObservedId = message.getId().getValue();
+                Duration idle = message.getElapsedTimeSinceLastDelivery();
+                if (idle.compareTo(PENDING_RETRY_MIN_IDLE) >= 0) {
                     staleIds.add(message.getId());
+                } else {
+                    // Запись уже найдена: дальше нужен только её адресный retry,
+                    // а не повторный скан всего PEL.
+                    scheduleRecordRetry(message.getId().getValue(), PENDING_RETRY_MIN_IDLE.minus(idle));
                 }
             }
 
-            if (staleIds.isEmpty()) {
-                // Recovery увидел только ещё свежий хвост: повтор нужен лишь пока такой хвост реально существует.
-                scheduleRecovery(PENDING_RETRY_MIN_IDLE);
-                return;
+            if (!staleIds.isEmpty()) {
+                List<MapRecord<String, String, String>> claimed = stream.claim(
+                        props.key(),
+                        props.group(),
+                        props.consumer(),
+                        PENDING_RETRY_MIN_IDLE,
+                        staleIds.toArray(RecordId[]::new));
+                List<MapRecord<String, String, String>> safeClaimed = claimed == null ? List.of() : claimed;
+                Set<String> claimedIds = new HashSet<>();
+                safeClaimed.forEach(record -> claimedIds.add(record.getId().getValue()));
+                // XCLAIM может вернуть неполный набор при race с ACK/другим consumer.
+                // Адресная проверка безопасно различит этот race и временную ошибку.
+                staleIds.stream()
+                        .map(RecordId::getValue)
+                        .filter(id -> !claimedIds.contains(id))
+                        .forEach(id -> scheduleRecordRetry(id, Duration.ofSeconds(1)));
+
+                if (!safeClaimed.isEmpty()) {
+                    log.info("Recovery: повторная обработка {} pending-событий {}:{}",
+                            safeClaimed.size(), props.key(), props.group());
+                    safeClaimed.forEach(this::onMessage);
+                }
             }
 
-            List<MapRecord<String, String, String>> claimed = stream.claim(
-                    props.key(),
-                    props.group(),
-                    props.consumer(),
-                    PENDING_RETRY_MIN_IDLE,
-                    staleIds.toArray(RecordId[]::new));
-            if (claimed == null || claimed.isEmpty()) {
-                scheduleRecovery(PENDING_RETRY_MIN_IDLE);
-                return;
-            }
-
-            log.info("Recovery: повторная обработка {} pending-событий {}:{}",
-                    claimed.size(), props.key(), props.group());
-            claimed.forEach(this::onMessage);
-
-            // Продолжаем recovery только если batch мог быть неполным или в нём были ещё свежие записи.
-            if (observed >= PENDING_RETRY_BATCH_SIZE
-                    || staleIds.size() < observed
-                    || claimed.size() < staleIds.size()) {
-                scheduleRecovery(PENDING_RETRY_MIN_IDLE);
+            // Полная страница не доказывает конец PEL. Идём от последнего id,
+            // чтобы первые 100 падающих записей не могли навсегда заблокировать хвост.
+            if (observed >= PENDING_RETRY_BATCH_SIZE && lastObservedId != null) {
+                scheduleRecovery(Duration.ZERO, lastObservedId);
             }
         } catch (Exception ex) {
             log.warn("Не удалось выполнить recovery pending-событий {}:{}: {}",
                     props.key(), props.group(), ex.getMessage());
-            scheduleRecovery(PENDING_RETRY_MIN_IDLE);
+            scheduleRecovery(PENDING_RETRY_MIN_IDLE, startAfterId);
         }
     }
 
@@ -227,13 +245,17 @@ public class StatsStreamConsumer implements StreamListener<String, MapRecord<Str
     }
 
     private void scheduleRecovery(Duration delay) {
+        scheduleRecovery(delay, null);
+    }
+
+    private void scheduleRecovery(Duration delay, String startAfterId) {
         if (!props.enabled() || !recoveryScheduled.compareAndSet(false, true)) {
             return;
         }
         try {
             retryScheduler.schedule(() -> {
                 recoveryScheduled.set(false);
-                retryPending();
+                retryPendingAfter(startAfterId);
             }, Instant.now().plus(delay));
         } catch (RuntimeException ex) {
             recoveryScheduled.set(false);
