@@ -6,6 +6,8 @@ import com.tcleaner.dashboard.service.ingestion.ExportEventIngestionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.data.domain.Range;
 import org.springframework.data.redis.connection.stream.MapRecord;
 import org.springframework.data.redis.connection.stream.PendingMessage;
@@ -14,15 +16,17 @@ import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.core.StreamOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.stream.StreamListener;
-import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 // ACK-стратегия: poison (JsonProcessingException, пустой payload) → ACK, иначе PEL блокируется навсегда.
-// Transient (DB/Redis/downstream) → no ACK; retryPending() повторно забирает stale PEL через XCLAIM.
+// Transient (DB/Redis/downstream) → no ACK; retry запускается только после реального сбоя, без idle polling.
 // ObjectProvider: ingestion bean может отсутствовать в unit-тестах без Spring-контекста.
 @Component
 public class StatsStreamConsumer implements StreamListener<String, MapRecord<String, String, String>> {
@@ -36,17 +40,21 @@ public class StatsStreamConsumer implements StreamListener<String, MapRecord<Str
     private final StringRedisTemplate redis;
     private final StatsStreamProperties props;
     private final ObjectProvider<ExportEventIngestionService> ingestionServiceProvider;
+    private final TaskScheduler retryScheduler;
+    private final AtomicBoolean retryScheduled = new AtomicBoolean(false);
 
     public StatsStreamConsumer(
             ObjectMapper objectMapper,
             StringRedisTemplate redis,
             StatsStreamProperties props,
-            ObjectProvider<ExportEventIngestionService> ingestionServiceProvider
+            ObjectProvider<ExportEventIngestionService> ingestionServiceProvider,
+            TaskScheduler retryScheduler
     ) {
         this.objectMapper = objectMapper;
         this.redis = redis;
         this.props = props;
         this.ingestionServiceProvider = ingestionServiceProvider;
+        this.retryScheduler = retryScheduler;
     }
 
     @Override
@@ -68,27 +76,34 @@ public class StatsStreamConsumer implements StreamListener<String, MapRecord<Str
             log.error("Битый JSON в {} id={}: {} — ACK (poison)", props.key(), id, ex.getMessage());
             ack = true;
         } catch (Exception ex) {
-            // Transient (Redis/DB/downstream): не ACK → запись остаётся в PEL и будет retry.
+            // Transient (Redis/DB/downstream): не ACK → запись остаётся в PEL.
             log.error("Ошибка обработки события {} в {}: {} — XACK пропущен, будет retry",
                     id, props.key(), ex.getMessage());
+            scheduleRetry(PENDING_RETRY_MIN_IDLE);
         }
         if (ack) {
             try {
                 redis.opsForStream().acknowledge(props.key(), props.group(), id);
             } catch (Exception ex) {
                 log.warn("Не удалось XACK {}:{}:{}: {}", props.key(), props.group(), id, ex.getMessage());
+                scheduleRetry(PENDING_RETRY_MIN_IDLE);
             }
         }
     }
 
     /**
-     * Повторно обрабатывает stale pending-события consumer group.
-     *
-     * <p>Обычный listener читает {@code lastConsumed()} и поэтому не возвращается к PEL.
-     * XCLAIM с minimum idle time защищает от параллельной повторной обработки события,
-     * которое прямо сейчас ещё находится в исходном {@link #onMessage(MapRecord)}.</p>
+     * Один recovery-проход после старта подбирает PEL, оставшийся после прошлого падения процесса.
+     * В штатном режиме больше никаких периодических XPENDING нет.
      */
-    @Scheduled(fixedDelayString = "${dashboard.stats.stream.pending-retry-delay-ms:30000}")
+    @EventListener(ApplicationReadyEvent.class)
+    void recoverPendingOnStartup() {
+        scheduleRetry(Duration.ZERO);
+    }
+
+    /**
+     * Повторно обрабатывает pending-события consumer group только когда retry уже был запрошен.
+     * XCLAIM с minimum idle time защищает от параллельной обработки ещё активного события.
+     */
     void retryPending() {
         if (!props.enabled()) {
             return;
@@ -102,13 +117,18 @@ public class StatsStreamConsumer implements StreamListener<String, MapRecord<Str
                 return;
             }
 
+            int observed = 0;
             List<RecordId> staleIds = new ArrayList<>();
             for (PendingMessage message : pending) {
+                observed++;
                 if (message.getElapsedTimeSinceLastDelivery().compareTo(PENDING_RETRY_MIN_IDLE) >= 0) {
                     staleIds.add(message.getId());
                 }
             }
+
             if (staleIds.isEmpty()) {
+                // PEL существует, но записи ещё активны: повторим только потому, что есть реальная pending-работа.
+                scheduleRetry(PENDING_RETRY_MIN_IDLE);
                 return;
             }
 
@@ -119,14 +139,39 @@ public class StatsStreamConsumer implements StreamListener<String, MapRecord<Str
                     PENDING_RETRY_MIN_IDLE,
                     staleIds.toArray(RecordId[]::new));
             if (claimed == null || claimed.isEmpty()) {
+                scheduleRetry(PENDING_RETRY_MIN_IDLE);
                 return;
             }
 
             log.info("Повторная обработка {} pending-событий {}:{}",
                     claimed.size(), props.key(), props.group());
             claimed.forEach(this::onMessage);
+
+            // Если batch был заполнен, остались свежие записи или claim вернул не всё — нужен ещё один проход.
+            if (observed >= PENDING_RETRY_BATCH_SIZE
+                    || staleIds.size() < observed
+                    || claimed.size() < staleIds.size()) {
+                scheduleRetry(PENDING_RETRY_MIN_IDLE);
+            }
         } catch (Exception ex) {
             log.warn("Не удалось повторно обработать pending-события {}:{}: {}",
+                    props.key(), props.group(), ex.getMessage());
+            scheduleRetry(PENDING_RETRY_MIN_IDLE);
+        }
+    }
+
+    private void scheduleRetry(Duration delay) {
+        if (!props.enabled() || !retryScheduled.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            retryScheduler.schedule(() -> {
+                retryScheduled.set(false);
+                retryPending();
+            }, Instant.now().plus(delay));
+        } catch (RuntimeException ex) {
+            retryScheduled.set(false);
+            log.warn("Не удалось запланировать retry pending-событий {}:{}: {}",
                     props.key(), props.group(), ex.getMessage());
         }
     }
