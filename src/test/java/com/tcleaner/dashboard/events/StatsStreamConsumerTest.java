@@ -20,6 +20,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -166,12 +167,206 @@ class StatsStreamConsumerTest {
     }
 
     @Test
+    @DisplayName("адресный retry → XCLAIM конкретного id → успешный XACK")
+    @SuppressWarnings("unchecked")
+    void recordRetryClaimsKnownIdAndAcks() throws Exception {
+        AtomicReference<Runnable> scheduled = new AtomicReference<>();
+        when(retryScheduler.schedule(any(Runnable.class), any(Instant.class)))
+                .thenAnswer(invocation -> {
+                    scheduled.set(invocation.getArgument(0));
+                    return null;
+                });
+
+        ObjectProvider<com.tcleaner.dashboard.service.ingestion.ExportEventIngestionService> noIngestion =
+                mock(ObjectProvider.class);
+        when(noIngestion.getIfAvailable()).thenReturn(null);
+        AtomicInteger attempts = new AtomicInteger();
+        StatsStreamConsumer retryingConsumer =
+                new StatsStreamConsumer(mapper, redis, props, noIngestion, retryScheduler) {
+                    @Override
+                    void handle(StatsEventPayload payload) {
+                        if (attempts.getAndIncrement() == 0) {
+                            throw new RuntimeException("DB transient error");
+                        }
+                        captured.set(payload);
+                    }
+                };
+
+        StatsEventPayload original = StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_STARTED)
+                .taskId("task-record-retry")
+                .ts(Instant.now())
+                .build();
+        MapRecord<String, String, String> record = StreamRecords.newRecord()
+                .in(props.key())
+                .withId(RecordId.of("0-11"))
+                .ofMap(Map.of("payload", mapper.writeValueAsString(original)));
+
+        retryingConsumer.onMessage(record);
+        assertThat(scheduled.get()).isNotNull();
+        when(streamOps.claim(
+                eq(props.key()), eq(props.group()), eq(props.consumer()),
+                eq(Duration.ofSeconds(30)), any(RecordId[].class)))
+                .thenReturn(List.of(record));
+
+        scheduled.get().run();
+
+        assertThat(captured.get()).isNotNull();
+        assertThat(captured.get().getTaskId()).isEqualTo("task-record-retry");
+        verify(streamOps).claim(
+                eq(props.key()), eq(props.group()), eq(props.consumer()),
+                eq(Duration.ofSeconds(30)), any(RecordId[].class));
+        verify(streamOps).acknowledge(props.key(), props.group(), "0-11");
+    }
+
+    @Test
+    @DisplayName("адресный XCLAIM слишком ранний → проверяется только этот id и retry переносится")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void recordRetryReschedulesWhenKnownIdIsStillFresh() {
+        when(streamOps.claim(
+                eq(props.key()), eq(props.group()), eq(props.consumer()),
+                eq(Duration.ofSeconds(30)), any(RecordId[].class)))
+                .thenReturn(List.of());
+        PendingMessages pending = pendingWith("0-12", Duration.ofSeconds(5));
+        when(streamOps.pending(eq(props.key()), eq(props.group()), any(Range.class), anyLong()))
+                .thenReturn(pending);
+
+        consumer.retryPendingRecord("0-12");
+
+        verify(retryScheduler, times(1)).schedule(any(Runnable.class), any(Instant.class));
+    }
+
+    @Test
+    @DisplayName("адресный XCLAIM race после 30 секунд → retry переносится минимум на секунду")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void recordRetryReschedulesAfterMinimumIdleRace() {
+        when(streamOps.claim(
+                eq(props.key()), eq(props.group()), eq(props.consumer()),
+                eq(Duration.ofSeconds(30)), any(RecordId[].class)))
+                .thenReturn(List.of());
+        PendingMessages pending = pendingWith("0-13", Duration.ofSeconds(31));
+        when(streamOps.pending(eq(props.key()), eq(props.group()), any(Range.class), anyLong()))
+                .thenReturn(pending);
+
+        consumer.retryPendingRecord("0-13");
+
+        verify(retryScheduler, times(1)).schedule(any(Runnable.class), any(Instant.class));
+    }
+
+    @Test
+    @DisplayName("адресный retry уже ACK-записи → прекращается без нового scheduler")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void recordRetryStopsWhenIdIsNoLongerPending() {
+        when(streamOps.claim(
+                eq(props.key()), eq(props.group()), eq(props.consumer()),
+                eq(Duration.ofSeconds(30)), any(RecordId[].class)))
+                .thenReturn(List.of());
+        PendingMessages pending = mock(PendingMessages.class);
+        when(pending.isEmpty()).thenReturn(true);
+        when(streamOps.pending(eq(props.key()), eq(props.group()), any(Range.class), anyLong()))
+                .thenReturn(pending);
+
+        consumer.retryPendingRecord("0-14");
+
+        verify(retryScheduler, never()).schedule(any(Runnable.class), any(Instant.class));
+    }
+
+    @Test
+    @DisplayName("ошибка Redis при адресном retry → повтор планируется снова")
+    void recordRetryRedisFailureReschedules() {
+        when(streamOps.claim(
+                eq(props.key()), eq(props.group()), eq(props.consumer()),
+                eq(Duration.ofSeconds(30)), any(RecordId[].class)))
+                .thenThrow(new RuntimeException("Redis down"));
+
+        consumer.retryPendingRecord("0-15");
+
+        verify(retryScheduler, times(1)).schedule(any(Runnable.class), any(Instant.class));
+    }
+
+    @Test
+    @DisplayName("ошибка TaskScheduler не оставляет record-id навечно заблокированным")
+    @SuppressWarnings("unchecked")
+    void recordRetrySchedulerFailureReleasesDeduplicationGuard() throws Exception {
+        when(retryScheduler.schedule(any(Runnable.class), any(Instant.class)))
+                .thenThrow(new RuntimeException("scheduler down"));
+        ObjectProvider<com.tcleaner.dashboard.service.ingestion.ExportEventIngestionService> noIngestion =
+                mock(ObjectProvider.class);
+        when(noIngestion.getIfAvailable()).thenReturn(null);
+        StatsStreamConsumer throwingConsumer =
+                new StatsStreamConsumer(mapper, redis, props, noIngestion, retryScheduler) {
+                    @Override
+                    void handle(StatsEventPayload payload) {
+                        throw new RuntimeException("DB transient error");
+                    }
+                };
+        StatsEventPayload original = StatsEventPayload.builder()
+                .type(StatsEventType.EXPORT_STARTED).taskId("task-scheduler").ts(Instant.now()).build();
+        MapRecord<String, String, String> record = StreamRecords.newRecord()
+                .in(props.key())
+                .withId(RecordId.of("0-16"))
+                .ofMap(Map.of("payload", mapper.writeValueAsString(original)));
+
+        throwingConsumer.onMessage(record);
+        throwingConsumer.onMessage(record);
+
+        verify(retryScheduler, times(2)).schedule(any(Runnable.class), any(Instant.class));
+    }
+
+    @Test
+    @DisplayName("невалидный id адресного retry игнорируется")
+    void recordRetryRejectsInvalidIds() {
+        consumer.retryPendingRecord(null);
+        consumer.retryPendingRecord("");
+        consumer.retryPendingRecord("   ");
+
+        verify(streamOps, never()).claim(
+                anyString(), anyString(), anyString(), any(Duration.class), any(RecordId[].class));
+    }
+
+    @Test
     @DisplayName("startup → один recovery retry для хвоста прошлого процесса")
     void startupSchedulesSingleRecovery() {
         consumer.recoverPendingOnStartup();
         consumer.recoverPendingOnStartup();
 
         verify(retryScheduler, times(1)).schedule(any(Runnable.class), any(Instant.class));
+    }
+
+    @Test
+    @DisplayName("startup recovery runnable выполняет XPENDING и снимает scheduler guard")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void startupRecoveryRunnableExecutesPendingCheck() {
+        AtomicReference<Runnable> scheduled = new AtomicReference<>();
+        when(retryScheduler.schedule(any(Runnable.class), any(Instant.class)))
+                .thenAnswer(invocation -> {
+                    scheduled.set(invocation.getArgument(0));
+                    return null;
+                });
+        PendingMessages pending = mock(PendingMessages.class);
+        when(pending.isEmpty()).thenReturn(true);
+        when(streamOps.pending(eq(props.key()), eq(props.group()), any(Range.class), anyLong()))
+                .thenReturn(pending);
+
+        consumer.recoverPendingOnStartup();
+        assertThat(scheduled.get()).isNotNull();
+        scheduled.get().run();
+        consumer.recoverPendingOnStartup();
+
+        verify(streamOps, times(1)).pending(eq(props.key()), eq(props.group()), any(Range.class), anyLong());
+        verify(retryScheduler, times(2)).schedule(any(Runnable.class), any(Instant.class));
+    }
+
+    @Test
+    @DisplayName("ошибка TaskScheduler startup recovery снимает scheduler guard")
+    void startupRecoverySchedulerFailureReleasesGuard() {
+        when(retryScheduler.schedule(any(Runnable.class), any(Instant.class)))
+                .thenThrow(new RuntimeException("scheduler down"));
+
+        consumer.recoverPendingOnStartup();
+        consumer.recoverPendingOnStartup();
+
+        verify(retryScheduler, times(2)).schedule(any(Runnable.class), any(Instant.class));
     }
 
     @Test
