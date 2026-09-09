@@ -191,8 +191,9 @@ class StatsStreamConsumerTest {
     @DisplayName("свежий PEL младше 30 секунд → не claim")
     @SuppressWarnings({"unchecked", "rawtypes"})
     void retryPendingSkipsFreshEntries() {
+        PendingMessages pending = pendingWith("0-10", Duration.ofSeconds(5));
         when(streamOps.pending(eq(props.key()), eq(props.group()), any(Range.class), anyLong()))
-                .thenReturn(pendingWith("0-10", Duration.ofSeconds(5)));
+                .thenReturn(pending);
 
         consumer.retryPending();
 
