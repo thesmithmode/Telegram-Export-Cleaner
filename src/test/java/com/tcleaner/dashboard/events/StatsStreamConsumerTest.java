@@ -206,7 +206,7 @@ class StatsStreamConsumerTest {
         assertThat(scheduled.get()).isNotNull();
         when(streamOps.claim(
                 eq(props.key()), eq(props.group()), eq(props.consumer()),
-                eq(Duration.ofSeconds(30)), any(RecordId[].class)))
+                eq(Duration.ofSeconds(30)), eq(RecordId.of("0-11"))))
                 .thenReturn(List.of(record));
 
         scheduled.get().run();
@@ -215,7 +215,7 @@ class StatsStreamConsumerTest {
         assertThat(captured.get().getTaskId()).isEqualTo("task-record-retry");
         verify(streamOps).claim(
                 eq(props.key()), eq(props.group()), eq(props.consumer()),
-                eq(Duration.ofSeconds(30)), any(RecordId[].class));
+                eq(Duration.ofSeconds(30)), eq(RecordId.of("0-11")));
         verify(streamOps).acknowledge(props.key(), props.group(), "0-11");
     }
 
@@ -225,7 +225,7 @@ class StatsStreamConsumerTest {
     void recordRetryReschedulesWhenKnownIdIsStillFresh() {
         when(streamOps.claim(
                 eq(props.key()), eq(props.group()), eq(props.consumer()),
-                eq(Duration.ofSeconds(30)), any(RecordId[].class)))
+                eq(Duration.ofSeconds(30)), eq(RecordId.of("0-12"))))
                 .thenReturn(List.of());
         PendingMessages pending = pendingWith("0-12", Duration.ofSeconds(5));
         when(streamOps.pending(eq(props.key()), eq(props.group()), any(Range.class), anyLong()))
@@ -242,7 +242,7 @@ class StatsStreamConsumerTest {
     void recordRetryReschedulesAfterMinimumIdleRace() {
         when(streamOps.claim(
                 eq(props.key()), eq(props.group()), eq(props.consumer()),
-                eq(Duration.ofSeconds(30)), any(RecordId[].class)))
+                eq(Duration.ofSeconds(30)), eq(RecordId.of("0-13"))))
                 .thenReturn(List.of());
         PendingMessages pending = pendingWith("0-13", Duration.ofSeconds(31));
         when(streamOps.pending(eq(props.key()), eq(props.group()), any(Range.class), anyLong()))
@@ -259,7 +259,7 @@ class StatsStreamConsumerTest {
     void recordRetryStopsWhenIdIsNoLongerPending() {
         when(streamOps.claim(
                 eq(props.key()), eq(props.group()), eq(props.consumer()),
-                eq(Duration.ofSeconds(30)), any(RecordId[].class)))
+                eq(Duration.ofSeconds(30)), eq(RecordId.of("0-14"))))
                 .thenReturn(List.of());
         PendingMessages pending = mock(PendingMessages.class);
         when(pending.isEmpty()).thenReturn(true);
@@ -276,7 +276,7 @@ class StatsStreamConsumerTest {
     void recordRetryRedisFailureReschedules() {
         when(streamOps.claim(
                 eq(props.key()), eq(props.group()), eq(props.consumer()),
-                eq(Duration.ofSeconds(30)), any(RecordId[].class)))
+                eq(Duration.ofSeconds(30)), eq(RecordId.of("0-15"))))
                 .thenThrow(new RuntimeException("Redis down"));
 
         consumer.retryPendingRecord("0-15");
@@ -321,7 +321,7 @@ class StatsStreamConsumerTest {
         consumer.retryPendingRecord("   ");
 
         verify(streamOps, never()).claim(
-                anyString(), anyString(), anyString(), any(Duration.class), any(RecordId[].class));
+                anyString(), anyString(), anyString(), any(Duration.class), any(RecordId.class));
     }
 
     @Test
@@ -388,7 +388,7 @@ class StatsStreamConsumerTest {
                 .ofMap(Map.of("payload", mapper.writeValueAsString(original)));
         when(streamOps.claim(
                 eq(props.key()), eq(props.group()), eq(props.consumer()),
-                eq(Duration.ofSeconds(30)), any(RecordId[].class)))
+                eq(Duration.ofSeconds(30)), eq(RecordId.of("0-9"))))
                 .thenReturn(List.of(record));
 
         consumer.retryPending();
@@ -410,7 +410,7 @@ class StatsStreamConsumerTest {
         consumer.retryPending();
 
         verify(streamOps, never()).claim(
-                anyString(), anyString(), anyString(), any(Duration.class), any(RecordId[].class));
+                anyString(), anyString(), anyString(), any(Duration.class), any(RecordId.class));
         verify(retryScheduler, times(1)).schedule(any(Runnable.class), any(Instant.class));
     }
 
@@ -426,7 +426,7 @@ class StatsStreamConsumerTest {
         consumer.retryPending();
 
         verify(streamOps, never()).claim(
-                anyString(), anyString(), anyString(), any(Duration.class), any(RecordId[].class));
+                anyString(), anyString(), anyString(), any(Duration.class), any(RecordId.class));
         verify(retryScheduler, never()).schedule(any(Runnable.class), any(Instant.class));
     }
 
