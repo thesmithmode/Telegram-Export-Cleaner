@@ -125,7 +125,11 @@ public class StatsStreamConsumer implements StreamListener<String, MapRecord<Str
                     : Range.rightUnbounded(Range.Bound.exclusive(startAfterId));
             PendingMessages pending = stream.pending(
                     props.key(), props.group(), range, PENDING_RETRY_BATCH_SIZE);
-            if (pending == null || pending.isEmpty()) {
+            if (pending == null) {
+                scheduleRecovery(PENDING_RETRY_MIN_IDLE, startAfterId);
+                return;
+            }
+            if (pending.isEmpty()) {
                 return;
             }
 
