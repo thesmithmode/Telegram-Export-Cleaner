@@ -161,7 +161,7 @@ class CoverageRound5Tests {
         @DisplayName("ensureConsumerGroup: exception с null message → не BUSYGROUP")
         void ensureGroupNullMessage() throws Exception {
             RedisStreamsConfig cfg = new RedisStreamsConfig(redis, props);
-            when(streamOps.createGroup(anyString(), any(), anyString()))
+            when(streamCommands.xGroupCreate(any(byte[].class), anyString(), any(), eq(true)))
                     .thenThrow(new RuntimeException((String) null));
             callEnsure(cfg);
         }
