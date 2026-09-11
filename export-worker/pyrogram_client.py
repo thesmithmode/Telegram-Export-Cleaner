@@ -690,8 +690,25 @@ class TelegramClient:
     # может уйти в FloodWait после первого же fallback'а.
     _RESOLVE_FALLBACK_DELAY_SECONDS: float = 0.2
 
+    async def _sleep_for_resolve_floodwait(
+        self,
+        fallback_name: str,
+        chat_id: int,
+        floodwait: FloodWait,
+        is_cancelled_fn: Optional[CancelCheck] = None,
+    ) -> None:
+        wait_time = int(floodwait.value) + 1
+        logger.warning(
+            f"FloodWait {floodwait.value}s during {fallback_name} chat={chat_id}; "
+            f"sleeping {wait_time}s before continuing resolution"
+        )
+        await cancellable_floodwait_sleep(
+            wait_time,
+            is_cancelled_fn=is_cancelled_fn,
+        )
+
     async def _resolve_numeric_chat_id(
-        self, chat_id: int
+        self, chat_id: int, is_cancelled_fn: Optional[CancelCheck] = None
     ) -> tuple[bool, Optional[dict], Optional[str]]:
         # Fallback 1: sync dialog list
         logger.warning(f"Chat {chat_id} not in cache. Syncing dialog list and retrying...")
@@ -719,8 +736,9 @@ class TelegramClient:
             return (True, chat_info, None)
 
         except FloodWait as fw:
-            logger.warning(f"FloodWait {fw.value}s during fallback 1 (get_dialogs) chat={chat_id}")
-            await asyncio.sleep(fw.value + 1)
+            await self._sleep_for_resolve_floodwait(
+                "fallback 1 (get_dialogs)", chat_id, fw, is_cancelled_fn
+            )
         except Exception as retry_error:
             logger.error(f"Cache sync retry failed for chat {chat_id}: {retry_error}")
 
@@ -774,8 +792,9 @@ class TelegramClient:
                 logger.error(f"❌ Channel {chat_id} is private (raw MTProto)")
                 # Не возвращаем сразу — попробуем fallback 3
             except FloodWait as fw:
-                logger.warning(f"FloodWait {fw.value}s during fallback 2 (GetChannels) chat={chat_id}")
-                await asyncio.sleep(fw.value + 1)
+                await self._sleep_for_resolve_floodwait(
+                    "fallback 2 (GetChannels)", chat_id, fw, is_cancelled_fn
+                )
             except Exception as raw_error:
                 logger.error(
                     f"Raw MTProto fallback failed for channel {chat_id}: {raw_error}"
@@ -820,7 +839,11 @@ class TelegramClient:
             )
         return None
 
-    async def verify_and_get_info(self, chat_id: Union[int, str]) -> tuple[bool, Optional[dict], Optional[str]]:
+    async def verify_and_get_info(
+        self,
+        chat_id: Union[int, str],
+        is_cancelled_fn: Optional[CancelCheck] = None,
+    ) -> tuple[bool, Optional[dict], Optional[str]]:
         if not self.is_connected:
             return (False, None, "UNKNOWN")
 
@@ -860,7 +883,7 @@ class TelegramClient:
             # Numeric ID not in cache — sync dialogs and retry
             if isinstance(chat_id, int):
                 logger.info(f"Numeric ID {chat_id} not in cache, starting resolution fallback...")
-                return await self._resolve_numeric_chat_id(chat_id)
+                return await self._resolve_numeric_chat_id(chat_id, is_cancelled_fn)
 
             return (False, None, "CHAT_NOT_ACCESSIBLE")
 
@@ -872,7 +895,7 @@ class TelegramClient:
                     f"Chat {chat_id} not in Pyrogram cache (ValueError). "
                     f"Attempting cache sync + raw MTProto fallback..."
                 )
-                return await self._resolve_numeric_chat_id(chat_id)
+                return await self._resolve_numeric_chat_id(chat_id, is_cancelled_fn)
             logger.error(f"ValueError accessing chat {chat_id}: {error_str}")
             return (False, None, "UNKNOWN")
 
