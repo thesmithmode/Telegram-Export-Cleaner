@@ -70,7 +70,7 @@ JSON под `/dashboard/api/**`. Cookie session (Telegram Mini App login). USER 
 
 ## Ingestion (Redis Streams)
 
-Stream `stats:events`, JSON в поле `payload` (`StatsEventPayload`). Consumer-group `dashboard-writer`. Идемпотентность — UNIQUE `task_id` в `export_events`.
+Stream `stats:events`, JSON в поле `payload` (`StatsEventPayload`). Consumer-group `dashboard-writer`. При старте группа создаётся с Redis `MKSTREAM`, поэтому пустой Redis не блокирует ingestion первого события. Идемпотентность — UNIQUE `task_id` в `export_events`.
 
 ACK-стратегия (`StatsStreamConsumer`): poison (битый JSON, пустой payload) → ACK; transient (DB/Redis/downstream) → no ACK → at-least-once retry. Runtime-retry адресно забирает из PEL только упавший `RecordId`; после рестарта один постраничный recovery-проход подбирает весь оставшийся хвост, не давая первой падающей batch заблокировать более новые события. Постоянного polling всего PEL нет.
 
