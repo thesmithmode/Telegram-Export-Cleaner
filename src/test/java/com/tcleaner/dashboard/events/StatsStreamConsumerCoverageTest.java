@@ -93,8 +93,9 @@ class StatsStreamConsumerCoverageTest {
     @Test
     @SuppressWarnings({"unchecked", "rawtypes"})
     void retryPendingReschedulesWhenClaimResultIsNull() {
+        PendingMessages pending = pendingWith("0-21", Duration.ofSeconds(31));
         when(streamOps.pending(eq(props.key()), eq(props.group()), any(Range.class), anyLong()))
-                .thenReturn(pendingWith("0-21", Duration.ofSeconds(31)));
+                .thenReturn(pending);
         when(streamOps.claim(
                 eq(props.key()), eq(props.group()), eq(props.consumer()),
                 eq(Duration.ofSeconds(30)), eq(RecordId.of("0-21"))))
@@ -108,8 +109,9 @@ class StatsStreamConsumerCoverageTest {
     @Test
     @SuppressWarnings({"unchecked", "rawtypes"})
     void retryPendingReschedulesWhenClaimResultIsEmpty() {
+        PendingMessages pending = pendingWith("0-22", Duration.ofSeconds(31));
         when(streamOps.pending(eq(props.key()), eq(props.group()), any(Range.class), anyLong()))
-                .thenReturn(pendingWith("0-22", Duration.ofSeconds(31)));
+                .thenReturn(pending);
         when(streamOps.claim(
                 eq(props.key()), eq(props.group()), eq(props.consumer()),
                 eq(Duration.ofSeconds(30)), eq(RecordId.of("0-22"))))
@@ -138,12 +140,13 @@ class StatsStreamConsumerCoverageTest {
     @Test
     @SuppressWarnings({"unchecked", "rawtypes"})
     void recordRetryUsesOneSecondDelayAtExactMinimumIdle() {
+        PendingMessages pending = pendingWith("0-24", Duration.ofSeconds(30));
         when(streamOps.claim(
                 eq(props.key()), eq(props.group()), eq(props.consumer()),
                 eq(Duration.ofSeconds(30)), eq(RecordId.of("0-24"))))
                 .thenReturn(List.of());
         when(streamOps.pending(eq(props.key()), eq(props.group()), any(Range.class), anyLong()))
-                .thenReturn(pendingWith("0-24", Duration.ofSeconds(30)));
+                .thenReturn(pending);
 
         consumer.retryPendingRecord("0-24");
 
