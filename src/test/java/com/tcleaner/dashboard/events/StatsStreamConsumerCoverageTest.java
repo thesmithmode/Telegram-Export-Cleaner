@@ -81,13 +81,13 @@ class StatsStreamConsumerCoverageTest {
 
     @Test
     @SuppressWarnings({"unchecked", "rawtypes"})
-    void retryPendingStopsWhenPendingResultIsNull() {
+    void retryPendingReschedulesWhenPendingResultIsNull() {
         when(streamOps.pending(eq(props.key()), eq(props.group()), any(Range.class), anyLong()))
                 .thenReturn(null);
 
         consumer.retryPending();
 
-        verify(retryScheduler, never()).schedule(any(Runnable.class), any(Instant.class));
+        verify(retryScheduler).schedule(any(Runnable.class), any(Instant.class));
     }
 
     @Test
