@@ -6,35 +6,61 @@ import com.tcleaner.dashboard.service.ingestion.ExportEventIngestionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.data.domain.Range;
 import org.springframework.data.redis.connection.stream.MapRecord;
+import org.springframework.data.redis.connection.stream.PendingMessage;
+import org.springframework.data.redis.connection.stream.PendingMessages;
+import org.springframework.data.redis.connection.stream.RecordId;
+import org.springframework.data.redis.core.StreamOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.stream.StreamListener;
+import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+
 // ACK-стратегия: poison (JsonProcessingException, пустой payload) → ACK, иначе PEL блокируется навсегда.
-// Transient (DB/Redis/downstream) → no ACK → at-least-once retry (idempotent по task_id).
+// Transient (DB/Redis/downstream) → no ACK; runtime retry забирает конкретный RecordId без фонового XPENDING.
+// XPENDING используется только для однократного постраничного recovery после старта
+// и редкого race-check после пустого XCLAIM. Никакого постоянного 30-секундного polling нет.
 // ObjectProvider: ingestion bean может отсутствовать в unit-тестах без Spring-контекста.
 @Component
 public class StatsStreamConsumer implements StreamListener<String, MapRecord<String, String, String>> {
 
     private static final Logger log = LoggerFactory.getLogger(StatsStreamConsumer.class);
     private static final String PAYLOAD_FIELD = "payload";
+    private static final int PENDING_RETRY_BATCH_SIZE = 100;
+    private static final Duration PENDING_RETRY_MIN_IDLE = Duration.ofSeconds(30);
 
     private final ObjectMapper objectMapper;
     private final StringRedisTemplate redis;
     private final StatsStreamProperties props;
     private final ObjectProvider<ExportEventIngestionService> ingestionServiceProvider;
+    private final TaskScheduler retryScheduler;
+    private final AtomicBoolean recoveryScheduled = new AtomicBoolean(false);
+    private final Set<String> scheduledRecordRetries = ConcurrentHashMap.newKeySet();
 
     public StatsStreamConsumer(
             ObjectMapper objectMapper,
             StringRedisTemplate redis,
             StatsStreamProperties props,
-            ObjectProvider<ExportEventIngestionService> ingestionServiceProvider
+            ObjectProvider<ExportEventIngestionService> ingestionServiceProvider,
+            TaskScheduler retryScheduler
     ) {
         this.objectMapper = objectMapper;
         this.redis = redis;
         this.props = props;
         this.ingestionServiceProvider = ingestionServiceProvider;
+        this.retryScheduler = retryScheduler;
     }
 
     @Override
@@ -56,16 +82,189 @@ public class StatsStreamConsumer implements StreamListener<String, MapRecord<Str
             log.error("Битый JSON в {} id={}: {} — ACK (poison)", props.key(), id, ex.getMessage());
             ack = true;
         } catch (Exception ex) {
-            // Transient (Redis/DB/downstream): не ACK → повтор. Ingestion идемпотентен по task_id.
-            log.error("Ошибка обработки события {} в {}: {} — XACK пропущен, будет retry",
+            // Transient: запись уже известна, поэтому retry будет адресным XCLAIM именно этого RecordId.
+            log.error("Ошибка обработки события {} в {}: {} — XACK пропущен, будет адресный retry",
                     id, props.key(), ex.getMessage());
+            scheduleRecordRetry(id, PENDING_RETRY_MIN_IDLE);
         }
         if (ack) {
             try {
                 redis.opsForStream().acknowledge(props.key(), props.group(), id);
             } catch (Exception ex) {
                 log.warn("Не удалось XACK {}:{}:{}: {}", props.key(), props.group(), id, ex.getMessage());
+                scheduleRecordRetry(id, PENDING_RETRY_MIN_IDLE);
             }
+        }
+    }
+
+    /**
+     * Один recovery-проход после старта подбирает PEL, оставшийся после прошлого падения процесса.
+     * Если хвоста нет, дальнейших XPENDING в штатном режиме не будет.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    void recoverPendingOnStartup() {
+        scheduleRecovery(Duration.ZERO);
+    }
+
+    /**
+     * Startup/backlog recovery. XPENDING здесь нужен только потому, что после рестарта RecordId заранее неизвестны.
+     */
+    void retryPending() {
+        retryPendingAfter(null);
+    }
+
+    private void retryPendingAfter(String startAfterId) {
+        if (!props.enabled()) {
+            return;
+        }
+
+        try {
+            StreamOperations<String, String, String> stream = redis.opsForStream();
+            Range<String> range = startAfterId == null
+                    ? Range.unbounded()
+                    : Range.rightUnbounded(Range.Bound.exclusive(startAfterId));
+            PendingMessages pending = stream.pending(
+                    props.key(), props.group(), range, PENDING_RETRY_BATCH_SIZE);
+            if (pending == null) {
+                scheduleRecovery(PENDING_RETRY_MIN_IDLE, startAfterId);
+                return;
+            }
+            if (pending.isEmpty()) {
+                return;
+            }
+
+            int observed = 0;
+            String lastObservedId = null;
+            List<RecordId> staleIds = new ArrayList<>();
+            for (PendingMessage message : pending) {
+                observed++;
+                lastObservedId = message.getId().getValue();
+                Duration idle = message.getElapsedTimeSinceLastDelivery();
+                if (idle.compareTo(PENDING_RETRY_MIN_IDLE) >= 0) {
+                    staleIds.add(message.getId());
+                } else {
+                    // Запись уже найдена: дальше нужен только её адресный retry,
+                    // а не повторный скан всего PEL.
+                    scheduleRecordRetry(message.getId().getValue(), PENDING_RETRY_MIN_IDLE.minus(idle));
+                }
+            }
+
+            if (!staleIds.isEmpty()) {
+                List<MapRecord<String, String, String>> claimed = stream.claim(
+                        props.key(),
+                        props.group(),
+                        props.consumer(),
+                        PENDING_RETRY_MIN_IDLE,
+                        staleIds.toArray(RecordId[]::new));
+                List<MapRecord<String, String, String>> safeClaimed = claimed == null ? List.of() : claimed;
+                Set<String> claimedIds = new HashSet<>();
+                safeClaimed.forEach(record -> claimedIds.add(record.getId().getValue()));
+                // XCLAIM может вернуть неполный набор при race с ACK/другим consumer.
+                // Адресная проверка безопасно различит этот race и временную ошибку.
+                staleIds.stream()
+                        .map(RecordId::getValue)
+                        .filter(id -> !claimedIds.contains(id))
+                        .forEach(id -> scheduleRecordRetry(id, Duration.ofSeconds(1)));
+
+                if (!safeClaimed.isEmpty()) {
+                    log.info("Recovery: повторная обработка {} pending-событий {}:{}",
+                            safeClaimed.size(), props.key(), props.group());
+                    safeClaimed.forEach(this::onMessage);
+                }
+            }
+
+            // Полная страница не доказывает конец PEL. Идём от последнего id,
+            // чтобы первые 100 падающих записей не могли навсегда заблокировать хвост.
+            if (observed >= PENDING_RETRY_BATCH_SIZE && lastObservedId != null) {
+                scheduleRecovery(Duration.ZERO, lastObservedId);
+            }
+        } catch (Exception ex) {
+            log.warn("Не удалось выполнить recovery pending-событий {}:{}: {}",
+                    props.key(), props.group(), ex.getMessage());
+            scheduleRecovery(PENDING_RETRY_MIN_IDLE, startAfterId);
+        }
+    }
+
+    /**
+     * Runtime retry известного сообщения: сначала XCLAIM конкретного id, без полного XPENDING-сканирования.
+     */
+    void retryPendingRecord(String id) {
+        if (!props.enabled() || id == null || id.isBlank()) {
+            return;
+        }
+
+        try {
+            StreamOperations<String, String, String> stream = redis.opsForStream();
+            List<MapRecord<String, String, String>> claimed = stream.claim(
+                    props.key(),
+                    props.group(),
+                    props.consumer(),
+                    PENDING_RETRY_MIN_IDLE,
+                    RecordId.of(id));
+
+            if (claimed != null && !claimed.isEmpty()) {
+                log.info("Адресный retry pending-события {} в {}:{}", id, props.key(), props.group());
+                claimed.forEach(this::onMessage);
+                return;
+            }
+
+            // Обычно сюда не попадём. Проверяем только этот id, чтобы отличить race по minimum-idle от уже ACK записи.
+            PendingMessages pending = stream.pending(
+                    props.key(), props.group(), Range.closed(id, id), 1);
+            if (pending == null || pending.isEmpty()) {
+                return;
+            }
+
+            Duration elapsed = Duration.ZERO;
+            for (PendingMessage message : pending) {
+                elapsed = message.getElapsedTimeSinceLastDelivery();
+                break;
+            }
+            Duration remaining = PENDING_RETRY_MIN_IDLE.minus(elapsed);
+            if (remaining.isNegative() || remaining.isZero()) {
+                remaining = Duration.ofSeconds(1);
+            }
+            scheduleRecordRetry(id, remaining);
+        } catch (Exception ex) {
+            log.warn("Не удалось адресно повторить pending-событие {} в {}:{}: {}",
+                    id, props.key(), props.group(), ex.getMessage());
+            scheduleRecordRetry(id, PENDING_RETRY_MIN_IDLE);
+        }
+    }
+
+    private void scheduleRecordRetry(String id, Duration delay) {
+        if (!props.enabled() || id == null || id.isBlank() || !scheduledRecordRetries.add(id)) {
+            return;
+        }
+        try {
+            retryScheduler.schedule(() -> {
+                scheduledRecordRetries.remove(id);
+                retryPendingRecord(id);
+            }, Instant.now().plus(delay));
+        } catch (RuntimeException ex) {
+            scheduledRecordRetries.remove(id);
+            log.warn("Не удалось запланировать адресный retry {}:{}:{}: {}",
+                    props.key(), props.group(), id, ex.getMessage());
+        }
+    }
+
+    private void scheduleRecovery(Duration delay) {
+        scheduleRecovery(delay, null);
+    }
+
+    private void scheduleRecovery(Duration delay, String startAfterId) {
+        if (!props.enabled() || !recoveryScheduled.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            retryScheduler.schedule(() -> {
+                recoveryScheduled.set(false);
+                retryPendingAfter(startAfterId);
+            }, Instant.now().plus(delay));
+        } catch (RuntimeException ex) {
+            recoveryScheduled.set(false);
+            log.warn("Не удалось запланировать recovery pending-событий {}:{}: {}",
+                    props.key(), props.group(), ex.getMessage());
         }
     }
 

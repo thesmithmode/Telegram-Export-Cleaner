@@ -47,7 +47,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.data.redis.connection.RedisConnection;
+import org.springframework.data.redis.connection.RedisStreamCommands;
 import org.springframework.data.redis.core.ListOperations;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StreamOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
@@ -97,15 +100,18 @@ class CoverageRound5Tests {
     class RedisStreamsConfigTests {
 
         private StringRedisTemplate redis;
-        private StreamOperations<String, Object, Object> streamOps;
+        private RedisStreamCommands streamCommands;
         private StatsStreamProperties props;
 
         @BeforeEach
-        @SuppressWarnings("unchecked")
+        @SuppressWarnings({"unchecked", "rawtypes"})
         void init() {
             redis = mock(StringRedisTemplate.class);
-            streamOps = mock(StreamOperations.class);
-            when(redis.opsForStream()).thenReturn(streamOps);
+            RedisConnection connection = mock(RedisConnection.class);
+            streamCommands = mock(RedisStreamCommands.class);
+            when(connection.streamCommands()).thenReturn(streamCommands);
+            when(redis.execute(any(RedisCallback.class))).thenAnswer(invocation ->
+                    ((RedisCallback) invocation.getArgument(0)).doInRedis(connection));
             props = new StatsStreamProperties("stats:events", "grp", "consumer", 100_000L, true);
         }
 
@@ -119,9 +125,8 @@ class CoverageRound5Tests {
         @DisplayName("ensureConsumerGroup: успешное создание group — без warn")
         void ensureGroupOk() throws Exception {
             RedisStreamsConfig cfg = new RedisStreamsConfig(redis, props);
-            when(streamOps.createGroup(anyString(), any(), anyString())).thenReturn("OK");
             callEnsure(cfg);
-            verify(streamOps).createGroup(anyString(), any(), eq("grp"));
+            verify(streamCommands).xGroupCreate(any(byte[].class), eq("grp"), any(), eq(true));
         }
 
         @Test
@@ -130,7 +135,7 @@ class CoverageRound5Tests {
             RedisStreamsConfig cfg = new RedisStreamsConfig(redis, props);
             Throwable cause = new RuntimeException("BUSYGROUP Consumer Group name already exists");
             RuntimeException top = new RuntimeException("wrapper", cause);
-            when(streamOps.createGroup(anyString(), any(), anyString())).thenThrow(top);
+            when(streamCommands.xGroupCreate(any(byte[].class), anyString(), any(), eq(true))).thenThrow(top);
             callEnsure(cfg);
         }
 
@@ -138,7 +143,7 @@ class CoverageRound5Tests {
         @DisplayName("ensureConsumerGroup: BUSYGROUP прямо в message → debug")
         void ensureGroupBusyGroupDirect() throws Exception {
             RedisStreamsConfig cfg = new RedisStreamsConfig(redis, props);
-            when(streamOps.createGroup(anyString(), any(), anyString()))
+            when(streamCommands.xGroupCreate(any(byte[].class), anyString(), any(), eq(true)))
                     .thenThrow(new RuntimeException("BUSYGROUP exists"));
             callEnsure(cfg);
         }
@@ -147,7 +152,7 @@ class CoverageRound5Tests {
         @DisplayName("ensureConsumerGroup: иная ошибка (не BUSYGROUP) → warn-ветка")
         void ensureGroupOtherError() throws Exception {
             RedisStreamsConfig cfg = new RedisStreamsConfig(redis, props);
-            when(streamOps.createGroup(anyString(), any(), anyString()))
+            when(streamCommands.xGroupCreate(any(byte[].class), anyString(), any(), eq(true)))
                     .thenThrow(new RuntimeException("Connection refused"));
             callEnsure(cfg);
         }
@@ -156,7 +161,7 @@ class CoverageRound5Tests {
         @DisplayName("ensureConsumerGroup: exception с null message → не BUSYGROUP")
         void ensureGroupNullMessage() throws Exception {
             RedisStreamsConfig cfg = new RedisStreamsConfig(redis, props);
-            when(streamOps.createGroup(anyString(), any(), anyString()))
+            when(streamCommands.xGroupCreate(any(byte[].class), anyString(), any(), eq(true)))
                     .thenThrow(new RuntimeException((String) null));
             callEnsure(cfg);
         }
