@@ -120,14 +120,19 @@ class MessageConverter:
         return MessageConverter.MEDIA_TYPE_MAP.get(media_class_name, None)
 
     @staticmethod
-    def convert_message(message: pyrogram_types.Message) -> ExportedMessage:
+    def convert_message(
+        message: pyrogram_types.Message,
+        rich_page_text: Optional[str] = None,
+    ) -> ExportedMessage:
         try:
             # Basic fields
             exported = ExportedMessage(
                 id=message.id,
                 type="message",
                 date=message.date.isoformat() if message.date else "",
-                text=message.text or message.caption or ""
+                # Rich page content is a fallback only.  Expanding every normal
+                # link preview would duplicate articles and change old exports.
+                text=message.text or message.caption or rich_page_text or ""
             )
 
             # User information
