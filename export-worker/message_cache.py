@@ -340,16 +340,35 @@ class MessageCache:
             )
 
         counts = {}
-        tables = (
-            "messages",
-            "chat_id_ranges",
-            "chat_id_coverage_ranges",
-            "chat_date_ranges",
-            "chat_meta",
-            "export_artifacts",
+        # Identifiers cannot be bound as SQLite parameters.  Keep complete SQL
+        # statements as source literals instead of interpolating identifiers;
+        # this also makes it impossible for runtime input to reach these queries.
+        cache_tables = (
+            ("messages", "SELECT COUNT(*) FROM messages", "DELETE FROM messages"),
+            (
+                "chat_id_ranges",
+                "SELECT COUNT(*) FROM chat_id_ranges",
+                "DELETE FROM chat_id_ranges",
+            ),
+            (
+                "chat_id_coverage_ranges",
+                "SELECT COUNT(*) FROM chat_id_coverage_ranges",
+                "DELETE FROM chat_id_coverage_ranges",
+            ),
+            (
+                "chat_date_ranges",
+                "SELECT COUNT(*) FROM chat_date_ranges",
+                "DELETE FROM chat_date_ranges",
+            ),
+            ("chat_meta", "SELECT COUNT(*) FROM chat_meta", "DELETE FROM chat_meta"),
+            (
+                "export_artifacts",
+                "SELECT COUNT(*) FROM export_artifacts",
+                "DELETE FROM export_artifacts",
+            ),
         )
-        for table in tables:
-            async with self._db.execute(f"SELECT COUNT(*) FROM {table}") as cur:
+        for table, count_sql, _ in cache_tables:
+            async with self._db.execute(count_sql) as cur:
                 count_row = await cur.fetchone()
             counts[table] = int(count_row[0] if count_row else 0)
 
@@ -363,8 +382,8 @@ class MessageCache:
         # Always clear every dependent table.  A prior interrupted cleanup can
         # legitimately leave no messages but still retain coverage or artifact
         # metadata, which would otherwise hide messages or serve stale files.
-        for table in tables:
-            await self._db.execute(f"DELETE FROM {table}")
+        for _, _, delete_sql in cache_tables:
+            await self._db.execute(delete_sql)
 
         await self._db.execute(
             "INSERT INTO cache_metadata(key, value) VALUES('canonical_content_version', ?) "

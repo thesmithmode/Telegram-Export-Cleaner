@@ -205,7 +205,11 @@ class TelegramClient:
                 # auto-sleep would make a long rich-page request uncancellable.
                 sleep_threshold=-1,
             )
-            text = render_cached_page(getattr(raw_page, "cached_page", None))
+            # Telegram layers/clients expose getWebPage either as the WebPage
+            # object itself or wrapped in an object with a ``webpage`` field.
+            # Accept both shapes so CachedPage is not lost at this boundary.
+            page = getattr(raw_page, "webpage", None) or raw_page
+            text = render_cached_page(getattr(page, "cached_page", None))
             if text:
                 return text
             return None

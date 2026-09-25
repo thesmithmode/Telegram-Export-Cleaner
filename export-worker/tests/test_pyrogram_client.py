@@ -1,5 +1,6 @@
 
 import pytest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timezone
 from pyrogram.errors import Unauthorized, BadRequest, PeerIdInvalid, FloodWait
@@ -1847,8 +1848,7 @@ class TestRichPageFallback:
         client.client = AsyncMock()
         plain = type("TextPlain", (), {"text": "Article body"})()
         paragraph = type("PageBlockParagraph", (), {"text": plain})()
-        raw_page = MagicMock()
-        raw_page.cached_page = MagicMock(blocks=[paragraph])
+        raw_page = SimpleNamespace(cached_page=MagicMock(blocks=[paragraph]))
         client.client.invoke.return_value = raw_page
         message = MagicMock(
             id=42,
@@ -1862,6 +1862,23 @@ class TestRichPageFallback:
         assert result == "Article body"
         client.client.invoke.assert_awaited_once()
         assert client.client.invoke.await_args.kwargs["sleep_threshold"] == -1
+
+    @pytest.mark.asyncio
+    async def test_fetches_cached_page_from_wrapped_rpc_response(self):
+        client = TelegramClient.__new__(TelegramClient)
+        client.client = AsyncMock()
+        plain = type("TextPlain", (), {"text": "Wrapped article"})()
+        paragraph = type("PageBlockParagraph", (), {"text": plain})()
+        page = MagicMock(cached_page=MagicMock(blocks=[paragraph]))
+        client.client.invoke.return_value = MagicMock(webpage=page)
+        message = MagicMock(
+            id=43,
+            text=None,
+            caption=None,
+            web_page=MagicMock(url="https://example.test/wrapped"),
+        )
+
+        assert await client._get_rich_page_text(message) == "Wrapped article"
 
     @pytest.mark.asyncio
     async def test_does_not_expand_normal_link_preview(self):
