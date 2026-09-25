@@ -1837,3 +1837,127 @@ class TestFallbackTypeGuard:
         assert accessible is True
         assert info["type"] == "supergroup"
         assert error is None
+
+
+class TestRichPageFallback:
+
+    @pytest.mark.asyncio
+    async def test_fetches_cached_page_only_for_otherwise_empty_message(self):
+        client = TelegramClient.__new__(TelegramClient)
+        client.client = AsyncMock()
+        plain = type("TextPlain", (), {"text": "Article body"})()
+        paragraph = type("PageBlockParagraph", (), {"text": plain})()
+        raw_page = MagicMock()
+        raw_page.cached_page = MagicMock(blocks=[paragraph])
+        client.client.invoke.return_value = raw_page
+        message = MagicMock(
+            id=42,
+            text=None,
+            caption=None,
+            web_page=MagicMock(url="https://example.test/article"),
+        )
+
+        result = await client._get_rich_page_text(message)
+
+        assert result == "Article body"
+        client.client.invoke.assert_awaited_once()
+        assert client.client.invoke.await_args.kwargs["sleep_threshold"] == -1
+
+    @pytest.mark.asyncio
+    async def test_does_not_expand_normal_link_preview(self):
+        client = TelegramClient.__new__(TelegramClient)
+        client.client = AsyncMock()
+        message = MagicMock(
+            id=42,
+            text="https://example.test/article",
+            caption=None,
+            web_page=MagicMock(url="https://example.test/article"),
+        )
+
+        result = await client._get_rich_page_text(message)
+
+        assert result is None
+        client.client.invoke.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_rpc_failure_keeps_export_alive(self):
+        client = TelegramClient.__new__(TelegramClient)
+        client.client = AsyncMock()
+        client.client.invoke.side_effect = RuntimeError("unavailable")
+        message = MagicMock(
+            id=42,
+            text=None,
+            caption=None,
+            web_page=MagicMock(url="https://example.test/article"),
+        )
+
+        assert await client._get_rich_page_text(message) is None
+
+    @pytest.mark.asyncio
+    async def test_preview_metadata_without_cached_page_is_not_exported(self):
+        client = TelegramClient.__new__(TelegramClient)
+        client.client = AsyncMock()
+        client.client.invoke.return_value = MagicMock(
+            cached_page=None,
+            title="Preview title",
+            description="Preview description",
+        )
+        message = MagicMock(
+            id=42,
+            text=None,
+            caption=None,
+            web_page=MagicMock(url="https://example.test/article"),
+        )
+
+        assert await client._get_rich_page_text(message) is None
+
+    @pytest.mark.asyncio
+    async def test_floodwait_is_rethrown_for_cancellable_history_retry(self):
+        client = TelegramClient.__new__(TelegramClient)
+        client.client = AsyncMock()
+        client.client.invoke.side_effect = FloodWait(value=5)
+        message = MagicMock(
+            id=42,
+            text=None,
+            caption=None,
+            web_page=MagicMock(url="https://example.test/article"),
+        )
+
+        with pytest.raises(FloodWait):
+            await client._get_rich_page_text(message)
+
+    @pytest.mark.asyncio
+    async def test_rich_page_floodwait_retries_same_message_instead_of_skipping(self):
+        client = TelegramClient.__new__(TelegramClient)
+        client.is_connected = True
+        client._SEEN_IDS_MAX = 20_000
+        client.client = AsyncMock()
+
+        messages = [MagicMock(id=2, date=datetime(2025, 1, 2)), MagicMock(id=1, date=datetime(2025, 1, 1))]
+
+        async def history(**_kwargs):
+            for message in messages:
+                yield message
+
+        client.client.get_chat_history = history
+        client._get_rich_page_text = AsyncMock(
+            side_effect=[FloodWait(value=1), "Rich article", None]
+        )
+
+        def convert(message, rich_page_text=None):
+            return ExportedMessage(
+                id=message.id,
+                date=message.date.isoformat(),
+                text=rich_page_text or "normal",
+            )
+
+        with (
+            patch("pyrogram_client.MessageConverter.convert_message", side_effect=convert),
+            patch("pyrogram_client.cancellable_floodwait_sleep", new=AsyncMock()),
+        ):
+            result = [message async for message in client.get_chat_history(123)]
+
+        assert [(message.id, message.text) for message in result] == [
+            (2, "Rich article"),
+            (1, "normal"),
+        ]

@@ -16,6 +16,7 @@ from pyrogram.errors import (
 from config import settings
 from json_converter import MessageConverter
 from models import ExportedMessage
+from rich_page_text import render_cached_page
 
 import redis.asyncio as redis
 
@@ -184,6 +185,43 @@ class TelegramClient:
         except Exception as e:
             logger.error(f"Error during disconnect: {e}")
 
+    async def _get_rich_page_text(self, message: pyrogram_types.Message) -> Optional[str]:
+        """Fetch raw Instant View blocks omitted by Pyrogram's WebPage model.
+
+        The extra RPC is intentionally restricted to messages that would
+        otherwise be exported as empty.  Ordinary link previews keep their
+        historical output and incur no additional request.
+        """
+        if getattr(message, "text", None) or getattr(message, "caption", None):
+            return None
+        web_page = getattr(message, "web_page", None)
+        url = getattr(web_page, "url", None)
+        if not url:
+            return None
+        try:
+            raw_page = await self.client.invoke(
+                functions.messages.GetWebPage(url=url, hash=0),
+                # Surface FloodWait to the history loop.  Pyrogram's default
+                # auto-sleep would make a long rich-page request uncancellable.
+                sleep_threshold=-1,
+            )
+            text = render_cached_page(getattr(raw_page, "cached_page", None))
+            if text:
+                return text
+            return None
+        except FloodWait:
+            # The surrounding history loops already implement bounded,
+            # cancellable FloodWait retries.  Never turn rate limiting into a
+            # silently missing article.
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Unable to render rich webpage for message %s (%s)",
+                getattr(message, "id", "unknown"),
+                type(exc).__name__,
+            )
+            return None
+
     async def get_chat_history(
         self,
         chat_id: Union[int, str],
@@ -276,7 +314,20 @@ class TelegramClient:
                             if to_date and message_date and message_date > to_date:
                                 continue
 
-                            # Track this message ID and update last offset for restart-on-FloodWait
+                            # Convert to export format
+                            rich_page_text = await self._get_rich_page_text(message)
+                            exported = (
+                                MessageConverter.convert_message(
+                                    message, rich_page_text=rich_page_text
+                                )
+                                if rich_page_text
+                                else MessageConverter.convert_message(message)
+                            )
+
+                            # Advance only after every Telegram call needed for
+                            # this message succeeded.  Otherwise a FloodWait in
+                            # GetWebPage would resume *after* the rich post and
+                            # permanently skip it.
                             if seen_message_ids is not None:
                                 if message.id not in seen_message_ids:
                                     seen_message_ids.add(message.id)
@@ -285,9 +336,6 @@ class TelegramClient:
                                         evicted = seen_message_order.popleft()
                                         seen_message_ids.discard(evicted)
                             last_offset_id = message.id
-
-                            # Convert to export format
-                            exported = MessageConverter.convert_message(message)
                             yield exported
 
                             message_count += 1
@@ -296,6 +344,8 @@ class TelegramClient:
                                 logger.debug(f"Exported {message_count} messages...")
 
                         except ExportCancelled:
+                            raise
+                        except FloodWait:
                             raise
                         except Exception as e:
                             logger.error(f"Error processing message {message.id}: {e}")
@@ -464,14 +514,23 @@ class TelegramClient:
                         if to_date and message_date and message_date > to_date:
                             continue
 
+                        rich_page_text = await self._get_rich_page_text(parsed)
+                        exported = (
+                            MessageConverter.convert_message(
+                                parsed, rich_page_text=rich_page_text
+                            )
+                            if rich_page_text
+                            else MessageConverter.convert_message(parsed)
+                        )
+
+                        # Keep this message eligible for retry when the rich
+                        # page RPC raises FloodWait.
                         seen_message_ids.add(msg_id)
                         seen_message_order.append(msg_id)
                         if len(seen_message_order) > self._SEEN_IDS_MAX:
                             evicted = seen_message_order.popleft()
                             seen_message_ids.discard(evicted)
                         last_offset_id = msg_id
-
-                        exported = MessageConverter.convert_message(parsed)
                         yield exported
 
                         message_count += 1

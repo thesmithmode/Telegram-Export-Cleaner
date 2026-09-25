@@ -710,10 +710,12 @@ class ExportWorker:
                 ttl_seconds=settings.CACHE_TTL_SECONDS,
                 enabled=settings.CACHE_ENABLED,
             )
+            # Attach Redis before initialize so a canonical cache migration can
+            # remove stale cache:ranges hints after its SQLite commit.
+            self.message_cache.redis_client = self.control_redis
             await self.message_cache.initialize()
             # Publish cache:ranges:{chat_id} в Redis после каждого store_messages —
             # Java isLikelyCached() читает этот ключ для Express queue routing.
-            self.message_cache.redis_client = self.control_redis
             logger.info(
                 f"  Cache: enabled={settings.CACHE_ENABLED}, "
                 f"db={settings.CACHE_DB_PATH}, "

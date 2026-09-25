@@ -129,6 +129,14 @@ docker compose -f docker-compose.prod.yml --env-file .env up -d --remove-orphans
 
 Значение `TELEGRAM_CLEANER_BASE` должно совпадать с `HOST_DATA_PATH` из `.env`. Если репозиторий или данные размещены в других каталогах, обновите оба абсолютных пути в cron-команде.
 
+Перед релизом, который меняет canonical content version worker-кэша, запустите
+этот backup вручную до `docker compose up`. Такой релиз намеренно очищает старые
+messages/ranges/artifacts: потерянные при прежнем разборе Telegram page blocks
+невозможно восстановить из SQLite, поэтому первый экспорт после деплоя повторно
+загрузит историю из Telegram. Rollback образа остается безопасным, поскольку
+схема SQLite обратно совместима; при необходимости теплый кэш восстанавливается
+из backup только при остановленном `python-worker`.
+
 ## 7. Мониторинг
 
 ```bash

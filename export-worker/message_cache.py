@@ -31,6 +31,10 @@ from config import settings
 # с TTL канонических маппингов (30 дней), чтобы expire ранжей не оставлял zombie
 # в Java логике. Не привязано к SQLite TTL (там диапазоны хранятся вечно до evict).
 _CACHE_RANGES_REDIS_TTL_SECONDS = 30 * 86400
+# Version of the canonical ExportedMessage payload stored in ``messages.data``.
+# Unlike EXPORT_TEXT_FORMAT_VERSION, this cannot be backfilled from old data:
+# Pyrogram discarded CachedPage blocks before they reached the cache.
+_CANONICAL_CONTENT_VERSION = 2
 _CHAT_META_SIZE_SELECT_SQL = """
     SELECT COUNT(*), COALESCE(SUM(
         LENGTH(data)
@@ -94,6 +98,7 @@ class MessageCache:
         # повторные экспорты в Express queue. Без публикации Express ветка
         # никогда не активируется (false → main queue всегда).
         self.redis_client: Optional[Any] = None
+        self._canonical_invalidated_chat_ids: set[int] = set()
 
     # ------------------------------------------------------------------ #
     # Lifecycle
@@ -181,10 +186,22 @@ class MessageCache:
             );
             CREATE INDEX IF NOT EXISTS idx_export_artifacts_lru
                 ON export_artifacts(last_accessed ASC);
+
+            CREATE TABLE IF NOT EXISTS cache_metadata (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
         """)
         await self._migrate_schema_if_needed()
+        await self._migrate_canonical_content_if_needed()
         await self._db.commit()
         await self._cleanup_orphan_artifacts()
+        # SQLite commit must happen first.  Redis hints are only routing
+        # optimizations, so their best-effort cleanup must never roll back or
+        # block the canonical cache migration.
+        for chat_id in self._canonical_invalidated_chat_ids:
+            await self._invalidate_cache_ranges_in_redis(chat_id)
+        self._canonical_invalidated_chat_ids.clear()
 
         # Read pool инициализируется ПОСЛЕ создания таблиц чтобы избежать
         # race на CREATE TABLE между read-only conn и main conn.
@@ -285,6 +302,74 @@ class MessageCache:
             FROM chat_id_ranges
             """,
             (time.time(),),
+        )
+
+    async def _migrate_canonical_content_if_needed(self) -> None:
+        """Invalidate payloads that cannot be repaired from serialized data.
+
+        Old ExportedMessage blobs contain an empty ``text`` for Telegram rich
+        pages because Pyrogram omitted CachedPage.  Clearing all related range
+        tables is deliberately conservative: retaining coverage would prevent
+        Telegram from being queried again, and a text-format bump alone cannot
+        recover information that is absent from the blob.
+        """
+        if self._db is None:
+            return
+        async with self._db.execute(
+            "SELECT value FROM cache_metadata WHERE key='canonical_content_version'"
+        ) as cur:
+            row = await cur.fetchone()
+        current = int(row[0]) if row and str(row[0]).isdigit() else 0
+        if current == _CANONICAL_CONTENT_VERSION:
+            return
+
+        async with self._db.execute(
+            """
+            SELECT DISTINCT chat_id FROM (
+                SELECT chat_id FROM messages
+                UNION ALL SELECT chat_id FROM chat_id_ranges
+                UNION ALL SELECT chat_id FROM chat_id_coverage_ranges
+                UNION ALL SELECT chat_id FROM chat_date_ranges
+                UNION ALL SELECT chat_id FROM chat_meta
+                UNION ALL SELECT chat_id FROM export_artifacts
+            )
+            """
+        ) as cur:
+            self._canonical_invalidated_chat_ids.update(
+                int(row[0]) for row in await cur.fetchall()
+            )
+
+        counts = {}
+        tables = (
+            "messages",
+            "chat_id_ranges",
+            "chat_id_coverage_ranges",
+            "chat_date_ranges",
+            "chat_meta",
+            "export_artifacts",
+        )
+        for table in tables:
+            async with self._db.execute(f"SELECT COUNT(*) FROM {table}") as cur:
+                count_row = await cur.fetchone()
+            counts[table] = int(count_row[0] if count_row else 0)
+
+        if any(counts.values()):
+            logger.warning(
+                "Invalidating canonical cache for content version %d -> %d: %s",
+                current,
+                _CANONICAL_CONTENT_VERSION,
+                ", ".join(f"{table}={count}" for table, count in counts.items()),
+            )
+        # Always clear every dependent table.  A prior interrupted cleanup can
+        # legitimately leave no messages but still retain coverage or artifact
+        # metadata, which would otherwise hide messages or serve stale files.
+        for table in tables:
+            await self._db.execute(f"DELETE FROM {table}")
+
+        await self._db.execute(
+            "INSERT INTO cache_metadata(key, value) VALUES('canonical_content_version', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (str(_CANONICAL_CONTENT_VERSION),),
         )
 
     async def _init_read_pool(self) -> None:
