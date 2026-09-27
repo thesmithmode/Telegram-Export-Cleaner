@@ -96,6 +96,9 @@ Worker также извлекает текст из расширенных Tele
 SQLite-кэша инвалидируется, чтобы ранее пропущенные публикации были загружены
 из Telegram повторно.
 
+Production deploy перед обновлением контейнеров автоматически создаёт WAL-safe
+backup SQLite-кэша и останавливается, если snapshot или integrity check не прошли.
+
 Подробнее: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ---
