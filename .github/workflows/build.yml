@@ -177,7 +177,7 @@ jobs:
           port: ${{ secrets.SERVER_PORT }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          source: docker-compose.prod.yml,.env
+          source: docker-compose.prod.yml,.env,ops/backup-cache.sh
           target: ${{ secrets.SERVER_DEPLOY_PATH }}/
           strip_components: 0
 
@@ -205,6 +205,24 @@ jobs:
             # .env is generated on the GitHub runner and copied with scp so
             # secrets are not interpolated into this remote shell script.
             chmod 600 .env
+
+            # A worker release may bump the canonical cache content version and
+            # deliberately invalidate messages/ranges/artifacts on startup.  The
+            # first compose up below can start python-worker as soon as java-bot is
+            # healthy, so the backup must be completed before any image is pulled
+            # or container is recreated.  A missing DB is valid on first deploy;
+            # every other backup error is fatal under set -e.
+            HOST_DATA_PATH=$(docker compose -f docker-compose.prod.yml --env-file .env \
+              config --environment | sed -n 's/^HOST_DATA_PATH=//p')
+            case "$HOST_DATA_PATH" in
+              /*) ;;
+              *)
+                echo "FAIL: HOST_DATA_PATH отсутствует или не является абсолютным путём"
+                exit 1
+                ;;
+            esac
+            chmod 700 ops/backup-cache.sh
+            TELEGRAM_CLEANER_BASE="$HOST_DATA_PATH" ops/backup-cache.sh
 
             echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
 

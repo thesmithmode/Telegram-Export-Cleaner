@@ -157,6 +157,32 @@ class TestDeploymentWiring:
             "неполная rollback-точка должна останавливать стек, а не запускать смешанную версию"
         )
 
+    def test_deploy_backs_up_cache_before_recreating_worker(self):
+        build = (REPO_ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
+        backup = 'TELEGRAM_CLEANER_BASE="$HOST_DATA_PATH" ops/backup-cache.sh'
+        first_up = "docker compose -f docker-compose.prod.yml --env-file .env up -d --remove-orphans"
+
+        assert "source: docker-compose.prod.yml,.env,ops/backup-cache.sh" in build, (
+            "deploy должен копировать WAL-safe backup script на production host"
+        )
+        assert 'case "$HOST_DATA_PATH" in' in build and "/*) ;;" in build, (
+            "backup нельзя запускать с пустым или относительным HOST_DATA_PATH"
+        )
+        assert backup in build, "production deploy должен создавать cache snapshot"
+        assert build.index(backup) < build.index(first_up), (
+            "snapshot обязан завершиться до compose up, который запускает новый worker"
+        )
+
+    def test_backup_names_are_unique_within_the_same_day(self):
+        script = (REPO_ROOT / "ops/backup-cache.sh").read_text(encoding="utf-8")
+
+        assert "+%Y%m%dT%H%M%S.%NZ" in script, (
+            "backup filename должен различать несколько snapshot в одни UTC-сутки"
+        )
+        assert '-$$"' in script, (
+            "PID не позволяет двум отдельным запускам выбрать одинаковое имя"
+        )
+
 
 def _extract_service_block(compose: str, service: str) -> str:
     """Грубый срез YAML-блока сервиса до следующего сервиса того же уровня."""
