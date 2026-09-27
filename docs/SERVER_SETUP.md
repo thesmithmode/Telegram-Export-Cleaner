@@ -132,7 +132,12 @@ docker compose -f docker-compose.prod.yml --env-file .env up -d --remove-orphans
 Production pipeline запускает этот backup автоматически до первого
 `docker compose up` и прерывает deploy при любой ошибке snapshot или integrity
 check. При ручном обновлении теми же командами из раздела 5 сначала обязательно
-запустите `TELEGRAM_CLEANER_BASE="$HOST_DATA_PATH" ./ops/backup-cache.sh`.
+запустите
+`TELEGRAM_CLEANER_BASE="$(docker compose -f docker-compose.prod.yml --env-file .env config --environment | sed -n 's/^HOST_DATA_PATH=//p')" ./ops/backup-cache.sh`.
+
+Имя каждого архива содержит UTC timestamp с наносекундами и PID процесса,
+поэтому cron и несколько deploy в один день создают разные recovery points, а не
+перезаписывают pre-deploy snapshot.
 
 Релиз, который меняет canonical content version worker-кэша, намеренно очищает
 старые messages/ranges/artifacts: потерянные при прежнем разборе Telegram page

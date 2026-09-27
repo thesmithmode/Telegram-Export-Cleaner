@@ -173,6 +173,16 @@ class TestDeploymentWiring:
             "snapshot обязан завершиться до compose up, который запускает новый worker"
         )
 
+    def test_backup_names_are_unique_within_the_same_day(self):
+        script = (REPO_ROOT / "ops/backup-cache.sh").read_text(encoding="utf-8")
+
+        assert "+%Y%m%dT%H%M%S.%NZ" in script, (
+            "backup filename должен различать несколько snapshot в одни UTC-сутки"
+        )
+        assert '-$$"' in script, (
+            "PID не позволяет двум отдельным запускам выбрать одинаковое имя"
+        )
+
 
 def _extract_service_block(compose: str, service: str) -> str:
     """Грубый срез YAML-блока сервиса до следующего сервиса того же уровня."""
