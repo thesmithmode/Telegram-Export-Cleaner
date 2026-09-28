@@ -3,7 +3,7 @@ import os
 import time
 import pytest
 import asyncio
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import aiosqlite
 
@@ -62,6 +62,100 @@ class TestStoreAndRetrieve:
         retrieved = await cache.get_messages(123, 1, 1)
         assert len(retrieved) == 1
         assert retrieved[0].text == "version 2"
+
+    @pytest.mark.asyncio
+    async def test_legacy_canonical_cache_is_invalidated_once(self, tmp_path):
+        db_path = str(tmp_path / "legacy_content.db")
+        first = MessageCache(db_path=db_path)
+        await first.initialize()
+        await first.store_messages(123, [_make_msg(1, text="legacy")])
+        await first._db.execute(
+            "UPDATE cache_metadata SET value='1' WHERE key='canonical_content_version'"
+        )
+        await first._db.commit()
+        await first.close()
+
+        migrated = MessageCache(db_path=db_path)
+        await migrated.initialize()
+        try:
+            assert await migrated.get_messages(123, 1, 1) == []
+            assert await migrated.get_cached_ranges(123) == []
+            assert await migrated.get_coverage_ranges(123) == []
+            assert await migrated.get_missing_ranges(123, 1, 1) == [(1, 1)]
+        finally:
+            await migrated.close()
+
+        reopened = MessageCache(db_path=db_path)
+        await reopened.initialize()
+        try:
+            await reopened.store_messages(123, [_make_msg(2, text="new")])
+        finally:
+            await reopened.close()
+
+        final = MessageCache(db_path=db_path)
+        await final.initialize()
+        try:
+            assert [msg.id for msg in await final.get_messages(123, 1, 2)] == [2]
+        finally:
+            await final.close()
+
+    @pytest.mark.asyncio
+    async def test_version_migration_clears_artifact_only_partial_state(self, tmp_path):
+        db_path = str(tmp_path / "partial_content.db")
+        artifact_dir = tmp_path / "artifacts"
+        artifact_dir.mkdir()
+        artifact_path = artifact_dir / "stale.txt"
+        artifact_path.write_text("stale", encoding="utf-8")
+
+        first = MessageCache(db_path=db_path, artifact_dir=str(artifact_dir))
+        await first.initialize()
+        await first._db.execute(
+            """
+            INSERT INTO export_artifacts(
+                chat_id, topic_id, scope, format_version, coverage_max_id,
+                message_count, file_size, file_path, last_accessed, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (123, 0, "full", 1, 1, 1, 5, str(artifact_path), time.time(), time.time()),
+        )
+        await first._db.execute(
+            "UPDATE cache_metadata SET value='1' WHERE key='canonical_content_version'"
+        )
+        await first._db.commit()
+        await first.close()
+
+        migrated = MessageCache(db_path=db_path, artifact_dir=str(artifact_dir))
+        await migrated.initialize()
+        try:
+            async with migrated._db.execute("SELECT COUNT(*) FROM export_artifacts") as cur:
+                assert (await cur.fetchone())[0] == 0
+            assert not artifact_path.exists()
+        finally:
+            await migrated.close()
+
+    @pytest.mark.asyncio
+    async def test_version_migration_invalidates_redis_range_hints(self, tmp_path):
+        db_path = str(tmp_path / "redis_hint_content.db")
+        first = MessageCache(db_path=db_path)
+        await first.initialize()
+        await first.store_messages(-100123, [_make_msg(1, text="legacy")])
+        await first._db.execute(
+            "UPDATE cache_metadata SET value='1' WHERE key='canonical_content_version'"
+        )
+        await first._db.commit()
+        await first.close()
+
+        redis = AsyncMock()
+        redis.get.return_value = "public_chat"
+        migrated = MessageCache(db_path=db_path)
+        migrated.redis_client = redis
+        await migrated.initialize()
+        try:
+            redis.delete.assert_awaited_once_with(
+                "cache:ranges:-100123", "cache:ranges:public_chat"
+            )
+        finally:
+            await migrated.close()
 
 class TestCachedRanges:
 

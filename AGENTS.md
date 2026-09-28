@@ -37,6 +37,7 @@ Telegram Export Cleaner — Telegram-бот и REST API для выгрузки 
 - Локально быстрые проверки: `git diff --check`, `mvn -q -DskipTests compile`, `python -m py_compile export-worker/*.py`.
 - Полные Java/Python тесты выполняются в GitHub Actions CI.
 - Если меняется API, очередь Redis, worker cache/recovery/cancel, env или deploy — обновить `README.md` и `docs/*`.
+- Если меняется canonical извлечение текста Telegram-сообщения — обновить content version кэша; одного `EXPORT_TEXT_FORMAT_VERSION` недостаточно.
 - Coverage ниже глобального порога проекта нельзя считать зеленым релизным состоянием; исторический JaCoCo gate 82% из code-review не является целевой нормой.
 
 ## Кодовые правила

@@ -21,7 +21,9 @@ umask 077
 
 BASE="${TELEGRAM_CLEANER_BASE:-/var/lib/telegram-cleaner}"
 BACKUPS="$BASE/backups"
-STAMP="$(date -u +%Y%m%d)"
+# Include sub-second UTC time and PID so a pre-deploy checkpoint cannot be
+# overwritten by another deploy or the scheduled backup on the same day.
+STAMP="$(date -u +%Y%m%dT%H%M%S.%NZ)-$$"
 LOCKFILE="${BACKUP_LOCKFILE:-/var/run/telegram-cleaner-backup.lock}"
 KEEP="${BACKUP_KEEP:-3}"
 

@@ -32,6 +32,24 @@ ID-cache теперь разделяет visible ranges и coverage ranges:
 
 Coverage решает корневую проблему tiny gaps без раздувания диска. Artifact-cache вторичен и ограничен LRU, потому что готовый txt не должен заменять canonical message-cache и не подходит для date/keyword/limit экспортов.
 
+### Расширенные публикации (Instant View / CachedPage)
+
+Pyrogram 2.0 не переносит `WebPage.cached_page` в high-level `WebPage`. Для сообщения,
+у которого нет обычных `text` и `caption`, worker точечно вызывает
+`messages.getWebPage` и преобразует Telegram page blocks в ограниченный plain text.
+Поддерживаются вложенные текстовые блоки, раскрывающиеся `details`, таблицы,
+списки и media captions; неизвестный блок не должен прерывать весь экспорт.
+
+Обычные сообщения со ссылкой не раскрываются: rich page используется только как
+fallback для иначе пустого сообщения. Это предотвращает дублирование текста и
+не меняет исторический формат существующих экспортов.
+
+Canonical cache имеет отдельную content version. При первом запуске версии с
+поддержкой CachedPage старый message-cache, ranges и export artifacts очищаются,
+поскольку в старом msgpack уже отсутствуют page blocks и восстановить их локально
+невозможно. Первый экспорт после обновления будет cold-cache и может занять дольше;
+перед production deploy следует сохранить WAL-safe backup по `docs/SERVER_SETUP.md`.
+
 ### Invisible-unicode защита (java_client.py)
 
 После `/api/convert` проверяет временный файл с очищенным текстом на Unicode categories `Cc/Cf/Zs/Zl/Zp` потоково. Если весь текст — только invisible символы → `notify_empty_export()`. Защита от технически непустого, но визуально пустого ответа.

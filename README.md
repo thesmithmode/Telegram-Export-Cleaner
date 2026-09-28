@@ -90,6 +90,15 @@ Java API (POST /api/convert)
 - **Python** — Telegram API через Pyrogram, SQLite-кэш, очередь
 - **Redis** — очереди задач, статусы, дедупликация
 
+Worker также извлекает текст из расширенных Telegram Instant View/CachedPage
+публикаций (таблицы, раскрывающиеся блоки и media captions), когда у сообщения
+нет обычного текста или подписи. При изменении canonical extraction версия
+SQLite-кэша инвалидируется, чтобы ранее пропущенные публикации были загружены
+из Telegram повторно.
+
+Production deploy перед обновлением контейнеров автоматически создаёт WAL-safe
+backup SQLite-кэша и останавливается, если snapshot или integrity check не прошли.
+
 Подробнее: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ---

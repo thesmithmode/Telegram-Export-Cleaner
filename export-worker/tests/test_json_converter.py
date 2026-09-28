@@ -304,6 +304,46 @@ class TestMessageConversion:
 
         assert result.text == ""
 
+    def test_rich_page_text_is_used_only_as_empty_message_fallback(self):
+        message = Mock()
+        message.id = 129
+        message.date = datetime(2025, 6, 24, 15, 36, 0)
+        message.text = None
+        message.caption = None
+        message.from_user = None
+        message.entities = None
+        message.caption_entities = None
+        message.media = None
+        message.forward_from = None
+        message.forward_sender_name = None
+        message.forward_date = None
+        message.edit_date = None
+        message.reply_to_message_id = None
+
+        result = MessageConverter.convert_message(message, rich_page_text="Rich article")
+
+        assert result.text == "Rich article"
+
+    def test_normal_text_wins_over_rich_page_fallback(self):
+        message = Mock()
+        message.id = 129
+        message.date = datetime(2025, 6, 24, 15, 36, 0)
+        message.text = "Existing text"
+        message.caption = None
+        message.from_user = None
+        message.entities = None
+        message.caption_entities = None
+        message.media = None
+        message.forward_from = None
+        message.forward_sender_name = None
+        message.forward_date = None
+        message.edit_date = None
+        message.reply_to_message_id = None
+
+        result = MessageConverter.convert_message(message, rich_page_text="Duplicate article")
+
+        assert result.text == "Existing text"
+
     def test_media_message_with_caption(self):
         photo = Mock()
         photo.__class__.__name__ = "Photo"
