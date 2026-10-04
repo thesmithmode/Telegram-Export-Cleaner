@@ -151,6 +151,10 @@ class ExportBotCallbackHandlerTest {
         @Test
         @DisplayName("CB_BACK_TO_DATE_CHOICE сбрасывает даты и показывает меню выбора диапазона")
         void backToDateChoice() {
+            UserSession s = sessionRegistry.get(2L);
+            s.setChatDisplay("@ch");
+            s.setState(UserSession.State.AWAITING_FROM_DATE);
+
             handler.handleCallbackSafe(makeCallback(2L, ExportBot.CB_BACK_TO_DATE_CHOICE));
 
             verify(messengerMock).editMessage(eq(2L), anyInt(), anyString(), any(InlineKeyboardMarkup.class));
@@ -159,6 +163,10 @@ class ExportBotCallbackHandlerTest {
         @Test
         @DisplayName("CB_BACK_TO_FROM_DATE сбрасывает toDate и показывает ввод начальной даты")
         void backToFromDate() {
+            UserSession s = sessionRegistry.get(3L);
+            s.setChatDisplay("@ch");
+            s.setState(UserSession.State.AWAITING_TO_DATE);
+
             handler.handleCallbackSafe(makeCallback(3L, ExportBot.CB_BACK_TO_FROM_DATE));
 
             verify(messengerMock).editMessage(eq(3L), anyInt(), anyString(), any(InlineKeyboardMarkup.class));
@@ -185,6 +193,7 @@ class ExportBotCallbackHandlerTest {
             UserSession s = sessionRegistry.get(5L);
             s.setChatId("ch");
             s.setChatDisplay("@ch");
+            s.setState(UserSession.State.AWAITING_DATE_CHOICE);
 
             handler.handleCallbackSafe(makeCallback(5L, ExportBot.CB_LAST_24H));
 
@@ -204,6 +213,7 @@ class ExportBotCallbackHandlerTest {
             UserSession s = sessionRegistry.get(6L);
             s.setChatId("ch2");
             s.setChatDisplay("@ch2");
+            s.setState(UserSession.State.AWAITING_DATE_CHOICE);
 
             handler.handleCallbackSafe(makeCallback(6L, ExportBot.CB_LAST_7D));
 
@@ -216,6 +226,42 @@ class ExportBotCallbackHandlerTest {
             handler.handleCallbackSafe(makeCallback(7L, "unknown_cb_xyz"));
 
             verify(messengerMock, never()).editMessage(anyLong(), anyInt(), anyString(), any());
+        }
+
+        @Test
+        @DisplayName("Устаревший LAST_24H при IDLE не запускает экспорт")
+        void staleQuickRangeIgnoredWhenIdle() {
+            UserSession s = sessionRegistry.get(8L);
+            s.setChatId("ch");
+            s.setChatDisplay("@ch");
+            // state остаётся IDLE
+
+            handler.handleCallbackSafe(makeCallback(8L, ExportBot.CB_LAST_24H));
+
+            verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), any(), any(), any(), any());
+            verify(messengerMock).send(eq(8L), contains("истекла"));
+        }
+
+        @Test
+        @DisplayName("cancel_export:taskId отменяет только если taskId = active")
+        void cancelBoundToActiveTaskId() {
+            when(jobProducerMock.getActiveExport(9L)).thenReturn("export_abc");
+
+            handler.handleCallbackSafe(makeCallback(9L, ExportBot.CB_CANCEL_EXPORT + ":export_abc"));
+
+            verify(jobProducerMock).cancelExport(9L);
+            verify(messengerMock).editMessage(eq(9L), anyInt(), contains("отменён"), isNull());
+        }
+
+        @Test
+        @DisplayName("cancel_export:старый taskId не трогает новый активный экспорт")
+        void cancelWrongTaskIdDoesNotCancel() {
+            when(jobProducerMock.getActiveExport(10L)).thenReturn("export_new");
+
+            handler.handleCallbackSafe(makeCallback(10L, ExportBot.CB_CANCEL_EXPORT + ":export_old"));
+
+            verify(jobProducerMock, never()).cancelExport(anyLong());
+            verify(messengerMock).editMessage(eq(10L), anyInt(), contains("активн"), isNull());
         }
     }
 

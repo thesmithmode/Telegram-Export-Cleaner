@@ -760,7 +760,8 @@ class TelegramClient:
         floodwait: FloodWait,
         is_cancelled_fn: Optional[CancelCheck] = None,
     ) -> None:
-        wait_time = int(floodwait.value) + 1
+        # Same FloodWait upper bound as get_chat_history / topic export retries.
+        wait_time = min(int(floodwait.value) + 1, settings.RETRY_MAX_DELAY)
         logger.warning(
             f"FloodWait {floodwait.value}s during {fallback_name} chat={chat_id}; "
             f"sleeping {wait_time}s before continuing resolution"

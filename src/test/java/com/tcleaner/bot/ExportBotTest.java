@@ -296,13 +296,56 @@ class ExportBotTest {
         }
 
         @Test
-        @DisplayName("CB_CANCEL_EXPORT отменяет экспорт")
+        @DisplayName("CB_CANCEL_EXPORT с taskId отменяет только связанную активную задачу")
         void testCancelCallback() {
-            bot.consume(createCallbackUpdate(123L, ExportBot.CB_CANCEL_EXPORT));
+            when(jobProducerMock.getActiveExport(123L)).thenReturn("export_test_id");
+
+            bot.consume(createCallbackUpdate(123L, ExportBot.CB_CANCEL_EXPORT + ":export_test_id"));
 
             verify(jobProducerMock).cancelExport(123L);
             verify(messengerMock).editMessage(
                     eq(123L), anyInt(), contains("отменён"), isNull());
+        }
+
+        @Test
+        @DisplayName("Устаревший cancel без taskId не отменяет текущий экспорт")
+        void staleCancelCallbackWithoutTaskIdIgnored() {
+            when(jobProducerMock.getActiveExport(123L)).thenReturn("export_test_id");
+
+            bot.consume(createCallbackUpdate(123L, ExportBot.CB_CANCEL_EXPORT));
+
+            verify(jobProducerMock, never()).cancelExport(anyLong());
+        }
+
+        @Test
+        @DisplayName("Cancel с чужим/старым taskId не отменяет активный экспорт")
+        void staleCancelCallbackWrongTaskIdIgnored() {
+            when(jobProducerMock.getActiveExport(123L)).thenReturn("export_new_id");
+
+            bot.consume(createCallbackUpdate(123L, ExportBot.CB_CANCEL_EXPORT + ":export_old_id"));
+
+            verify(jobProducerMock, never()).cancelExport(anyLong());
+            verify(messengerMock).editMessage(
+                    eq(123L), anyInt(), contains("активн"), isNull());
+        }
+
+        @Test
+        @DisplayName("Callback из группы игнорируется (как сообщения)")
+        void groupCallbackIgnored() {
+            bot.consume(createTextMessageUpdate(123L, "@my_channel"));
+            bot.consume(createCallbackUpdate(123L, -100999888777L, "supergroup", ExportBot.CB_EXPORT_ALL));
+
+            verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString(), any(), any(), any());
+            verify(messengerMock).answerCallback(anyString());
+        }
+
+        @Test
+        @DisplayName("Устаревшая date-range кнопка при IDLE не двигает wizard")
+        void staleDateRangeCallbackIgnoredWhenIdle() {
+            bot.consume(createCallbackUpdate(123L, ExportBot.CB_DATE_RANGE));
+
+            verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString(), any(), any(), any());
+            verify(messengerMock).send(eq(123L), contains("истекла"));
         }
     }
 
@@ -613,12 +656,16 @@ class ExportBotTest {
     }
 
     private Update createCallbackUpdate(long userId, String data) {
+        return createCallbackUpdate(userId, userId, "private", data);
+    }
+
+    private Update createCallbackUpdate(long userId, long messageChatId, String chatType, String data) {
         Update update = new Update();
         update.setUpdateId(2);
 
         Message callbackMessage = new Message();
         callbackMessage.setMessageId(777);
-        Chat chat = Chat.builder().id(userId).type("private").build();
+        Chat chat = Chat.builder().id(messageChatId).type(chatType).build();
         callbackMessage.setChat(chat);
 
         User user = User.builder().id(userId).firstName("Test").isBot(false).build();

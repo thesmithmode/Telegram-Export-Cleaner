@@ -280,6 +280,9 @@ class TestTelegramClientVerifyAccess:
 
     @pytest.mark.asyncio
     async def test_resolve_numeric_chat_id_uses_cancellable_floodwait(self):
+        """Resolve FloodWait sleep is capped by settings.RETRY_MAX_DELAY and keeps cancel."""
+        from config import settings
+
         client = TelegramClient()
         cancel_checker = AsyncMock(return_value=False)
 
@@ -291,8 +294,32 @@ class TestTelegramClientVerifyAccess:
                 cancel_checker,
             )
 
+        expected_wait = min(1235, settings.RETRY_MAX_DELAY)
+        assert expected_wait == settings.RETRY_MAX_DELAY
         sleep_mock.assert_awaited_once_with(
-            1235,
+            expected_wait,
+            is_cancelled_fn=cancel_checker,
+        )
+
+    @pytest.mark.asyncio
+    async def test_resolve_floodwait_below_cap_keeps_requested_wait(self):
+        """FloodWait below RETRY_MAX_DELAY is not inflated; cancel check preserved."""
+        from config import settings
+
+        client = TelegramClient()
+        cancel_checker = AsyncMock(return_value=False)
+        fw_seconds = max(1, int(settings.RETRY_MAX_DELAY) // 2)
+
+        with patch("pyrogram_client.cancellable_floodwait_sleep", new=AsyncMock()) as sleep_mock:
+            await client._sleep_for_resolve_floodwait(
+                "fallback 2 (GetChannels)",
+                -1001234567890,
+                FloodWait(fw_seconds),
+                cancel_checker,
+            )
+
+        sleep_mock.assert_awaited_once_with(
+            fw_seconds + 1,
             is_cancelled_fn=cancel_checker,
         )
 

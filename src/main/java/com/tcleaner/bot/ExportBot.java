@@ -157,6 +157,10 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
     private void processUpdate(Update update) {
         if (update.hasCallbackQuery()) {
             CallbackQuery callback = update.getCallbackQuery();
+            if (!isPrivateChatCallback(callback)) {
+                messenger.answerCallback(callback.getId());
+                return;
+            }
             publishBotUserSeen(callback.getFrom());
             callbackHandler.handleCallbackSafe(callback);
             return;
@@ -177,6 +181,18 @@ public class ExportBot implements SpringLongPollingBot, LongPollingSingleThreadU
             commandHandler.handleMessageText(
                     message.getChatId(), message.getFrom().getId(), message.getText().trim());
         }
+    }
+
+    /** Same private-chat gate as messages: ignore button clicks outside private chats. */
+    private static boolean isPrivateChatCallback(CallbackQuery callback) {
+        if (callback == null || callback.getMessage() == null) {
+            return false;
+        }
+        Object maybe = callback.getMessage();
+        if (!(maybe instanceof Message message) || message.getChat() == null) {
+            return false;
+        }
+        return "private".equals(message.getChat().getType());
     }
 
     private void publishBotUserSeen(User from) {
