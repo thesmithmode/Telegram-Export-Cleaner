@@ -360,4 +360,123 @@ class ExportBotCallbackHandlerTest {
             verify(messengerMock).editMessage(eq(24L), anyInt(), anyString(), isNull());
         }
     }
+
+    @Nested
+    @DisplayName("State guard + cancel taskId branches")
+    class StateAndCancelBranches {
+
+        private void prepareEnqueueMocks() {
+            when(jobProducerMock.enqueue(anyLong(), anyLong(), any(), any(), any(), any()))
+                    .thenReturn("tid");
+            when(jobProducerMock.isLikelyCached(any())).thenReturn(false);
+            when(jobProducerMock.getQueueLength()).thenReturn(0L);
+            when(jobProducerMock.hasActiveProcessingJob()).thenReturn(false);
+            when(messengerMock.sendWithKeyboardGetId(anyLong(), anyString(), any())).thenReturn(5);
+        }
+
+        @Test
+        @DisplayName("CB_LAST_3D / CB_LAST_30D при AWAITING_DATE_CHOICE запускают экспорт")
+        void quickRangesWithValidState() {
+            prepareEnqueueMocks();
+            UserSession s3 = sessionRegistry.get(31L);
+            s3.setChatId("c3");
+            s3.setChatDisplay("@c3");
+            s3.setState(UserSession.State.AWAITING_DATE_CHOICE);
+            handler.handleCallbackSafe(makeCallback(31L, ExportBot.CB_LAST_3D));
+            verify(jobProducerMock).enqueue(eq(31L), eq(31L), eq("c3"), isNull(), anyString(), isNull());
+
+            UserSession s30 = sessionRegistry.get(32L);
+            s30.setChatId("c30");
+            s30.setChatDisplay("@c30");
+            s30.setState(UserSession.State.AWAITING_DATE_CHOICE);
+            handler.handleCallbackSafe(makeCallback(32L, ExportBot.CB_LAST_30D));
+            verify(jobProducerMock).enqueue(eq(32L), eq(32L), eq("c30"), isNull(), anyString(), isNull());
+        }
+
+        @Test
+        @DisplayName("CB_EXPORT_ALL / CB_FROM_START / CB_TO_TODAY требуют нужный state")
+        void wizardButtonsRequireState() {
+            prepareEnqueueMocks();
+
+            UserSession idle = sessionRegistry.get(40L);
+            idle.setChatId("x");
+            idle.setChatDisplay("@x");
+            handler.handleCallbackSafe(makeCallback(40L, ExportBot.CB_EXPORT_ALL));
+            verify(jobProducerMock, never()).enqueue(eq(40L), anyLong(), any(), any(), any(), any());
+
+            UserSession choice = sessionRegistry.get(41L);
+            choice.setChatId("y");
+            choice.setChatDisplay("@y");
+            choice.setState(UserSession.State.AWAITING_DATE_CHOICE);
+            handler.handleCallbackSafe(makeCallback(41L, ExportBot.CB_EXPORT_ALL));
+            verify(jobProducerMock).enqueue(eq(41L), eq(41L), eq("y"), isNull(), isNull(), isNull());
+
+            UserSession wrongFrom = sessionRegistry.get(42L);
+            wrongFrom.setChatDisplay("@z");
+            wrongFrom.setState(UserSession.State.AWAITING_DATE_CHOICE);
+            handler.handleCallbackSafe(makeCallback(42L, ExportBot.CB_FROM_START));
+            verify(messengerMock).send(eq(42L), contains("истекла"));
+
+            UserSession from = sessionRegistry.get(43L);
+            from.setChatDisplay("@z2");
+            from.setState(UserSession.State.AWAITING_FROM_DATE);
+            handler.handleCallbackSafe(makeCallback(43L, ExportBot.CB_FROM_START));
+            verify(messengerMock).editMessage(eq(43L), anyInt(), contains("конечн"), any(InlineKeyboardMarkup.class));
+
+            UserSession wrongTo = sessionRegistry.get(44L);
+            wrongTo.setChatId("t");
+            wrongTo.setChatDisplay("@t");
+            wrongTo.setState(UserSession.State.AWAITING_FROM_DATE);
+            handler.handleCallbackSafe(makeCallback(44L, ExportBot.CB_TO_TODAY));
+            verify(jobProducerMock, never()).enqueue(eq(44L), anyLong(), any(), any(), any(), any());
+
+            UserSession to = sessionRegistry.get(45L);
+            to.setChatId("t2");
+            to.setChatDisplay("@t2");
+            to.setState(UserSession.State.AWAITING_TO_DATE);
+            handler.handleCallbackSafe(makeCallback(45L, ExportBot.CB_TO_TODAY));
+            verify(jobProducerMock).enqueue(eq(45L), eq(45L), eq("t2"), isNull(), isNull(), isNull());
+        }
+
+        @Test
+        @DisplayName("BACK_TO_DATE_CHOICE принимает AWAITING_TO_DATE; BACK_TO_FROM_DATE отвергает IDLE")
+        void backButtonsStateBranches() {
+            UserSession to = sessionRegistry.get(50L);
+            to.setChatDisplay("@b");
+            to.setState(UserSession.State.AWAITING_TO_DATE);
+            handler.handleCallbackSafe(makeCallback(50L, ExportBot.CB_BACK_TO_DATE_CHOICE));
+            verify(messengerMock).editMessage(eq(50L), anyInt(), anyString(), any(InlineKeyboardMarkup.class));
+
+            UserSession idle = sessionRegistry.get(51L);
+            idle.setChatDisplay("@b2");
+            handler.handleCallbackSafe(makeCallback(51L, ExportBot.CB_BACK_TO_FROM_DATE));
+            verify(messengerMock).send(eq(51L), contains("истекла"));
+            verify(messengerMock, never()).editMessage(eq(51L), anyInt(), anyString(), any());
+        }
+
+        @Test
+        @DisplayName("cancel_export: пустой taskId или нет active → no_active, без cancelExport")
+        void cancelBlankOrMissingActive() {
+            handler.handleCallbackSafe(makeCallback(60L, ExportBot.CB_CANCEL_EXPORT + ":"));
+            verify(jobProducerMock, never()).cancelExport(anyLong());
+            verify(messengerMock).editMessage(eq(60L), anyInt(), contains("активн"), isNull());
+
+            when(jobProducerMock.getActiveExport(61L)).thenReturn(null);
+            handler.handleCallbackSafe(makeCallback(61L, ExportBot.CB_CANCEL_EXPORT + ":export_x"));
+            verify(jobProducerMock, never()).cancelExport(eq(61L));
+            verify(messengerMock).editMessage(eq(61L), anyInt(), contains("активн"), isNull());
+        }
+
+        @Test
+        @DisplayName("CB_DATE_RANGE при валидном state переводит в AWAITING_FROM_DATE")
+        void dateRangeValidState() {
+            UserSession s = sessionRegistry.get(70L);
+            s.setChatDisplay("@dr");
+            s.setState(UserSession.State.AWAITING_DATE_CHOICE);
+            handler.handleCallbackSafe(makeCallback(70L, ExportBot.CB_DATE_RANGE));
+            verify(messengerMock).editMessage(eq(70L), anyInt(), contains("начальн"), any(InlineKeyboardMarkup.class));
+            org.junit.jupiter.api.Assertions.assertEquals(UserSession.State.AWAITING_FROM_DATE, s.getState());
+        }
+    }
+
 }

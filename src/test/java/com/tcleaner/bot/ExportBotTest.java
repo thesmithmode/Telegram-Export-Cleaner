@@ -347,6 +347,31 @@ class ExportBotTest {
             verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString(), any(), any(), any());
             verify(messengerMock).send(eq(123L), contains("истекла"));
         }
+
+        @Test
+        @DisplayName("Callback без message: answerCallback и выход (private gate)")
+        void callbackWithoutMessageAnswered() {
+            Update update = new Update();
+            update.setUpdateId(9);
+            CallbackQuery cb = new CallbackQuery();
+            cb.setId("cb_nomsg");
+            cb.setFrom(User.builder().id(123L).firstName("T").isBot(false).build());
+            cb.setData(ExportBot.CB_EXPORT_ALL);
+            update.setCallbackQuery(cb);
+
+            bot.consume(update);
+
+            verify(messengerMock).answerCallback("cb_nomsg");
+            verify(jobProducerMock, never()).enqueue(anyLong(), anyLong(), anyString(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("Private callback по-прежнему обрабатывается")
+        void privateCallbackStillProcessed() {
+            bot.consume(createTextMessageUpdate(123L, "@my_channel"));
+            bot.consume(createCallbackUpdate(123L, ExportBot.CB_EXPORT_ALL));
+            verify(jobProducerMock).enqueue(123L, 123L, "my_channel", null, null, null);
+        }
     }
 
     @Nested
