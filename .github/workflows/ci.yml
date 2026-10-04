@@ -105,6 +105,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # ─── Prod compose: Redis password must not land in command/healthcheck ─────
+  compose-redis-secret:
+    name: Prod compose Redis secret
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert rendered Redis command and healthcheck omit the password
+        run: ops/check-prod-compose-redis-secret.sh
+
   # ─── Java stack smoke test ────────────────────────────────────────────────────
   # Запускает реальный JAR (не mock-контекст) и проверяет HTTP-контракты фильтров.
   # Закрывает gap: unit-тесты с Mockito не могут гарантировать, что фильтры
