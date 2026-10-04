@@ -622,9 +622,10 @@ class CoverageRound5Tests {
         @Test
         @DisplayName("handleCallbackSafe: throwing inside → catch + answerCallback + send error")
         void throwingFlow() {
-            // unknown callback не бросает; вызовем что-то что бросит — например cancel + jobProducer.cancelExport throw
+            // Cancel bound to taskId: matching active task reaches cancelExport, which throws.
             Message m = msg();
-            CallbackQuery q = cb("cancel_export", m);
+            CallbackQuery q = cb("cancel_export:export_boom", m);
+            when(jobProducer.getActiveExport(7L)).thenReturn("export_boom");
             doThrow(new RuntimeException("boom")).when(jobProducer).cancelExport(anyLong());
             handler.handleCallbackSafe(q);
             // notify пользователя об ошибке
