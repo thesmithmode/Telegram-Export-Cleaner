@@ -622,11 +622,11 @@ class CoverageRound5Tests {
         @Test
         @DisplayName("handleCallbackSafe: throwing inside → catch + answerCallback + send error")
         void throwingFlow() {
-            // Cancel bound to taskId: matching active task reaches cancelExport, which throws.
+            // Cancel bound to taskId: matching id reaches cancelExportIfCurrent, which throws.
             Message m = msg();
             CallbackQuery q = cb("cancel_export:export_boom", m);
-            when(jobProducer.getActiveExport(7L)).thenReturn("export_boom");
-            doThrow(new RuntimeException("boom")).when(jobProducer).cancelExport(anyLong());
+            when(jobProducer.cancelExportIfCurrent(7L, "export_boom"))
+                    .thenThrow(new RuntimeException("boom"));
             handler.handleCallbackSafe(q);
             // notify пользователя об ошибке
             verify(messenger, atLeastOnce()).send(anyLong(), anyString());

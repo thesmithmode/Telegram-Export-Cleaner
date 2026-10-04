@@ -154,7 +154,8 @@ public class ExportBotCallbackHandler {
                         keyboards.fromDateKeyboard(lang));
             }
             case ExportBot.CB_FROM_START -> {
-                if (!requireState(chatId, session, lang, UserSession.State.AWAITING_FROM_DATE)) {
+                if (!requireState(chatId, session, lang,
+                        UserSession.State.AWAITING_FROM_DATE, UserSession.State.AWAITING_TO_DATE)) {
                     return;
                 }
                 session.setFromDate(null);
@@ -225,12 +226,10 @@ public class ExportBotCallbackHandler {
     private void handleCancelExportCallback(long chatId, long userId, int messageId, String data,
                                             BotLanguage lang, UserSession session) {
         String taskId = data.substring((ExportBot.CB_CANCEL_EXPORT + ":").length());
-        String activeTaskId = jobProducer.getActiveExport(userId);
-        if (taskId.isBlank() || activeTaskId == null || !activeTaskId.equals(taskId)) {
+        if (taskId.isBlank() || !jobProducer.cancelExportIfCurrent(userId, taskId)) {
             messenger.editMessage(chatId, messageId, i18n.msg(lang, "bot.cancel.no_active"), null);
             return;
         }
-        jobProducer.cancelExport(userId);
         messenger.editMessage(chatId, messageId, i18n.msg(lang, "bot.cancel.ok_simple"), null);
         session.reset();
     }

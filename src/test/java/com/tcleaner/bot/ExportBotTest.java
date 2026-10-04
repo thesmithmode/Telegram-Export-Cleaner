@@ -298,11 +298,13 @@ class ExportBotTest {
         @Test
         @DisplayName("CB_CANCEL_EXPORT с taskId отменяет только связанную активную задачу")
         void testCancelCallback() {
-            when(jobProducerMock.getActiveExport(123L)).thenReturn("export_test_id");
+            when(jobProducerMock.cancelExportIfCurrent(123L, "export_test_id")).thenReturn(true);
 
             bot.consume(createCallbackUpdate(123L, ExportBot.CB_CANCEL_EXPORT + ":export_test_id"));
 
-            verify(jobProducerMock).cancelExport(123L);
+            verify(jobProducerMock).cancelExportIfCurrent(123L, "export_test_id");
+            verify(jobProducerMock, never()).getActiveExport(123L);
+            verify(jobProducerMock, never()).cancelExport(anyLong());
             verify(messengerMock).editMessage(
                     eq(123L), anyInt(), contains("отменён"), isNull());
         }
@@ -315,15 +317,17 @@ class ExportBotTest {
             bot.consume(createCallbackUpdate(123L, ExportBot.CB_CANCEL_EXPORT));
 
             verify(jobProducerMock, never()).cancelExport(anyLong());
+            verify(jobProducerMock, never()).cancelExportIfCurrent(anyLong(), anyString());
         }
 
         @Test
         @DisplayName("Cancel с чужим/старым taskId не отменяет активный экспорт")
         void staleCancelCallbackWrongTaskIdIgnored() {
-            when(jobProducerMock.getActiveExport(123L)).thenReturn("export_new_id");
+            when(jobProducerMock.cancelExportIfCurrent(123L, "export_old_id")).thenReturn(false);
 
             bot.consume(createCallbackUpdate(123L, ExportBot.CB_CANCEL_EXPORT + ":export_old_id"));
 
+            verify(jobProducerMock).cancelExportIfCurrent(123L, "export_old_id");
             verify(jobProducerMock, never()).cancelExport(anyLong());
             verify(messengerMock).editMessage(
                     eq(123L), anyInt(), contains("активн"), isNull());

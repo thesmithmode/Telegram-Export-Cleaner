@@ -221,13 +221,32 @@ public class ExportJobProducer {
         return null;
     }
 
+    /**
+     * Отменяет экспорт, только если сырое значение {@code active_export:{userId}}
+     * равно {@code expectedTaskId}. Не использует {@link #getActiveExport(long)}:
+     * тот удаляет ключ, если задача уже снята с очереди, но ещё не помечена processing.
+     *
+     * @return true, если флаг отмены выставлен
+     */
+    public boolean cancelExportIfCurrent(long userId, String expectedTaskId) {
+        String taskId = redis.opsForValue().get(ACTIVE_EXPORT_PREFIX + userId);
+        if (taskId == null || !taskId.equals(expectedTaskId)) {
+            return false;
+        }
+        requestCancel(userId, taskId);
+        return true;
+    }
+
     public void cancelExport(long userId) {
         String taskId = redis.opsForValue().get(ACTIVE_EXPORT_PREFIX + userId);
         if (taskId == null) {
             log.warn("Нет активного экспорта для пользователя {}", userId);
             return;
         }
+        requestCancel(userId, taskId);
+    }
 
+    private void requestCancel(long userId, String taskId) {
         // 1. Сначала устанавлием флаг отмены — воркер проверит его при следующей итерации.
         //    Это гарантирует, что даже если задача уже в обработке, она будет остановлена.
         redis.opsForValue().set(

@@ -175,6 +175,40 @@ class ExportJobProducerTest {
             verify(listOps).remove(eq("telegram_export"), eq(1L), anyString());
             verify(listOps).remove(eq("telegram_export_express"), eq(1L), anyString());
         }
+
+        @Test
+        @DisplayName("cancelExportIfCurrent: ключа нет → false, ничего не удаляет")
+        void cancelIfCurrentMissingKeyDoesNotDelete() {
+            when(valueOps.get("active_export:9")).thenReturn(null);
+
+            assertFalse(jobProducer.cancelExportIfCurrent(9L, "export_abc"));
+
+            verify(valueOps, never()).set(anyString(), anyString(), anyLong(), any(TimeUnit.class));
+            verify(redis, never()).delete(anyString());
+        }
+
+        @Test
+        @DisplayName("cancelExportIfCurrent: чужой taskId → false, ничего не удаляет")
+        void cancelIfCurrentMismatchDoesNotDelete() {
+            when(valueOps.get("active_export:9")).thenReturn("export_abc");
+
+            assertFalse(jobProducer.cancelExportIfCurrent(9L, "export_other"));
+
+            verify(valueOps, never()).set(anyString(), anyString(), anyLong(), any(TimeUnit.class));
+            verify(redis, never()).delete(anyString());
+        }
+
+        @Test
+        @DisplayName("cancelExportIfCurrent: совпавший taskId ставит флаг отмены")
+        void cancelIfCurrentMatchSetsFlag() {
+            when(valueOps.get("active_export:9")).thenReturn("export_abc");
+            when(valueOps.get("job_json:export_abc")).thenReturn(null);
+
+            assertTrue(jobProducer.cancelExportIfCurrent(9L, "export_abc"));
+
+            verify(valueOps).set(eq("cancel_export:export_abc"), eq("1"), eq(60L), eq(TimeUnit.MINUTES));
+            verify(redis).delete("active_export:9");
+        }
     }
 
     @Nested

@@ -1,14 +1,21 @@
 package com.tcleaner.bot;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tcleaner.core.BotLanguage;
 import com.tcleaner.dashboard.domain.ChatSubscription;
+import com.tcleaner.dashboard.events.StatsStreamPublisher;
 import com.tcleaner.dashboard.service.ingestion.BotUserUpserter;
 import com.tcleaner.dashboard.service.subscription.SubscriptionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.support.ReloadableResourceBundleMessageSource;
+import org.springframework.data.redis.core.SessionCallback;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
 import org.telegram.telegrambots.meta.api.objects.User;
 import org.telegram.telegrambots.meta.api.objects.chat.Chat;
@@ -16,10 +23,17 @@ import org.telegram.telegrambots.meta.api.objects.message.Message;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Locale;
 import java.util.NoSuchElementException;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -27,7 +41,9 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -245,21 +261,24 @@ class ExportBotCallbackHandlerTest {
         @Test
         @DisplayName("cancel_export:taskId отменяет только если taskId = active")
         void cancelBoundToActiveTaskId() {
-            when(jobProducerMock.getActiveExport(9L)).thenReturn("export_abc");
+            when(jobProducerMock.cancelExportIfCurrent(9L, "export_abc")).thenReturn(true);
 
             handler.handleCallbackSafe(makeCallback(9L, ExportBot.CB_CANCEL_EXPORT + ":export_abc"));
 
-            verify(jobProducerMock).cancelExport(9L);
+            verify(jobProducerMock).cancelExportIfCurrent(9L, "export_abc");
+            verify(jobProducerMock, never()).getActiveExport(anyLong());
+            verify(jobProducerMock, never()).cancelExport(anyLong());
             verify(messengerMock).editMessage(eq(9L), anyInt(), contains("отменён"), isNull());
         }
 
         @Test
         @DisplayName("cancel_export:старый taskId не трогает новый активный экспорт")
         void cancelWrongTaskIdDoesNotCancel() {
-            when(jobProducerMock.getActiveExport(10L)).thenReturn("export_new");
+            when(jobProducerMock.cancelExportIfCurrent(10L, "export_old")).thenReturn(false);
 
             handler.handleCallbackSafe(makeCallback(10L, ExportBot.CB_CANCEL_EXPORT + ":export_old"));
 
+            verify(jobProducerMock).cancelExportIfCurrent(10L, "export_old");
             verify(jobProducerMock, never()).cancelExport(anyLong());
             verify(messengerMock).editMessage(eq(10L), anyInt(), contains("активн"), isNull());
         }
@@ -459,12 +478,84 @@ class ExportBotCallbackHandlerTest {
         void cancelBlankOrMissingActive() {
             handler.handleCallbackSafe(makeCallback(60L, ExportBot.CB_CANCEL_EXPORT + ":"));
             verify(jobProducerMock, never()).cancelExport(anyLong());
+            verify(jobProducerMock, never()).cancelExportIfCurrent(anyLong(), anyString());
             verify(messengerMock).editMessage(eq(60L), anyInt(), contains("активн"), isNull());
 
-            when(jobProducerMock.getActiveExport(61L)).thenReturn(null);
+            when(jobProducerMock.cancelExportIfCurrent(61L, "export_x")).thenReturn(false);
             handler.handleCallbackSafe(makeCallback(61L, ExportBot.CB_CANCEL_EXPORT + ":export_x"));
             verify(jobProducerMock, never()).cancelExport(eq(61L));
             verify(messengerMock).editMessage(eq(61L), anyInt(), contains("активн"), isNull());
+        }
+
+        @Test
+        @DisplayName("CB_FROM_START при AWAITING_TO_DATE очищает fromDate и не шлёт session_expired")
+        void fromStartAcceptedWhileAwaitingToDate() {
+            UserSession session = sessionRegistry.get(80L);
+            session.setChatDisplay("@chan");
+            session.setFromDate("2024-01-01T00:00:00");
+            session.setState(UserSession.State.AWAITING_TO_DATE);
+
+            handler.handleCallbackSafe(makeCallback(80L, ExportBot.CB_FROM_START));
+
+            assertEquals(UserSession.State.AWAITING_TO_DATE, session.getState());
+            assertNull(session.getFromDate());
+            verify(messengerMock, never()).send(eq(80L), contains("истекла"));
+            verify(messengerMock).editMessage(
+                    eq(80L), anyInt(), contains("конечн"), any(InlineKeyboardMarkup.class));
+        }
+
+        @Test
+        @DisplayName("cancel в окне BLMOVE: processing=false и пустые очереди всё равно ставят флаг")
+        void cancelDuringBlmoveWindowSetsFlagBeforeDeletingActiveKey() {
+            long userId = 91L;
+            StringRedisTemplate redis = mock(StringRedisTemplate.class);
+            @SuppressWarnings("unchecked")
+            ValueOperations<String, String> valueOps = mock(ValueOperations.class);
+            when(redis.opsForValue()).thenReturn(valueOps);
+            when(valueOps.get("active_export:" + userId)).thenReturn("export_abc");
+            when(valueOps.get("job_json:export_abc")).thenReturn(null);
+            // getActiveExport в этом окне удалил бы ключ: processing нет, обе очереди пустые.
+            when(redis.executePipelined(any(SessionCallback.class))).thenReturn(
+                    Arrays.asList(false, false, false, 0L, 0L, false));
+
+            List<String> ops = new ArrayList<>();
+            doAnswer(inv -> {
+                ops.add("set:" + inv.getArgument(0));
+                return null;
+            }).when(valueOps).set(anyString(), anyString(), anyLong(), any(TimeUnit.class));
+            when(redis.delete(anyString())).thenAnswer(inv -> {
+                ops.add("delete:" + inv.getArgument(0));
+                return Boolean.TRUE;
+            });
+
+            @SuppressWarnings("unchecked")
+            ObjectProvider<StatsStreamPublisher> noPublisher = mock(ObjectProvider.class);
+            when(noPublisher.getIfAvailable()).thenReturn(null);
+            ExportJobProducer realProducer = new ExportJobProducer(
+                    redis, new ObjectMapper(), "telegram_export", noPublisher);
+
+            BotI18n i18n = new BotI18n(newTestMessageSource());
+            BotKeyboards keyboards = new BotKeyboards(i18n);
+            BotSessionRegistry registry = new BotSessionRegistry();
+            ExportBotCommandHandler cmdHandler = new ExportBotCommandHandler(
+                    realProducer, messengerMock, i18n, keyboards,
+                    registry, userUpserterMock, new QueueDisplayBuilder(i18n));
+            ExportBotCallbackHandler realHandler = new ExportBotCallbackHandler(
+                    realProducer, messengerMock, i18n, keyboards,
+                    registry, userUpserterMock, subscriptionServiceMock, cmdHandler);
+
+            realHandler.handleCallbackSafe(makeCallback(userId, ExportBot.CB_CANCEL_EXPORT + ":export_abc"));
+
+            int setAt = ops.indexOf("set:cancel_export:export_abc");
+            int deleteAt = ops.indexOf("delete:active_export:" + userId);
+            assertTrue(setAt >= 0, "cancel flag was not set: " + ops);
+            assertTrue(deleteAt > setAt, "active_export deleted before cancel flag: " + ops);
+            verify(redis, never()).executePipelined(any(SessionCallback.class));
+            InOrder order = inOrder(valueOps, redis);
+            order.verify(valueOps).set(
+                    eq("cancel_export:export_abc"), eq("1"), eq(60L), eq(TimeUnit.MINUTES));
+            order.verify(redis).delete("active_export:" + userId);
+            verify(messengerMock).editMessage(eq(userId), anyInt(), contains("отменён"), isNull());
         }
 
         @Test
