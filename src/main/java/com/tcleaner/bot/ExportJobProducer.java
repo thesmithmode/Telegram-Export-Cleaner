@@ -10,6 +10,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import java.util.Collections;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -62,6 +64,20 @@ public class ExportJobProducer {
     public String enqueue(long userId, long userChatId, String chatIdentifier,
                           Integer topicId, String fromDate, String toDate) {
         return enqueue(userId, userChatId, (Object) chatIdentifier, topicId, fromDate, toDate, null, null);
+    }
+
+    private static final DefaultRedisScript<Long> RELEASE_IF_CURRENT = new DefaultRedisScript<>(
+            "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end",
+            Long.class);
+    private static final DefaultRedisScript<Long> CANCEL_IF_CURRENT = new DefaultRedisScript<>(
+            "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end "
+                    + "redis.call('SET', KEYS[2], '1', 'EX', ARGV[2]) "
+                    + "redis.call('DEL', KEYS[1]) return 1",
+            Long.class);
+
+    private boolean releaseIfCurrent(long userId, String taskId) {
+        return Long.valueOf(1L).equals(redis.execute(RELEASE_IF_CURRENT,
+                Collections.singletonList(ACTIVE_EXPORT_PREFIX + userId), taskId));
     }
 
     private static final String ACTIVE_EXPORT_PREFIX = "active_export:";
@@ -123,7 +139,7 @@ public class ExportJobProducer {
         } catch (Exception e) {
             log.error("Не удалось добавить задачу в очередь: {}", e.getMessage(), e);
             try {
-                redis.delete(ACTIVE_EXPORT_PREFIX + userId);
+                releaseIfCurrent(userId, taskId);
                 log.info("Бронь экспорта для пользователя {} отозвана из-за ошибки", userId);
             } catch (Exception ex) {
                 log.error("Критическая ошибка: не удалось отозвать бронь для {}: {}", userId, ex.getMessage());
@@ -201,7 +217,7 @@ public class ExportJobProducer {
         if (isCompleted || isFailed) {
             // Задача завершена, но ключ не был очищен — чистим
             log.info("Очищаю протухший active_export для user {} (task {} завершена)", userId, taskId);
-            redis.delete(ACTIVE_EXPORT_PREFIX + userId);
+            releaseIfCurrent(userId, taskId);
             return null;
         }
 
@@ -217,8 +233,19 @@ public class ExportJobProducer {
 
         // Payload отсутствует ИЛИ очередь пуста — наш taskId не найден
         log.info("Очищаю протухший active_export для user {} (task {} не найдена)", userId, taskId);
-        redis.delete(ACTIVE_EXPORT_PREFIX + userId);
+        releaseIfCurrent(userId, taskId);
         return null;
+    }
+
+    /**
+     * Отменяет экспорт, только если сырое значение {@code active_export:{userId}}
+     * равно {@code expectedTaskId}. Не использует {@link #getActiveExport(long)}:
+     * тот удаляет ключ, если задача уже снята с очереди, но ещё не помечена processing.
+     *
+     * @return true, если флаг отмены выставлен
+     */
+    public boolean cancelExportIfCurrent(long userId, String expectedTaskId) {
+        return requestCancel(userId, expectedTaskId);
     }
 
     public void cancelExport(long userId) {
@@ -227,13 +254,18 @@ public class ExportJobProducer {
             log.warn("Нет активного экспорта для пользователя {}", userId);
             return;
         }
+        requestCancel(userId, taskId);
+    }
 
-        // 1. Сначала устанавлием флаг отмены — воркер проверит его при следующей итерации.
-        //    Это гарантирует, что даже если задача уже в обработке, она будет остановлена.
-        redis.opsForValue().set(
-                CANCEL_EXPORT_PREFIX + taskId, "1",
-                ACTIVE_EXPORT_TTL_MINUTES, TimeUnit.MINUTES
-        );
+    private boolean requestCancel(long userId, String taskId) {
+        // Compare taskId + set cancellation flag + release reservation in one Redis transaction.
+        // A stale callback cannot cancel or clear a newer export.
+        Long result = redis.execute(CANCEL_IF_CURRENT,
+                List.of(ACTIVE_EXPORT_PREFIX + userId, CANCEL_EXPORT_PREFIX + taskId),
+                taskId, String.valueOf(TimeUnit.MINUTES.toSeconds(ACTIVE_EXPORT_TTL_MINUTES)));
+        if (!Long.valueOf(1L).equals(result)) {
+            return false;
+        }
 
         // 2. Затем удаляем из очереди (если ещё не взята воркером).
         String json = redis.opsForValue().get(JOB_JSON_PREFIX + taskId);
@@ -253,7 +285,6 @@ public class ExportJobProducer {
             redis.delete("job_queue:" + taskId);
         }
 
-        redis.delete(ACTIVE_EXPORT_PREFIX + userId);
         log.info("Запрошена отмена экспорта {} для пользователя {}", taskId, userId);
         publishStats(StatsEventPayload.builder()
                 .type(StatsEventType.EXPORT_CANCELLED)
@@ -263,6 +294,7 @@ public class ExportJobProducer {
                 .source("bot")
                 .ts(Instant.now())
                 .build());
+        return true;
     }
 
     /**

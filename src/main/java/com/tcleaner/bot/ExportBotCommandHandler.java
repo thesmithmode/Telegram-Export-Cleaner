@@ -130,7 +130,7 @@ public class ExportBotCommandHandler {
                 .keyboardRow(new InlineKeyboardRow(
                         InlineKeyboardButton.builder()
                                 .text(i18n.msg(lang, "bot.button.cancel_export"))
-                                .callbackData(ExportBot.CB_CANCEL_EXPORT)
+                                .callbackData(ExportBot.CB_CANCEL_EXPORT + ":" + taskId)
                                 .build()))
                 .build();
 

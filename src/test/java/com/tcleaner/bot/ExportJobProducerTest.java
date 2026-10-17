@@ -13,6 +13,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.redis.core.ListOperations;
 import org.springframework.data.redis.core.SessionCallback;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
@@ -39,6 +40,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.anyList;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("ExportJobProducer")
@@ -124,7 +126,7 @@ class ExportJobProducerTest {
 
             assertThrows(RuntimeException.class, () -> jobProducer.enqueue(userId, userId, 111L));
 
-            verify(redis).delete("active_export:" + userId);
+            verify(redis).execute(any(RedisScript.class), eq(List.of("active_export:" + userId)), anyString());
         }
     }
 
@@ -142,11 +144,10 @@ class ExportJobProducerTest {
             when(valueOps.get("job_json:" + taskId)).thenReturn("{\"task_id\":\"" + taskId + "\"}");
             when(valueOps.get("job_queue:" + taskId)).thenReturn("telegram_export");
 
+            when(redis.execute(any(RedisScript.class), anyList(), anyString(), anyString())).thenReturn(1L);
             jobProducer.cancelExport(userId);
 
-            verify(valueOps).set(eq("cancel_export:" + taskId), eq("1"),
-                    eq(60L), eq(TimeUnit.MINUTES));
-            verify(redis).delete("active_export:" + userId);
+            verify(redis).execute(any(RedisScript.class), eq(List.of("active_export:" + userId, "cancel_export:" + taskId)), eq(taskId), eq("3600"));
         }
 
         @Test
@@ -170,11 +171,50 @@ class ExportJobProducerTest {
             when(valueOps.get("job_json:" + taskId)).thenReturn("{\"task_id\":\"" + taskId + "\"}");
             when(valueOps.get("job_queue:" + taskId)).thenReturn(null);
 
+            when(redis.execute(any(RedisScript.class), anyList(), anyString(), anyString())).thenReturn(1L);
             jobProducer.cancelExport(userId);
 
             verify(listOps).remove(eq("telegram_export"), eq(1L), anyString());
             verify(listOps).remove(eq("telegram_export_express"), eq(1L), anyString());
         }
+
+        @Test
+        @DisplayName("cancelExportIfCurrent: ключа нет → false, ничего не удаляет")
+        void cancelIfCurrentMissingKeyDoesNotDelete() {
+            assertFalse(jobProducer.cancelExportIfCurrent(9L, "export_abc"));
+
+            verify(valueOps, never()).set(anyString(), anyString(), anyLong(), any(TimeUnit.class));
+            verify(redis, never()).delete(anyString());
+        }
+
+        @Test
+        @DisplayName("cancelExportIfCurrent: чужой taskId → false, ничего не удаляет")
+        void cancelIfCurrentMismatchDoesNotDelete() {
+            assertFalse(jobProducer.cancelExportIfCurrent(9L, "export_other"));
+
+            verify(valueOps, never()).set(anyString(), anyString(), anyLong(), any(TimeUnit.class));
+            verify(redis, never()).delete(anyString());
+        }
+
+        @Test
+        @DisplayName("cancelExportIfCurrent: совпавший taskId ставит флаг отмены")
+        void cancelIfCurrentMatchSetsFlag() {
+            when(redis.execute(any(RedisScript.class), anyList(), anyString(), anyString())).thenReturn(1L);
+            assertTrue(jobProducer.cancelExportIfCurrent(9L, "export_abc"));
+
+            verify(redis).execute(any(RedisScript.class), eq(List.of("active_export:9", "cancel_export:export_abc")), eq("export_abc"), eq("3600"));
+            verify(redis, never()).delete("active_export:9");
+        }
+    }
+
+    @Test
+    @DisplayName("Устаревший callback не удаляет payload или очередь новой задачи")
+    void staleCancellationDoesNotTouchAnotherExport() {
+        when(redis.execute(any(RedisScript.class), anyList(), eq("export_old"), eq("3600")))
+                .thenReturn(0L);
+        assertFalse(jobProducer.cancelExportIfCurrent(19L, "export_old"));
+        verify(listOps, never()).remove(anyString(), anyLong(), anyString());
+        verify(redis, never()).delete(anyString());
     }
 
     @Nested
@@ -197,7 +237,7 @@ class ExportJobProducerTest {
                     .thenReturn(pipelineResult(false, true, false, 0L, 0L, false));
 
             assertNull(jobProducer.getActiveExport(2L));
-            verify(redis).delete("active_export:2");
+            verify(redis).execute(any(RedisScript.class), eq(List.of("active_export:2")), eq("export_abc"));
         }
 
         @Test
@@ -208,7 +248,7 @@ class ExportJobProducerTest {
                     .thenReturn(pipelineResult(false, false, true, 0L, 0L, false));
 
             assertNull(jobProducer.getActiveExport(3L));
-            verify(redis).delete("active_export:3");
+            verify(redis).execute(any(RedisScript.class), eq(List.of("active_export:3")), eq("export_abc"));
         }
 
         @Test
@@ -250,7 +290,7 @@ class ExportJobProducerTest {
                     .thenReturn(pipelineResult(false, false, false, 0L, 0L, false));
 
             assertNull(jobProducer.getActiveExport(7L));
-            verify(redis).delete("active_export:7");
+            verify(redis).execute(any(RedisScript.class), eq(List.of("active_export:7")), eq("export_gone"));
         }
 
         @Test
@@ -261,7 +301,7 @@ class ExportJobProducerTest {
                     .thenReturn(pipelineResult(false, false, false, 5L, 0L, false));
 
             assertNull(jobProducer.getActiveExport(8L));
-            verify(redis).delete("active_export:8");
+            verify(redis).execute(any(RedisScript.class), eq(List.of("active_export:8")), eq("export_stale"));
         }
     }
 
@@ -442,6 +482,7 @@ class ExportJobProducerTest {
             when(valueOps.get("active_export:100")).thenReturn(taskId);
             when(valueOps.get("job_json:" + taskId)).thenReturn(null);
 
+            when(redis.execute(any(RedisScript.class), anyList(), eq(taskId), eq("3600"))).thenReturn(1L);
             producerWithPublisher.cancelExport(100L);
 
             verify(publisherMock).publish(any());
@@ -463,6 +504,7 @@ class ExportJobProducerTest {
             when(valueOps.get("active_export:101")).thenReturn("export_throw");
             when(valueOps.get("job_json:export_throw")).thenReturn(null);
 
+            when(redis.execute(any(RedisScript.class), anyList(), eq("export_throw"), eq("3600"))).thenReturn(1L);
             assertDoesNotThrow(() -> producerWithPublisher.cancelExport(101L));
         }
     }

@@ -335,7 +335,7 @@ class CoverageRound5Tests {
 
             assertThatThrownBy(() -> producer.enqueue(1L, 1L, 123L))
                     .isInstanceOf(RuntimeException.class);
-            verify(redis).delete(eq("active_export:1"));
+            verify(redis).execute(any(org.springframework.data.redis.core.script.RedisScript.class), eq(List.of("active_export:1")), anyString());
         }
 
         @Test
@@ -415,9 +415,10 @@ class CoverageRound5Tests {
             when(valueOps.get(eq("job_json:task_x"))).thenReturn("{\"taskId\":\"task_x\"}");
             when(valueOps.get(eq("job_queue:task_x"))).thenReturn("telegram_queue_express");
             when(listOps.remove(eq("telegram_queue_express"), eq(1L), anyString())).thenReturn(1L);
+            when(redis.execute(any(org.springframework.data.redis.core.script.RedisScript.class), org.mockito.ArgumentMatchers.anyList(), eq("task_x"), eq("3600"))).thenReturn(1L);
             producer.cancelExport(5L);
             verify(listOps).remove(eq("telegram_queue_express"), eq(1L), anyString());
-            verify(redis).delete(eq("active_export:5"));
+            verify(redis, never()).delete(eq("active_export:5"));
         }
 
         @Test
@@ -426,6 +427,7 @@ class CoverageRound5Tests {
             when(valueOps.get(eq("active_export:5"))).thenReturn("task_y");
             when(valueOps.get(eq("job_json:task_y"))).thenReturn("{}");
             when(valueOps.get(eq("job_queue:task_y"))).thenReturn(null);
+            when(redis.execute(any(org.springframework.data.redis.core.script.RedisScript.class), org.mockito.ArgumentMatchers.anyList(), eq("task_y"), eq("3600"))).thenReturn(1L);
             producer.cancelExport(5L);
             verify(listOps).remove(eq("telegram_queue"), eq(1L), anyString());
             verify(listOps).remove(eq("telegram_queue_express"), eq(1L), anyString());
@@ -436,9 +438,11 @@ class CoverageRound5Tests {
         void cancelNoJson() {
             when(valueOps.get(eq("active_export:5"))).thenReturn("task_z");
             when(valueOps.get(eq("job_json:task_z"))).thenReturn(null);
+            when(redis.execute(any(org.springframework.data.redis.core.script.RedisScript.class),
+                    org.mockito.ArgumentMatchers.anyList(), eq("task_z"), eq("3600"))).thenReturn(1L);
             producer.cancelExport(5L);
             verify(listOps, never()).remove(anyString(), anyLong(), anyString());
-            verify(redis).delete(eq("active_export:5"));
+            verify(redis, never()).delete(eq("active_export:5"));
         }
 
         @Test
@@ -622,10 +626,11 @@ class CoverageRound5Tests {
         @Test
         @DisplayName("handleCallbackSafe: throwing inside → catch + answerCallback + send error")
         void throwingFlow() {
-            // unknown callback не бросает; вызовем что-то что бросит — например cancel + jobProducer.cancelExport throw
+            // Cancel bound to taskId: matching id reaches cancelExportIfCurrent, which throws.
             Message m = msg();
-            CallbackQuery q = cb("cancel_export", m);
-            doThrow(new RuntimeException("boom")).when(jobProducer).cancelExport(anyLong());
+            CallbackQuery q = cb("cancel_export:export_boom", m);
+            when(jobProducer.cancelExportIfCurrent(7L, "export_boom"))
+                    .thenThrow(new RuntimeException("boom"));
             handler.handleCallbackSafe(q);
             // notify пользователя об ошибке
             verify(messenger, atLeastOnce()).send(anyLong(), anyString());

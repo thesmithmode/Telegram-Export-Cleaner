@@ -747,3 +747,98 @@ th[data-sort-key].is-sort-asc::after  { content: "▲"; opacity: 1; }
 }
 .form-error { font-size: var(--tec-fs-sm); color: var(--tec-danger); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+
+/* ─── Small-screen dashboard: shared by ADMIN and USER ────────────── */
+/* Keep wide data tables scrollable instead of squeezing or clipping columns. */
+.dashboard-main, .dashboard-main > div, .table-block, .table-wrap,
+.chart-block, .cache-panel, .cache-panel__table { min-width: 0; }
+.table-wrap { max-width: 100%; overscroll-behavior-x: contain; }
+.data-table th, .data-table td { overflow-wrap: anywhere; }
+.dashboard-header__username { overflow-wrap: anywhere; }
+
+@media (max-width: 700px) {
+    .dashboard-header {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 10px 12px;
+        padding: 12px 16px 0;
+        align-items: center;
+    }
+    .dashboard-header__brand { min-width: 0; }
+    .dashboard-header__brand-link { min-width: 0; max-width: 100%; }
+    .dashboard-header__title {
+        display: block;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 15px;
+    }
+    .dashboard-header__user {
+        min-width: 0;
+        max-width: 100%;
+        margin: 0;
+        padding: 0;
+        border: 0;
+        gap: 8px;
+    }
+    .dashboard-header__username {
+        min-width: 0;
+        max-width: 110px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .dashboard-header__logout button { white-space: nowrap; }
+    .dashboard-nav {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        width: auto;
+        min-width: 0;
+        margin: 0 -16px;
+        padding: 0 16px;
+        order: initial;
+        border-top: 1px solid var(--tec-border);
+        display: flex;
+        flex-wrap: nowrap;
+        gap: 20px;
+        overflow-x: auto;
+        scrollbar-width: thin;
+        -webkit-overflow-scrolling: touch;
+    }
+    .dashboard-nav a {
+        flex: 0 0 auto;
+        padding: 12px 0;
+        white-space: nowrap;
+        font-size: 13px;
+    }
+    .dashboard-main { width: 100%; margin: 16px auto; padding: 0 16px; }
+    .dashboard-main h1 { font-size: clamp(22px, 6vw, 28px); line-height: 1.2; }
+    .table-wrap .data-table { min-width: 560px; }
+    /* A placeholder is not a data table: show its message without
+       making users horizontally scroll an empty eight-column header. */
+    .table-wrap .data-table:has(tbody > tr:only-child > td[colspan]:only-child) {
+        min-width: 0;
+    }
+    .table-wrap .data-table:has(tbody > tr:only-child > td[colspan]:only-child) thead {
+        display: none;
+    }
+    .table-wrap .data-table tbody > tr:only-child > td[colspan]:only-child {
+        text-align: center;
+        padding: 18px 12px;
+        color: var(--tec-muted);
+    }
+    .info-banner { overflow-wrap: anywhere; }
+    .subscription-form, .period-fieldset { min-width: 0; max-width: 100%; }
+    .form-row input[type="text"],
+    .form-row input[type="time"],
+    .form-row input[type="datetime-local"] { max-width: 100%; }
+    .cache-panel__kpis { grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); }
+}
+@media (max-width: 380px) {
+    .dashboard-header { grid-template-columns: minmax(0, 1fr); }
+    .dashboard-header__user { grid-row: 2; justify-content: space-between; }
+    .dashboard-nav { grid-row: 3; }
+    .kpi-grid { grid-template-columns: minmax(0, 1fr); }
+}

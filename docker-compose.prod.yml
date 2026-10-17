@@ -282,24 +282,28 @@ services:
     container_name: telegram-export-redis
     labels:
       - "project=telegram-cleaner"
+    # Пароль не подставляется в Config.Cmd / Healthcheck.Test (docker inspect).
+    # Значение живёт в env контейнера: shell раскрывает $REDIS_PASSWORD уже внутри,
+    # а redis-cli берёт тот же секрет из REDISCLI_AUTH и не получает -a.
+    # docker-entrypoint.sh официального redis:7-alpine делает chown + drop root
+    # только когда argv[1] — redis-server. Голый `sh -c exec redis-server` этот
+    # путь пропускает (процесс остаётся root, новые AOF/RDB становятся root:600
+    # и перестают читаться пользователем redis). Поэтому shell лишь раскрывает
+    # переменную и заново вызывает entrypoint. $$ — escape Compose, в контейнер
+    # уходит литерал $REDIS_PASSWORD, не секрет из .env.
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD обязателен}
+      - REDISCLI_AUTH=${REDIS_PASSWORD:?REDIS_PASSWORD обязателен}
     command:
-      - redis-server
-      - --appendonly
-      - "yes"
-      - --appendfsync
-      - everysec
-      - --maxmemory
-      - 256mb
-      - --maxmemory-policy
-      - noeviction
-      - --requirepass
-      - "${REDIS_PASSWORD:?REDIS_PASSWORD обязателен}"
+      - /bin/sh
+      - -c
+      - exec /usr/local/bin/docker-entrypoint.sh redis-server --appendonly yes --appendfsync everysec --maxmemory 256mb --maxmemory-policy noeviction --requirepass "$$REDIS_PASSWORD"
     volumes:
       - redis-data:/data
     networks:
       - internal
     healthcheck:
-      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
