@@ -438,9 +438,11 @@ class CoverageRound5Tests {
         void cancelNoJson() {
             when(valueOps.get(eq("active_export:5"))).thenReturn("task_z");
             when(valueOps.get(eq("job_json:task_z"))).thenReturn(null);
+            when(redis.execute(any(org.springframework.data.redis.core.script.RedisScript.class),
+                    org.mockito.ArgumentMatchers.anyList(), eq("task_z"), eq("3600"))).thenReturn(1L);
             producer.cancelExport(5L);
             verify(listOps, never()).remove(anyString(), anyLong(), anyString());
-            verify(redis).delete(eq("active_export:5"));
+            verify(redis, never()).delete(eq("active_export:5"));
         }
 
         @Test
