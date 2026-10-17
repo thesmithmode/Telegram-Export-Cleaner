@@ -148,7 +148,6 @@ class ExportJobProducerTest {
             jobProducer.cancelExport(userId);
 
             verify(redis).execute(any(RedisScript.class), eq(List.of("active_export:" + userId, "cancel_export:" + taskId)), eq(taskId), eq("3600"));
-            verify(redis).execute(any(RedisScript.class), eq(List.of("active_export:" + userId)), eq(taskId), anyString());
         }
 
         @Test
@@ -483,6 +482,7 @@ class ExportJobProducerTest {
             when(valueOps.get("active_export:100")).thenReturn(taskId);
             when(valueOps.get("job_json:" + taskId)).thenReturn(null);
 
+            when(redis.execute(any(RedisScript.class), anyList(), eq(taskId), eq("3600"))).thenReturn(1L);
             producerWithPublisher.cancelExport(100L);
 
             verify(publisherMock).publish(any());
@@ -504,6 +504,7 @@ class ExportJobProducerTest {
             when(valueOps.get("active_export:101")).thenReturn("export_throw");
             when(valueOps.get("job_json:export_throw")).thenReturn(null);
 
+            when(redis.execute(any(RedisScript.class), anyList(), eq("export_throw"), eq("3600"))).thenReturn(1L);
             assertDoesNotThrow(() -> producerWithPublisher.cancelExport(101L));
         }
     }
