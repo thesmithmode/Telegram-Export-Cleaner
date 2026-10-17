@@ -265,8 +265,17 @@ jobs:
                 up -d --force-recreate --remove-orphans
             }
 
-            docker compose -f docker-compose.prod.yml --env-file .env pull
-            docker compose -f docker-compose.prod.yml --env-file .env up -d --remove-orphans
+            # If pull/up fails, restore the previous running images instead of leaving
+            # a partially updated stack. Keep explicit health-check rollbacks below.
+            if ! docker compose -f docker-compose.prod.yml --env-file .env pull; then
+              echo "FAIL: image pull failed; preserving previous stack"
+              exit 1
+            fi
+            if ! docker compose -f docker-compose.prod.yml --env-file .env up -d --remove-orphans; then
+              echo "FAIL: docker compose up failed; restoring previous images"
+              rollback
+              exit 1
+            fi
 
             # ── Post-deploy smoke test ──────────────────────────────────────
             echo "Ждём /api/health (до 90 сек)..."
