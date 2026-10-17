@@ -217,7 +217,7 @@ public class ExportJobProducer {
         if (isCompleted || isFailed) {
             // Задача завершена, но ключ не был очищен — чистим
             log.info("Очищаю протухший active_export для user {} (task {} завершена)", userId, taskId);
-            redis.delete(ACTIVE_EXPORT_PREFIX + userId);
+            releaseIfCurrent(userId, taskId);
             return null;
         }
 
@@ -233,7 +233,7 @@ public class ExportJobProducer {
 
         // Payload отсутствует ИЛИ очередь пуста — наш taskId не найден
         log.info("Очищаю протухший active_export для user {} (task {} не найдена)", userId, taskId);
-        redis.delete(ACTIVE_EXPORT_PREFIX + userId);
+        releaseIfCurrent(userId, taskId);
         return null;
     }
 
@@ -285,7 +285,6 @@ public class ExportJobProducer {
             redis.delete("job_queue:" + taskId);
         }
 
-        redis.delete(ACTIVE_EXPORT_PREFIX + userId);
         log.info("Запрошена отмена экспорта {} для пользователя {}", taskId, userId);
         publishStats(StatsEventPayload.builder()
                 .type(StatsEventType.EXPORT_CANCELLED)
