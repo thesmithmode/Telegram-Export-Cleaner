@@ -415,7 +415,7 @@ class CoverageRound5Tests {
             when(valueOps.get(eq("job_json:task_x"))).thenReturn("{\"taskId\":\"task_x\"}");
             when(valueOps.get(eq("job_queue:task_x"))).thenReturn("telegram_queue_express");
             when(listOps.remove(eq("telegram_queue_express"), eq(1L), anyString())).thenReturn(1L);
-            when(redis.execute(any(org.springframework.data.redis.core.script.RedisScript.class), anyList(), eq("task_x"), eq("3600"))).thenReturn(1L);
+            when(redis.execute(any(org.springframework.data.redis.core.script.RedisScript.class), org.mockito.ArgumentMatchers.anyList(), eq("task_x"), eq("3600"))).thenReturn(1L);
             producer.cancelExport(5L);
             verify(listOps).remove(eq("telegram_queue_express"), eq(1L), anyString());
             verify(redis, never()).delete(eq("active_export:5"));
@@ -427,7 +427,7 @@ class CoverageRound5Tests {
             when(valueOps.get(eq("active_export:5"))).thenReturn("task_y");
             when(valueOps.get(eq("job_json:task_y"))).thenReturn("{}");
             when(valueOps.get(eq("job_queue:task_y"))).thenReturn(null);
-            when(redis.execute(any(org.springframework.data.redis.core.script.RedisScript.class), anyList(), eq("task_y"), eq("3600"))).thenReturn(1L);
+            when(redis.execute(any(org.springframework.data.redis.core.script.RedisScript.class), org.mockito.ArgumentMatchers.anyList(), eq("task_y"), eq("3600"))).thenReturn(1L);
             producer.cancelExport(5L);
             verify(listOps).remove(eq("telegram_queue"), eq(1L), anyString());
             verify(listOps).remove(eq("telegram_queue_express"), eq(1L), anyString());
