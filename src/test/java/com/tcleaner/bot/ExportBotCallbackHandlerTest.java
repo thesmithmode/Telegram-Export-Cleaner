@@ -544,17 +544,19 @@ class ExportBotCallbackHandlerTest {
                     realProducer, messengerMock, i18n, keyboards,
                     registry, userUpserterMock, subscriptionServiceMock, cmdHandler);
 
+            when(redis.execute(any(org.springframework.data.redis.core.script.RedisScript.class),
+                    eq(List.of("active_export:" + userId, "cancel_export:export_abc")),
+                    eq("export_abc"), eq("3600"))).thenAnswer(inv -> {
+                ops.add("atomic:cancel-and-release");
+                return 1L;
+            });
             realHandler.handleCallbackSafe(makeCallback(userId, ExportBot.CB_CANCEL_EXPORT + ":export_abc"));
 
-            int setAt = ops.indexOf("set:cancel_export:export_abc");
-            int deleteAt = ops.indexOf("delete:active_export:" + userId);
-            assertTrue(setAt >= 0, "cancel flag was not set: " + ops);
-            assertTrue(deleteAt > setAt, "active_export deleted before cancel flag: " + ops);
+            assertTrue(ops.contains("atomic:cancel-and-release"), "atomic cancel not executed: " + ops);
             verify(redis, never()).executePipelined(any(SessionCallback.class));
-            InOrder order = inOrder(valueOps, redis);
-            order.verify(valueOps).set(
+            verify(valueOps, never()).set(
                     eq("cancel_export:export_abc"), eq("1"), eq(60L), eq(TimeUnit.MINUTES));
-            order.verify(redis).delete("active_export:" + userId);
+            verify(redis, never()).delete("active_export:" + userId);
             verify(messengerMock).editMessage(eq(userId), anyInt(), contains("отменён"), isNull());
         }
 
