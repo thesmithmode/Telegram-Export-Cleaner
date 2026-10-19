@@ -167,7 +167,7 @@ class TestVerifyAndNormalizeChat:
         w.telegram_client.verify_and_get_info = AsyncMock(
             return_value=(True, {
                 "title": "G", "type": "supergroup",
-                "id": -1000000000001, "username": None,
+                "id": -1000000000001, "username": "g_username",
             }, None)
         )
         # pipeline.execute падает

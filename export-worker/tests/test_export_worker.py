@@ -113,6 +113,41 @@ class TestExportWorkerJobProcessing:
         assert len(payload.messages) == 2
 
     @pytest.mark.asyncio
+    async def test_process_job_rejects_non_public_group_before_history(self, worker):
+        job = ExportRequest(
+            task_id="test_task_private_group",
+            user_id=123,
+            user_chat_id=123,
+            chat_id=-100456,
+            limit=0,
+            offset_id=0,
+        )
+
+        worker.telegram_client.verify_and_get_info = AsyncMock(
+            return_value=(True, {
+                "id": -100456,
+                "title": "Private Group",
+                "type": "supergroup",
+                "username": "",
+                "is_bot": False,
+                "is_self": False,
+            }, None)
+        )
+        worker.telegram_client.get_chat_history = AsyncMock()
+        worker.java_client.send_response = AsyncMock(return_value=True)
+        worker.queue_consumer.mark_job_processing = AsyncMock()
+        worker.queue_consumer.mark_job_failed = AsyncMock()
+
+        result = await worker.process_job(job)
+
+        assert result is True
+        worker.java_client.send_response.assert_called_once()
+        payload = worker.java_client.send_response.call_args[0][0]
+        assert payload.status == "failed"
+        assert payload.error_code == "PUBLIC_CHAT_REQUIRED"
+        worker.telegram_client.get_chat_history.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_process_job_chat_not_accessible(self, worker):
         job = ExportRequest(
             task_id="test_task_456",
@@ -1639,3 +1674,71 @@ class TestHeartbeat:
 
         delete_calls = [c.args[0] for c in worker.control_redis.delete.call_args_list]
         assert "worker:heartbeat:task_abc" in delete_calls
+
+
+class TestPublicChatWorkerBoundary:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("chat_input", ["former_public", -1001234567890, "-1001234567890"])
+    async def test_newly_private_chat_never_reaches_cache_or_history(self, chat_input):
+        from types import SimpleNamespace
+        from pyrogram.raw import types as raw_types
+        from pyrogram_client import TelegramClient
+
+        client = TelegramClient.__new__(TelegramClient)
+        client.is_connected = True
+        client.redis_client = None
+        client.client = AsyncMock()
+        client.client.get_chat.return_value = SimpleNamespace(
+            id=-1001234567890, title="Now private", type="supergroup", username=None,
+            is_bot=False, is_self=False,
+        )
+        client.client.resolve_peer.return_value = raw_types.InputPeerChannel(
+            channel_id=1234567890, access_hash=42,
+        )
+        client.client.invoke.return_value = SimpleNamespace(chats=[SimpleNamespace(
+            id=1234567890, username=None,
+            usernames=[SimpleNamespace(username="former_public", active=False)],
+        )])
+        worker = ExportWorker()
+        worker.telegram_client = client
+        worker.queue_consumer = AsyncMock()
+        worker.java_client = AsyncMock()
+        worker.message_cache = MagicMock(enabled=True)
+        worker._setup_processing = AsyncMock(return_value=False)
+        worker._cleanup_job = AsyncMock()
+        worker._run_cache_aware_export = AsyncMock()
+        worker._send_completed_result = AsyncMock()
+        job = ExportRequest(task_id="private_subscription", user_id=123, chat_id=chat_input,
+                            source="subscription", subscription_id=7, topic_id=42)
+
+        assert await worker.process_job(job) is True
+
+        worker._run_cache_aware_export.assert_not_awaited()
+        worker._send_completed_result.assert_not_awaited()
+        client.client.get_chat_history.assert_not_called()
+        worker.java_client.send_response.assert_awaited_once()
+        assert worker.java_client.send_response.await_args.args[0].error_code == "PUBLIC_CHAT_REQUIRED"
+        worker.queue_consumer.mark_job_failed.assert_awaited_once_with(
+            job.task_id, worker.java_client.send_response.await_args.args[0].error, 7, 123,
+        )
+        worker._cleanup_job.assert_awaited_once_with(job)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("chat_input", ["public_channel", -1001234567890, "-1001234567890"])
+    async def test_public_subscription_keeps_numeric_id_topic_and_dates(self, chat_input):
+        worker = ExportWorker()
+        worker.telegram_client = AsyncMock()
+        worker.telegram_client.verify_and_get_info.return_value = (True, {
+            "id": -1001234567890, "title": "Public", "type": "supergroup",
+            "username": "public_channel", "is_bot": False, "is_self": False,
+        }, None)
+        worker.telegram_client.get_topic_name.return_value = "Public topic"
+        job = ExportRequest(task_id="public_subscription", user_id=123, chat_id=chat_input,
+                            source="subscription", subscription_id=7, topic_id=42,
+                            from_date="2026-01-01", to_date="2026-01-02")
+
+        ok, normalized, info, topic_name = await worker._verify_and_normalize_chat(job)
+
+        assert ok and topic_name == "Public topic"
+        assert normalized.model_dump() == job.model_dump() | {"chat_id": -1001234567890}
+        worker.telegram_client.get_topic_name.assert_awaited_once_with(-1001234567890, 42)

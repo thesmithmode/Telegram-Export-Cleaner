@@ -748,6 +748,48 @@ class TelegramClient:
             "description": getattr(chat, "description", "") or "",
         }
 
+    async def _export_chat_info(self, chat) -> dict:
+        info = self._build_chat_info(chat)
+        if info["type"] not in {"supergroup", "channel"} or info["username"]:
+            return info
+
+        # Pyrogram 2.0.106 drops Channel.usernames when building Chat. A public
+        # channel may have an active additional username and no primary one.
+        # Check fresh metadata, not the cached username used to resolve its ID.
+        peer = await self.client.resolve_peer(chat.id)
+        if not isinstance(peer, raw_types.InputPeerChannel):
+            return info
+        result = await self.client.invoke(functions.channels.GetChannels(id=[
+            raw_types.InputChannel(channel_id=peer.channel_id, access_hash=peer.access_hash)
+        ]))
+        for raw_chat in result.chats:
+            if raw_chat.id != peer.channel_id:
+                continue
+            username = getattr(raw_chat, "username", None)
+            if not username:
+                username = next((
+                    entry.username for entry in (getattr(raw_chat, "usernames", None) or [])
+                    if entry.active and entry.username
+                ), None)
+            info["username"] = username or ""
+            break
+        return info
+
+    @staticmethod
+    def _validate_public_export_chat(chat_info: dict, chat_id: Union[int, str]) -> Optional[str]:
+        chat_type = chat_info.get("type")
+        if chat_type not in {"group", "supergroup", "channel"}:
+            logger.warning(
+                f"⛔ Blocked {chat_type!r} chat {chat_id!r} — only groups/channels allowed"
+            )
+            return "PRIVATE_CHAT_FORBIDDEN"
+        if not chat_info.get("username"):
+            logger.warning(
+                f"⛔ Blocked non-public {chat_type!r} chat {chat_id!r} — public username required"
+            )
+            return "PUBLIC_CHAT_REQUIRED"
+        return None
+
     # Пауза между fallback'ами resolve: каскад get_dialogs → raw MTProto →
     # canonical hit плотно дёргает Telegram API. Без backoff большой job
     # может уйти в FloodWait после первого же fallback'а.
@@ -781,7 +823,10 @@ class TelegramClient:
                 pass
             chat = await self.client.get_chat(chat_id)
             logger.info(f"Successfully resolved chat {chat_id} after cache sync")
-            chat_info = self._build_chat_info(chat)
+            chat_info = await self._export_chat_info(chat)
+            rejection = self._validate_public_export_chat(chat_info, chat_id)
+            if rejection:
+                return (False, None, rejection)
             # Сохранить canonical mapping если у чата есть username
             username = chat_info.get("username")
             if username and self.redis_client:
@@ -792,11 +837,6 @@ class TelegramClient:
                     logger.info(f"Saved canonical mapping: canonical:{chat_id} → {username}")
                 except Exception as redis_err:
                     logger.warning(f"Failed to save canonical mapping: {redis_err}")
-            if chat_info.get("type") not in {"group", "supergroup", "channel"}:
-                logger.warning(
-                    f"⛔ Blocked {chat_info.get('type')!r} chat {chat_id!r} — only groups/channels allowed"
-                )
-                return (False, None, "PRIVATE_CHAT_FORBIDDEN")
             return (True, chat_info, None)
 
         except FloodWait as fw:
@@ -832,10 +872,14 @@ class TelegramClient:
                     logger.info(f"Got username from GetChannels: @{raw_username}")
                     chat = await self.client.get_chat(raw_username)
                 else:
-                    # Нет username (приватный канал без имени) — попробуем numeric
+                    # The primary username may be absent for a public channel
+                    # with active additional usernames; validate fresh metadata below.
                     chat = await self.client.get_chat(chat_id)
                 logger.info(f"Resolved public channel {chat_id} via raw MTProto")
-                chat_info = self._build_chat_info(chat)
+                chat_info = await self._export_chat_info(chat)
+                rejection = self._validate_public_export_chat(chat_info, chat_id)
+                if rejection:
+                    return (False, None, rejection)
                 # Сохранить canonical mapping
                 username = chat_info.get("username") or raw_username
                 if username and self.redis_client:
@@ -846,11 +890,6 @@ class TelegramClient:
                         logger.info(f"Saved canonical mapping: canonical:{chat_id} → {username}")
                     except Exception as redis_err:
                         logger.warning(f"Failed to save canonical mapping: {redis_err}")
-                if chat_info.get("type") not in {"group", "supergroup", "channel"}:
-                    logger.warning(
-                        f"⛔ Blocked {chat_info.get('type')!r} chat {chat_id!r} — only groups/channels allowed"
-                    )
-                    return (False, None, "PRIVATE_CHAT_FORBIDDEN")
                 return (True, chat_info, None)
             except ChannelPrivate:
                 logger.error(f"❌ Channel {chat_id} is private (raw MTProto)")
@@ -890,12 +929,10 @@ class TelegramClient:
             )
             chat = await self.client.get_chat(username)
             logger.info(f"Resolved chat {chat_id} via canonical mapping → @{username}")
-            chat_info = self._build_chat_info(chat)
-            if chat_info.get("type") not in {"group", "supergroup", "channel"}:
-                logger.warning(
-                    f"⛔ Blocked {chat_info.get('type')!r} chat {chat_id!r} — only groups/channels allowed"
-                )
-                return (False, None, "PRIVATE_CHAT_FORBIDDEN")
+            chat_info = await self._export_chat_info(chat)
+            rejection = self._validate_public_export_chat(chat_info, chat_id)
+            if rejection:
+                return (False, None, rejection)
             return (True, chat_info, None)
         except Exception as e:
             logger.warning(
@@ -914,12 +951,10 @@ class TelegramClient:
         try:
             logger.debug(f"Attempting to get chat info for: {chat_id!r} (type: {type(chat_id)})")
             chat = await self.client.get_chat(chat_id)
-            chat_info = self._build_chat_info(chat)
-            if chat_info.get("type") not in {"group", "supergroup", "channel"}:
-                logger.warning(
-                    f"⛔ Blocked {chat_info.get('type')!r} chat {chat_id!r} — only groups/channels allowed"
-                )
-                return (False, None, "PRIVATE_CHAT_FORBIDDEN")
+            chat_info = await self._export_chat_info(chat)
+            rejection = self._validate_public_export_chat(chat_info, chat_id)
+            if rejection:
+                return (False, None, rejection)
             return (True, chat_info, None)
 
         except ChatAdminRequired:

@@ -2005,3 +2005,134 @@ class TestRichPageFallback:
             (2, "Rich article"),
             (1, "normal"),
         ]
+
+
+class TestPublicExportBoundary:
+    """Use real resolution/validation with fresh Telegram metadata, not a mocked verdict."""
+
+    CHAT_ID = -1001234567890
+    CHANNEL_ID = 1234567890
+
+    def make_client(self, username=None, aliases=()):
+        from pyrogram.raw import types as raw_types
+
+        client = TelegramClient.__new__(TelegramClient)
+        client.is_connected = True
+        client.redis_client = None
+        client.client = AsyncMock()
+        client.client.get_chat.return_value = SimpleNamespace(
+            id=self.CHAT_ID, title="Channel", type="channel", username=username,
+            is_bot=False, is_self=False,
+        )
+        client.client.resolve_peer.return_value = raw_types.InputPeerChannel(
+            channel_id=self.CHANNEL_ID, access_hash=42,
+        )
+        client.client.invoke.return_value = SimpleNamespace(chats=[SimpleNamespace(
+            id=self.CHANNEL_ID, username=username, usernames=list(aliases),
+        )])
+        return client
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("path", ["direct", "dialogs", "raw", "canonical"])
+    async def test_newly_private_channel_denied_on_every_resolution_path(self, path):
+        # An old username can still resolve to this ID in Pyrogram's 8-hour cache.
+        client = self.make_client(aliases=[SimpleNamespace(username="old_public", active=False)])
+
+        async def dialogs():
+            if path == "raw":
+                raise RuntimeError("dialog sync unavailable")
+            if False:
+                yield
+
+        client.client.get_dialogs = dialogs
+        with patch("pyrogram_client.asyncio.sleep", new=AsyncMock()):
+            if path == "direct":
+                result = await client.verify_and_get_info("old_public")
+            elif path == "canonical":
+                client.redis_client = AsyncMock()
+                client.redis_client.get.return_value = "old_public"
+                result = await client._resolve_via_canonical_mapping(self.CHAT_ID)
+            else:
+                result = await client._resolve_numeric_chat_id(self.CHAT_ID)
+
+        assert result == (False, None, "PUBLIC_CHAT_REQUIRED")
+        client.client.get_chat_history.assert_not_called()
+        if client.redis_client:
+            client.redis_client.set.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("chat_type", ["private", "bot", "group"])
+    async def test_personal_chats_and_non_public_basic_groups_remain_denied(self, chat_type):
+        client = self.make_client()
+        client.client.get_chat.return_value.type = chat_type
+        ok, info, reason = await client.verify_and_get_info(self.CHAT_ID)
+        assert not ok and info is None
+        assert reason == ("PUBLIC_CHAT_REQUIRED" if chat_type == "group" else "PRIVATE_CHAT_FORBIDDEN")
+        client.client.invoke.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("chat_id", [CHAT_ID, "public_channel"])
+    async def test_public_primary_username_remains_fast_and_accessible(self, chat_id):
+        client = self.make_client(username="public_channel")
+        ok, info, reason = await client.verify_and_get_info(chat_id)
+        assert ok and reason is None
+        assert info["id"] == self.CHAT_ID
+        client.client.invoke.assert_not_awaited()
+        client.client.resolve_peer.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_active_additional_username_preserves_public_channel_access(self):
+        client = self.make_client(aliases=[
+            SimpleNamespace(username="retired_name", active=False),
+            SimpleNamespace(username="collectible_name", active=True),
+        ])
+        ok, info, reason = await client.verify_and_get_info("collectible_name")
+        assert ok and reason is None
+        assert info["username"] == "collectible_name"
+        request = client.client.invoke.await_args.args[0]
+        assert request.id[0].channel_id == self.CHANNEL_ID
+        assert request.id[0].access_hash == 42
+
+    @pytest.mark.asyncio
+    async def test_primary_username_from_raw_metadata_is_accepted(self):
+        client = self.make_client()
+        client.client.invoke.return_value.chats[0].username = "public_channel"
+        ok, info, reason = await client.verify_and_get_info(self.CHAT_ID)
+        assert ok and reason is None
+        assert info["username"] == "public_channel"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("response", ["empty", "wrong_id", "missing_aliases", "wrong_peer"])
+    async def test_unconfirmed_public_identity_fails_closed(self, response):
+        from pyrogram.raw import types as raw_types
+
+        client = self.make_client(aliases=[SimpleNamespace(username="public_channel", active=True)])
+        if response == "empty":
+            client.client.invoke.return_value.chats = []
+        elif response == "wrong_id":
+            client.client.invoke.return_value.chats[0].id += 1
+        elif response == "missing_aliases":
+            del client.client.invoke.return_value.chats[0].usernames
+        else:
+            client.client.resolve_peer.return_value = raw_types.InputPeerUser(user_id=1, access_hash=42)
+        assert await client.verify_and_get_info(self.CHAT_ID) == (False, None, "PUBLIC_CHAT_REQUIRED")
+
+    @pytest.mark.asyncio
+    async def test_extra_metadata_rpc_failure_returns_error_instead_of_crashing(self):
+        client = self.make_client()
+        client.client.invoke.side_effect = RuntimeError("Telegram unavailable")
+        assert await client.verify_and_get_info(self.CHAT_ID) == (False, None, "UNKNOWN")
+
+    @pytest.mark.asyncio
+    async def test_raw_fallback_keeps_public_channel_with_only_additional_username(self):
+        client = self.make_client(aliases=[SimpleNamespace(username="collectible_name", active=True)])
+
+        async def dialogs():
+            raise RuntimeError("dialog sync unavailable")
+            yield
+
+        client.client.get_dialogs = dialogs
+        with patch("pyrogram_client.asyncio.sleep", new=AsyncMock()):
+            ok, info, reason = await client._resolve_numeric_chat_id(self.CHAT_ID)
+        assert ok and reason is None
+        assert info["username"] == "collectible_name"
