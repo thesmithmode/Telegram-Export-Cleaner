@@ -21,6 +21,7 @@ import java.time.Instant;
  */
 @Entity
 @Table(name = "bot_users")
+@org.hibernate.annotations.DynamicUpdate
 @Getter
 @Setter
 @NoArgsConstructor
@@ -60,4 +61,7 @@ public class BotUser {
      */
     @Column(name = "language", length = 5)
     private String language;
+
+    @Column(name = "feedback_blocked", nullable = false)
+    private boolean feedbackBlocked;
 }

@@ -12,12 +12,16 @@ import org.springframework.cache.CacheManager;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardRow;
+
 import java.util.Objects;
 
 import static com.tcleaner.dashboard.config.CacheConfig.FEEDBACK_RATE_LIMIT;
 
 /**
- * Доставка feedback админу через бот. Rate-limit 1/60s per botUserId:
+ * Доставка feedback админу через бот. Rate-limit 1/5min per botUserId:
  * дешевле полноценной антиспам-системы и достаточно при низкой частоте жалоб.
  * ADMIN → {@link Result#FORBIDDEN} чтобы не было петли self-feedback.
  * TG API down → {@link Result#SEND_FAILED} + eviction слота: юзер retry без штрафа.
@@ -27,7 +31,10 @@ public class FeedbackService {
 
     private static final Logger log = LoggerFactory.getLogger(FeedbackService.class);
 
-    public enum Result { SENT, RATE_LIMITED, SEND_FAILED, FORBIDDEN }
+    public enum Result { SENT, RATE_LIMITED, SEND_FAILED, FORBIDDEN, BLOCKED }
+
+    public static final String BLOCK_PREFIX = "feedback:block:";
+    public static final String UNBLOCK_PREFIX = "feedback:unblock:";
 
     @Nullable
     private final BotMessenger messenger;
@@ -60,19 +67,23 @@ public class FeedbackService {
             return Result.FORBIDDEN;
         }
 
+        BotUser user = botUsers.findById(botUserId).orElse(null);
+        if (user != null && user.isFeedbackBlocked()) {
+            return Result.BLOCKED;
+        }
+
         // putIfAbsent — атомарный CAS claim слота, без гонки check-then-act.
         if (rateLimit.putIfAbsent(botUserId, Boolean.TRUE) != null) {
             log.info("Feedback RATE_LIMITED botUserId={}", botUserId);
             return Result.RATE_LIMITED;
         }
 
-        BotUser user = botUsers.findById(botUserId).orElse(null);
         String username = user != null ? user.getUsername() : null;
         String displayName = user != null ? user.getDisplayName() : null;
 
         String text = format(botUserId, username, displayName, rawMessage.trim());
-        if (!messenger.trySend(adminTelegramId, text)) {
-            // Освобождаем слот: юзер должен иметь возможность повторить без 60-секундной кары.
+        if (!messenger.trySendWithKeyboard(adminTelegramId, text, moderationKeyboard(botUserId))) {
+            // Освобождаем слот: ошибка доставки не расходует лимит пользователя.
             rateLimit.evict(botUserId);
             log.warn("Feedback SEND_FAILED: TG API failure для botUserId={}", botUserId);
             return Result.SEND_FAILED;
@@ -80,6 +91,26 @@ public class FeedbackService {
 
         log.info("Feedback SENT админу: botUserId={} chars={}", botUserId, text.length());
         return Result.SENT;
+    }
+
+    /** Both actor and destination must be the configured admin's private chat. */
+    public boolean moderate(long actorId, long chatId, long targetId, boolean blocked) {
+        if (adminTelegramId <= 0 || actorId != adminTelegramId || chatId != adminTelegramId
+                || targetId <= 0 || targetId == adminTelegramId) {
+            return false;
+        }
+        return botUsers.setFeedbackBlocked(targetId, blocked) == 1;
+    }
+
+    public static InlineKeyboardMarkup moderationKeyboard(long userId) {
+        return InlineKeyboardMarkup.builder()
+                .keyboardRow(new InlineKeyboardRow(InlineKeyboardButton.builder()
+                        .text("🚫 Запретить обратную связь")
+                        .callbackData(BLOCK_PREFIX + userId).build()))
+                .keyboardRow(new InlineKeyboardRow(InlineKeyboardButton.builder()
+                        .text("✅ Разрешить обратную связь")
+                        .callbackData(UNBLOCK_PREFIX + userId).build()))
+                .build();
     }
 
     // Plain-text: отправка идёт без parse_mode, поэтому Markdown/HTML спецсимволы

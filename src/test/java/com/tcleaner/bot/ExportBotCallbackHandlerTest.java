@@ -57,6 +57,7 @@ class ExportBotCallbackHandlerTest {
     private BotUserUpserter userUpserterMock;
     private SubscriptionService subscriptionServiceMock;
     private ExportBotCallbackHandler handler;
+    private com.tcleaner.dashboard.service.FeedbackService feedbackServiceMock;
     private BotSessionRegistry sessionRegistry;
 
     @BeforeEach
@@ -75,9 +76,30 @@ class ExportBotCallbackHandlerTest {
                 jobProducerMock, messengerMock, i18n, keyboards,
                 sessionRegistry, userUpserterMock, new QueueDisplayBuilder(i18n));
 
+        feedbackServiceMock = mock(com.tcleaner.dashboard.service.FeedbackService.class);
         handler = new ExportBotCallbackHandler(
                 jobProducerMock, messengerMock, i18n, keyboards,
-                sessionRegistry, userUpserterMock, subscriptionServiceMock, cmdHandler);
+                sessionRegistry, userUpserterMock, subscriptionServiceMock, cmdHandler, feedbackServiceMock);
+    }
+
+    @Test
+    void feedbackCallbacksRouteExplicitBlockAndUnblock() {
+        when(feedbackServiceMock.moderate(1L, 1L, 42L, true)).thenReturn(true);
+        when(feedbackServiceMock.moderate(1L, 1L, 42L, false)).thenReturn(true);
+        handler.handleCallbackSafe(makeCallback(1L, "feedback:block:42"));
+        handler.handleCallbackSafe(makeCallback(1L, "feedback:unblock:42"));
+        verify(feedbackServiceMock).moderate(1L, 1L, 42L, true);
+        verify(feedbackServiceMock).moderate(1L, 1L, 42L, false);
+        verify(messengerMock).send(1L, "Обратная связь для пользователя 42 запрещена.");
+        verify(messengerMock).send(1L, "Обратная связь для пользователя 42 разрешена.");
+    }
+
+    @Test
+    void rejectedAndMalformedFeedbackCallbacksDoNotSendConfirmation() {
+        handler.handleCallbackSafe(makeCallback(2L, "feedback:block:42"));
+        handler.handleCallbackSafe(makeCallback(2L, "feedback:unblock:not-an-id"));
+        verify(messengerMock, never()).send(anyLong(), anyString());
+        verify(feedbackServiceMock).moderate(2L, 2L, 42L, true);
     }
 
     private static ReloadableResourceBundleMessageSource newTestMessageSource() {
@@ -542,7 +564,7 @@ class ExportBotCallbackHandlerTest {
                     registry, userUpserterMock, new QueueDisplayBuilder(i18n));
             ExportBotCallbackHandler realHandler = new ExportBotCallbackHandler(
                     realProducer, messengerMock, i18n, keyboards,
-                    registry, userUpserterMock, subscriptionServiceMock, cmdHandler);
+                    registry, userUpserterMock, subscriptionServiceMock, cmdHandler, mock(com.tcleaner.dashboard.service.FeedbackService.class));
 
             when(redis.execute(any(org.springframework.data.redis.core.script.RedisScript.class),
                     eq(List.of("active_export:" + userId, "cancel_export:export_abc")),

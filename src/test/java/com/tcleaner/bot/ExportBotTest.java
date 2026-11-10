@@ -97,7 +97,7 @@ class ExportBotTest {
 
         ExportBotCallbackHandler cbHandler = new ExportBotCallbackHandler(
                 jobProducerMock, messengerMock, i18n, keyboards,
-                sessionRegistry, userUpserterMock, subscriptionServiceMock, cmdHandler);
+                sessionRegistry, userUpserterMock, subscriptionServiceMock, cmdHandler, mock(com.tcleaner.dashboard.service.FeedbackService.class));
 
         @SuppressWarnings("unchecked")
         ObjectProvider<StatsStreamPublisher> noPublisher = mock(ObjectProvider.class);
@@ -1035,7 +1035,7 @@ class ExportBotTest {
                     jobProducerMock, messengerMock, i18n, keyboards, registry, userUpserterMock, qdBuilder);
             ExportBotCallbackHandler cb = new ExportBotCallbackHandler(
                     jobProducerMock, messengerMock, i18n, keyboards, registry,
-                    userUpserterMock, subscriptionServiceMock, cmd);
+                    userUpserterMock, subscriptionServiceMock, cmd, mock(com.tcleaner.dashboard.service.FeedbackService.class));
             return new ExportBot("token", "https://test.example.com/dashboard/mini-app",
                     messengerMock, i18n, provider,
                     new io.micrometer.core.instrument.simple.SimpleMeterRegistry(),

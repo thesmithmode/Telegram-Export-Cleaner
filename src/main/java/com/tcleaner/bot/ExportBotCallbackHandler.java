@@ -3,6 +3,7 @@ package com.tcleaner.bot;
 import com.tcleaner.core.BotLanguage;
 import com.tcleaner.dashboard.service.ingestion.BotUserUpserter;
 import com.tcleaner.dashboard.service.subscription.SubscriptionService;
+import com.tcleaner.dashboard.service.FeedbackService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
@@ -24,6 +25,7 @@ public class ExportBotCallbackHandler {
     private final BotUserUpserter userUpserter;
     private final SubscriptionService subscriptionService;
     private final ExportBotCommandHandler commandHandler;
+    private final FeedbackService feedbackService;
 
     public ExportBotCallbackHandler(
             ExportJobProducer jobProducer,
@@ -33,7 +35,8 @@ public class ExportBotCallbackHandler {
             BotSessionRegistry sessionRegistry,
             BotUserUpserter userUpserter,
             SubscriptionService subscriptionService,
-            ExportBotCommandHandler commandHandler
+            ExportBotCommandHandler commandHandler,
+            FeedbackService feedbackService
     ) {
         this.jobProducer = jobProducer;
         this.messenger = messenger;
@@ -43,6 +46,7 @@ public class ExportBotCallbackHandler {
         this.userUpserter = userUpserter;
         this.subscriptionService = subscriptionService;
         this.commandHandler = commandHandler;
+        this.feedbackService = feedbackService;
     }
 
     public void handleCallbackSafe(CallbackQuery callback) {
@@ -82,6 +86,14 @@ public class ExportBotCallbackHandler {
         String data = callback.getData();
         int messageId = cbMessage.getMessageId();
         messenger.answerCallback(callback.getId());
+
+        if (data == null) {
+            return;
+        }
+        if (data.startsWith(FeedbackService.BLOCK_PREFIX) || data.startsWith(FeedbackService.UNBLOCK_PREFIX)) {
+            handleFeedbackModeration(chatId, userId, data);
+            return;
+        }
 
         if (data.startsWith(ExportBot.CB_LANG_PREFIX)) {
             handleLanguageCallback(chatId, userId, messageId,
@@ -209,6 +221,22 @@ public class ExportBotCallbackHandler {
                 }
                 log.warn("Неизвестный callback: {}", data);
             }
+        }
+    }
+
+    private void handleFeedbackModeration(long chatId, long userId, String data) {
+        boolean blocked = data.startsWith(FeedbackService.BLOCK_PREFIX);
+        String prefix = blocked ? FeedbackService.BLOCK_PREFIX : FeedbackService.UNBLOCK_PREFIX;
+        long targetId;
+        try {
+            targetId = Long.parseLong(data.substring(prefix.length()));
+        } catch (NumberFormatException ex) {
+            return;
+        }
+        if (feedbackService.moderate(userId, chatId, targetId, blocked)) {
+            // Keep the original feedback and both explicit actions: old messages remain usable.
+            messenger.send(chatId, "Обратная связь для пользователя " + targetId
+                    + (blocked ? " запрещена." : " разрешена."));
         }
     }
 

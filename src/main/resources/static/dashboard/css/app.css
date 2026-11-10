@@ -617,6 +617,12 @@ th[data-sort-key].is-sort-asc::after  { content: "▲"; opacity: 1; }
 
 /* ─── About page (feedback + donate) ─────────────────────────────── */
 .about-page { display: flex; flex-direction: column; gap: var(--tec-space-3); max-width: 720px; }
+.about-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.about-heading h1 { margin: 0; min-width: 0; }
+.about-channel { display: inline-flex; align-items: center; gap: 7px; flex-shrink: 0; color: #229ed9; font-weight: 600; text-decoration: none; }
+.about-channel:hover { text-decoration: underline; }
+.about-channel:focus-visible { outline: 2px solid #229ed9; outline-offset: 4px; border-radius: 2px; }
+.about-channel svg { flex-shrink: 0; }
 .about-page .card { padding: var(--tec-space-3); border: 1px solid var(--tec-border); border-radius: var(--tec-radius); background: var(--tec-surface); display: flex; flex-direction: column; gap: var(--tec-space-2); }
 .about-page .card h2 { margin: 0; font-size: var(--tec-fs-lg); }
 .about-page .muted { color: var(--tec-muted, #666e7b); font-size: var(--tec-fs-sm); margin: 0; }
