@@ -164,6 +164,7 @@ class FeedbackControllerTest {
 
     @Test
     void adminCanBlockAndUnblockFeedbackWithoutBlockingOtherFeatures() throws Exception {
+        when(botMessenger.trySendWithKeyboard(anyLong(), anyString(), any())).thenReturn(true);
         org.assertj.core.api.Assertions.assertThat(feedback.moderate(999L, 999L, 42L, true)).isTrue();
         mvc.perform(post(URL).with(user(USER_42)).with(csrf())
                         .contentType(APPLICATION_JSON).content("{\"message\":\"blocked\"}"))
