@@ -48,7 +48,7 @@
      * Возвращает Response — вызывающий сам решает как интерпретировать статус
      * (204, 429, 503 — все валидные исходы feedback-формы).
      */
-    async function fetchPost(path, body) {
+    async function fetchPost(path, body, options = {}) {
         const headers = { "Content-Type": "application/json", "Accept": "application/json" };
         if (csrfToken && csrfHeader) headers[csrfHeader] = csrfToken;
         const res = await fetch(path, {
@@ -57,7 +57,7 @@
             headers,
             body: body === undefined ? undefined : JSON.stringify(body),
         });
-        if (res.status === 401 || res.status === 403) {
+        if (res.status === 401 || (res.status === 403 && !options.handleForbidden)) {
             window.location.href = "/dashboard/login";
             throw new Error("Unauthorized");
         }

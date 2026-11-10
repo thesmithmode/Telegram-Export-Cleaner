@@ -1,6 +1,6 @@
 # Web Dashboard
 
-Веб-UI и JSON API для просмотра статистики бота. Живёт внутри того же Spring Boot процесса (`telegram-cleaner`) под `/dashboard/**`. Хранилище — SQLite в bind mount `${HOST_DATA_PATH}/dashboard:/data/stats`. Миграции — Liquibase, единый changelog `src/main/resources/db/changelog/db.changelog-master.sql`.
+Веб-UI и JSON API для просмотра статистики бота. Живёт внутри того же Spring Boot процесса (`telegram-cleaner`) под `/dashboard/**`. Хранилище — SQLite в bind mount `${HOST_DATA_PATH}/dashboard:/data/stats`. Миграции — Liquibase, корневой changelog `src/main/resources/db/changelog/db.changelog-root.yaml`.
 
 ```
 java-bot (:8080)
@@ -99,3 +99,22 @@ dashboard.auth.admin.telegram-id=${DASHBOARD_ADMIN_TG_ID:0}
 - Rollup-таблиц нет — индексов хватает.
 - SQLite → PostgreSQL: заменить dialect + compose-сервис; API/репозитории не меняются.
 - Audit log для write-операций — отложен до появления мутирующего UI.
+
+## Обратная связь и канал автора
+
+В заголовке «О проекте» справа находится голубой значок Telegram и ссылка
+**RLOD** → https://t.me/rlod_tg.
+
+`POST /dashboard/api/me/feedback` допускает одно сообщение от пользователя
+раз в 5 минут (атомарный Caffeine-лимит, сбрасывается при рестарте приложения).
+При превышении API возвращает 429, при запрете обратной связи — 403;
+ошибка доставки в Telegram возвращает 503 и освобождает слот для повтора.
+
+Под каждым входящим сообщением администратор получает две кнопки:
+«Запретить обратную связь» и «Разрешить обратную связь». Они работают только
+для `DASHBOARD_ADMIN_TG_ID` в его личном диалоге с ботом и изменяют только
+возможность отправлять обратную связь. Старые сообщения также позволяют
+снять запрет. Экспорт, подписки и доступ к dashboard сохраняются.
+Запрет хранится в `bot_users.feedback_blocked` в SQLite и переживает деплой.
+Миграции запускаются через `db.changelog-root.yaml`, который включает
+неизменённый прежний master SQL и отдельную миграцию feedback.

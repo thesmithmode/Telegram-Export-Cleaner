@@ -74,7 +74,11 @@ public class BotMessenger {
      * чтобы вызывающий мог отдать пользователю 503 / ретрай вместо fire-and-forget.
      */
     public boolean trySend(long chatId, String text) {
-        SendMessage message = buildMessage(chatId, text).build();
+        return trySendWithKeyboard(chatId, text, null);
+    }
+
+    public boolean trySendWithKeyboard(long chatId, String text, InlineKeyboardMarkup keyboard) {
+        SendMessage message = buildMessage(chatId, text).replyMarkup(keyboard).build();
         Message sent = executeQuietly(message,
                 "trySend → fail, chat " + chatId, true);
         if (sent != null) {

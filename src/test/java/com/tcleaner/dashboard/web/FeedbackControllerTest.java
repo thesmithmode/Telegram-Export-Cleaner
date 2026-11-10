@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 
 import static com.tcleaner.dashboard.config.CacheConfig.FEEDBACK_RATE_LIMIT;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
@@ -48,6 +49,7 @@ class FeedbackControllerTest {
     private static final String URL = "/dashboard/api/me/feedback";
 
     @Autowired private MockMvc mvc;
+    @Autowired private com.tcleaner.dashboard.service.FeedbackService feedback;
     @Autowired private BotUserRepository botUsers;
     @Autowired private CacheManager cacheManager;
 
@@ -71,7 +73,7 @@ class FeedbackControllerTest {
     @Test
     @DisplayName("USER с валидным сообщением → 204, BotMessenger вызван с метаданными")
     void happyPath() throws Exception {
-        when(botMessenger.trySend(anyLong(), anyString())).thenReturn(true);
+        when(botMessenger.trySendWithKeyboard(anyLong(), anyString(), any())).thenReturn(true);
 
         mvc.perform(post(URL)
                         .with(user(USER_42)).with(csrf())
@@ -79,8 +81,8 @@ class FeedbackControllerTest {
                         .content("{\"message\":\"Привет, всё работает!\"}"))
                 .andExpect(status().isNoContent());
 
-        verify(botMessenger).trySend(anyLong(), contains("@alice"));
-        verify(botMessenger).trySend(anyLong(), contains("Привет, всё работает!"));
+        verify(botMessenger).trySendWithKeyboard(anyLong(), contains("@alice"), any());
+        verify(botMessenger).trySendWithKeyboard(anyLong(), contains("Привет, всё работает!"), any());
     }
 
     @Test
@@ -91,7 +93,7 @@ class FeedbackControllerTest {
                         .contentType(APPLICATION_JSON)
                         .content("{\"message\":\"\"}"))
                 .andExpect(status().isBadRequest());
-        verify(botMessenger, never()).trySend(anyLong(), anyString());
+        verify(botMessenger, never()).trySendWithKeyboard(anyLong(), anyString(), any());
     }
 
     @Test
@@ -103,7 +105,7 @@ class FeedbackControllerTest {
                         .contentType(APPLICATION_JSON)
                         .content("{\"message\":\"" + tooLong + "\"}"))
                 .andExpect(status().isBadRequest());
-        verify(botMessenger, never()).trySend(anyLong(), anyString());
+        verify(botMessenger, never()).trySendWithKeyboard(anyLong(), anyString(), any());
     }
 
     @Test
@@ -148,7 +150,7 @@ class FeedbackControllerTest {
     @Test
     @DisplayName("rate limit: второй запрос → 429")
     void rateLimited() throws Exception {
-        when(botMessenger.trySend(anyLong(), anyString())).thenReturn(true);
+        when(botMessenger.trySendWithKeyboard(anyLong(), anyString(), any())).thenReturn(true);
 
         mvc.perform(post(URL).with(user(USER_42)).with(csrf())
                         .contentType(APPLICATION_JSON).content("{\"message\":\"m1\"}"))
@@ -157,19 +159,33 @@ class FeedbackControllerTest {
                         .contentType(APPLICATION_JSON).content("{\"message\":\"m2\"}"))
                 .andExpect(status().isTooManyRequests());
 
-        verify(botMessenger, times(1)).trySend(anyLong(), anyString());
+        verify(botMessenger, times(1)).trySendWithKeyboard(anyLong(), anyString(), any());
+    }
+
+    @Test
+    void adminCanBlockAndUnblockFeedbackWithoutBlockingOtherFeatures() throws Exception {
+        when(botMessenger.trySendWithKeyboard(anyLong(), anyString(), any())).thenReturn(true);
+        org.assertj.core.api.Assertions.assertThat(feedback.moderate(999L, 999L, 42L, true)).isTrue();
+        mvc.perform(post(URL).with(user(USER_42)).with(csrf())
+                        .contentType(APPLICATION_JSON).content("{\"message\":\"blocked\"}"))
+                .andExpect(status().isForbidden());
+        verify(botMessenger, never()).trySendWithKeyboard(anyLong(), anyString(), any());
+        org.assertj.core.api.Assertions.assertThat(feedback.moderate(999L, 999L, 42L, false)).isTrue();
+        mvc.perform(post(URL).with(user(USER_42)).with(csrf())
+                        .contentType(APPLICATION_JSON).content("{\"message\":\"allowed\"}"))
+                .andExpect(status().isNoContent());
     }
 
     @Test
     @DisplayName("TG API недоступен → 503, лимит не расходуется")
     void sendFailureReturns503() throws Exception {
-        when(botMessenger.trySend(anyLong(), anyString())).thenReturn(false);
+        when(botMessenger.trySendWithKeyboard(anyLong(), anyString(), any())).thenReturn(false);
 
         mvc.perform(post(URL).with(user(USER_42)).with(csrf())
                         .contentType(APPLICATION_JSON).content("{\"message\":\"m\"}"))
                 .andExpect(status().isServiceUnavailable());
 
-        when(botMessenger.trySend(anyLong(), anyString())).thenReturn(true);
+        when(botMessenger.trySendWithKeyboard(anyLong(), anyString(), any())).thenReturn(true);
         mvc.perform(post(URL).with(user(USER_42)).with(csrf())
                         .contentType(APPLICATION_JSON).content("{\"message\":\"m\"}"))
                 .andExpect(status().isNoContent());

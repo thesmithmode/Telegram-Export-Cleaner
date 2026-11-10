@@ -24,6 +24,7 @@
     function statusTextFor(res, i18n) {
         if (res.status === 204) return { kind: "ok",  text: i18n.sent };
         if (res.status === 429) return { kind: "err", text: i18n.rateLimit };
+        if (res.status === 403) return { kind: "err", text: i18n.blocked };
         if (res.status === 400) return { kind: "err", text: i18n.invalid };
         return { kind: "err", text: i18n.error };
     }
@@ -39,6 +40,7 @@
         const i18n = {
             sent: statusEl.dataset.sent || "Sent",
             rateLimit: statusEl.dataset.rateLimit || "Too many requests",
+            blocked: statusEl.dataset.blocked || "Feedback is disabled for your account.",
             invalid: statusEl.dataset.invalid || "Invalid message",
             error: statusEl.dataset.error || "Error",
         };
@@ -56,7 +58,7 @@
             submit.disabled = true;
             showStatus(statusEl, null);
             try {
-                const res = await window.Dashboard.fetchPost(ENDPOINT, { message });
+                const res = await window.Dashboard.fetchPost(ENDPOINT, { message }, { handleForbidden: true });
                 const s = statusTextFor(res, i18n);
                 showStatus(statusEl, s.kind, s.text);
                 if (res.status === 204) {

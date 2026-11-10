@@ -594,7 +594,7 @@ class CoverageRound5Tests {
             when(upserter.resolveLanguage(anyLong())).thenReturn(BotLanguage.EN);
             when(registry.get(anyLong())).thenReturn(new UserSession());
             handler = new ExportBotCallbackHandler(jobProducer, messenger, i18n, keyboards,
-                    registry, upserter, subs, cmd);
+                    registry, upserter, subs, cmd, mock(com.tcleaner.dashboard.service.FeedbackService.class));
         }
 
         private CallbackQuery cb(String data, Message message) {
