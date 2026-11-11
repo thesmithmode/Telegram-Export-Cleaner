@@ -10,8 +10,22 @@ import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.connection.RedisStreamCommands;
 import org.springframework.data.redis.connection.stream.ReadOffset;
+import org.springframework.data.redis.connection.stream.ByteRecord;
+import org.springframework.data.redis.connection.stream.RecordId;
+import org.springframework.data.redis.connection.stream.StreamOffset;
+import org.springframework.data.redis.connection.stream.StreamRecords;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.timeout;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -99,5 +113,94 @@ class RedisStreamsConfigTest {
         void shutdownWithNullContainer() {
             config.shutdown();
         }
+    }
+
+    @Test
+    void readFailureDoesNotCancelSubscriptionAndRetainedEventIsDelivered() throws Exception {
+        assertReadRecovery(new RuntimeException("Redis temporarily unavailable"), false);
+    }
+
+    @Test
+    void missingGroupIsRecreatedBeforeReadingRetainedEvent() throws Exception {
+        assertReadRecovery(new RuntimeException("wrapper", new RuntimeException("NOGROUP missing")), true);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void assertReadRecovery(RuntimeException failure, boolean groupMissing) throws Exception {
+        config = spy(config);
+        // No wall-clock sleeps: control the outage backoff with a latch.
+        CountDownLatch backoffEntered = new CountDownLatch(1);
+        CountDownLatch releaseBackoff = new CountDownLatch(1);
+        CountDownLatch releaseRead = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            backoffEntered.countDown();
+            assertThat(releaseBackoff.await(5, TimeUnit.SECONDS)).isTrue();
+            return false;
+        }).when(config).awaitReadRetry();
+
+        RedisConnectionFactory factory = mock(RedisConnectionFactory.class);
+        when(factory.getConnection()).thenReturn(connectionMock);
+        ByteRecord record = StreamRecords.newRecord().in(props.key().getBytes())
+                .withId(RecordId.of("1-0"))
+                .ofBytes(Map.of("payload".getBytes(), "{}".getBytes()));
+        when(streamCommandsMock.xReadGroup(any(), any(), any(StreamOffset[].class)))
+                .thenThrow(failure)
+                .thenReturn(List.of(record))
+                .thenAnswer(invocation -> {
+                    releaseRead.await(5, TimeUnit.SECONDS);
+                    return List.of();
+                });
+        StatsStreamConsumer consumer = mock(StatsStreamConsumer.class);
+        var container = config.statsStreamContainer(factory, consumer);
+        try {
+            assertThat(backoffEntered.await(5, TimeUnit.SECONDS)).isTrue();
+            // No busy retry loop while Redis is unavailable.
+            verify(streamCommandsMock).xReadGroup(any(), any(), any(StreamOffset[].class));
+            releaseBackoff.countDown();
+            verify(consumer, timeout(5000)).onMessage(any());
+            verify(streamCommandsMock, groupMissing ? times(1) : never())
+                    .xGroupCreate(any(byte[].class), anyString(), eq(ReadOffset.from("0")), eq(true));
+            assertThat(container.isRunning()).isTrue();
+        } finally {
+            config.shutdown();
+            releaseBackoff.countDown();
+            releaseRead.countDown();
+        }
+        assertThat(container.isRunning()).isFalse();
+    }
+
+    @Test
+    void shutdownReleasesBackoffImmediately() throws Exception {
+        config.shutdown();
+        assertThat(config.awaitReadRetry()).isTrue();
+        config.handleReadError(new RuntimeException("stopped"));
+    }
+
+    @Test
+    void interruptedReaderPreservesInterruptFlag() throws Exception {
+        config = spy(config);
+        var container = mock(org.springframework.data.redis.stream.StreamMessageListenerContainer.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(config, "container", container);
+        when(container.isRunning()).thenReturn(true);
+        doThrow(new InterruptedException()).when(config).awaitReadRetry();
+        try {
+            config.handleReadError(new RuntimeException("connection lost"));
+            assertThat(Thread.currentThread().isInterrupted()).isTrue();
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    @Test
+    void shutdownDuringBackoffDoesNotRecreateGroup() {
+        var container = mock(org.springframework.data.redis.stream.StreamMessageListenerContainer.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(config, "container", container);
+        when(container.isRunning()).thenReturn(true);
+        config.shutdown();
+        config.handleReadError(new RuntimeException("NOGROUP missing"));
+        verify(streamCommandsMock, never()).xGroupCreate(any(byte[].class), anyString(), any(), eq(true));
+        when(container.isRunning()).thenReturn(false);
+        config.handleReadError(new RuntimeException("stopped"));
+        config.shutdown();
     }
 }

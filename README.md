@@ -90,6 +90,10 @@ Java API (POST /api/convert)
 - **Python** — Telegram API через Pyrogram, SQLite-кэш, очередь
 - **Redis** — очереди задач, статусы, дедупликация
 
+Обработчик статистики автоматически продолжает чтение Redis после временного
+сбоя с паузой 30 секунд между неудачными попытками. В штатном режиме
+дополнительных проверок Redis нет; детали — в [docs/DASHBOARD.md](docs/DASHBOARD.md#ingestion-redis-streams).
+
 Worker также извлекает текст из расширенных Telegram Instant View/CachedPage
 публикаций (таблицы, раскрывающиеся блоки и media captions), когда у сообщения
 нет обычного текста или подписи. При изменении canonical extraction версия

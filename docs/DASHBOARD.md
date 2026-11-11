@@ -74,6 +74,13 @@ Stream `stats:events`, JSON в поле `payload` (`StatsEventPayload`). Consume
 
 ACK-стратегия (`StatsStreamConsumer`): poison (битый JSON, пустой payload) → ACK; transient (DB/Redis/downstream) → no ACK → at-least-once retry. Runtime-retry адресно забирает из PEL только упавший `RecordId`; после рестарта один постраничный recovery-проход подбирает весь оставшийся хвост, не давая первой падающей batch заблокировать более новые события. Постоянного polling всего PEL нет.
 
+Ошибки самого чтения `XREADGROUP` не отменяют подписку: отдельный reader ждёт
+30 секунд и повторяет чтение с сохранённой позиции группы. При `NOGROUP` группа
+создаётся заново с `0` и `MKSTREAM`, чтобы подобрать сохранившиеся события.
+Пауза прерывается при shutdown; в штатном режиме дополнительных запросов нет.
+Это отдельно от retry уже полученных записей: живой контейнер сам по себе
+не означает, что подписка активна. График кешируется до 300 секунд.
+
 ## Frontend
 
 SSR (Thymeleaf, `templates/dashboard/`) рендерит каркас, данные и Chart.js — через fetch к JSON API.
