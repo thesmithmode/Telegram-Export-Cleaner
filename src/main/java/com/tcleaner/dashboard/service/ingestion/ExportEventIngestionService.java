@@ -9,6 +9,7 @@ import com.tcleaner.dashboard.events.StatsEventPayload;
 import com.tcleaner.dashboard.events.StatsEventType;
 import com.tcleaner.dashboard.repository.ExportEventRepository;
 import com.tcleaner.dashboard.service.subscription.SubscriptionService;
+import com.tcleaner.dashboard.service.stats.StatsCacheInvalidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -30,17 +31,20 @@ public class ExportEventIngestionService {
     private final BotUserUpserter botUserUpserter;
     private final ChatUpserter chatUpserter;
     private final SubscriptionService subscriptionService;
+    private final StatsCacheInvalidator statsCacheInvalidator;
 
     public ExportEventIngestionService(
             ExportEventRepository eventRepository,
             BotUserUpserter botUserUpserter,
             ChatUpserter chatUpserter,
-            SubscriptionService subscriptionService
+            SubscriptionService subscriptionService,
+            StatsCacheInvalidator statsCacheInvalidator
     ) {
         this.eventRepository = eventRepository;
         this.botUserUpserter = botUserUpserter;
         this.chatUpserter = chatUpserter;
         this.subscriptionService = subscriptionService;
+        this.statsCacheInvalidator = statsCacheInvalidator;
     }
 
     @Transactional
@@ -124,6 +128,7 @@ public class ExportEventIngestionService {
                 created.setFinishedAt(payload.getTs() != null ? payload.getTs() : now);
             }
             eventRepository.save(created);
+            statsCacheInvalidator.afterExportWrite(created.getBotUserId());
             maybeBumpUserTotals(user, null, created);
             updateSubscriptionOnTerminal(created);
             return;
@@ -165,6 +170,7 @@ public class ExportEventIngestionService {
         }
         existing.setUpdatedAt(now);
         ExportEvent saved = eventRepository.save(existing);
+        statsCacheInvalidator.afterExportWrite(saved.getBotUserId());
 
         if (desiredStatus != null && isTerminal(desiredStatus) && !isTerminal(prev)) {
             BotUser user = botUserUpserter.upsert(
