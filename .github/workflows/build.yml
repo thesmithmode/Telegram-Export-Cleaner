@@ -221,6 +221,20 @@ jobs:
                 exit 1
                 ;;
             esac
+            # Bounded, read-only evidence for stats ingestion before/after deploy.
+            # No payloads, user IDs or credentials are printed.
+            stats_snapshot() {
+              echo "Stats ingestion snapshot: $1"
+              STATS_KEY=$(docker exec telegram-export-java-bot printenv STATS_STREAM_KEY 2>/dev/null || true)
+              if [ -n "$STATS_KEY" ]; then
+                docker exec telegram-export-redis redis-cli XINFO GROUPS "$STATS_KEY" || true
+              fi
+              if [ -f "$HOST_DATA_PATH/dashboard/dashboard.db" ]; then
+                sqlite3 -readonly "$HOST_DATA_PATH/dashboard/dashboard.db" \
+                  "SELECT COUNT(*), MAX(started_at) FROM export_events WHERE started_at >= date('now', '-1 day');" || true
+              fi
+            }
+            stats_snapshot before-deploy
             chmod 700 ops/backup-cache.sh
             TELEGRAM_CLEANER_BASE="$HOST_DATA_PATH" ops/backup-cache.sh
 
@@ -378,6 +392,8 @@ jobs:
               rollback
               exit 1
             fi
+
+            stats_snapshot after-deploy
 
             # Clean up only our project images (avoid deleting other containers on server).
             # Фильтруем по label=project=telegram-cleaner. :rollback НЕ удаляется

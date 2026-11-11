@@ -135,6 +135,11 @@ check. При ручном обновлении теми же командами
 запустите
 `TELEGRAM_CLEANER_BASE="$(docker compose -f docker-compose.prod.yml --env-file .env config --environment | sed -n 's/^HOST_DATA_PATH=//p')" ./ops/backup-cache.sh`.
 
+Pipeline до и после обновления выводит read-only снимок ingestion: `XINFO GROUPS`
+и число/время последних экспортов за последние двое суток (индексированный
+диапазон SQLite). Payload и данные пользователей не выводятся. Ошибка этого
+диагностического снимка не прерывает deploy.
+
 Имя каждого архива содержит UTC timestamp с наносекундами и PID процесса,
 поэтому cron и несколько deploy в один день создают разные recovery points, а не
 перезаписывают pre-deploy snapshot.
