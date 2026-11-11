@@ -69,7 +69,8 @@ class CoverageRound4BranchTests {
             userUpserter = mock(BotUserUpserter.class);
             chatUpserter = mock(ChatUpserter.class);
             subs = mock(SubscriptionService.class);
-            svc = new ExportEventIngestionService(events, userUpserter, chatUpserter, subs);
+            svc = new ExportEventIngestionService(events, userUpserter, chatUpserter, subs,
+                    mock(com.tcleaner.dashboard.service.stats.StatsCacheInvalidator.class));
         }
 
         @Test
