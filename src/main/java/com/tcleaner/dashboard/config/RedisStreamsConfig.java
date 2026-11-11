@@ -34,6 +34,7 @@ public class RedisStreamsConfig {
     private final StatsStreamProperties props;
     private final CountDownLatch shutdownSignal = new CountDownLatch(1);
     private StreamMessageListenerContainer<String, MapRecord<String, String, String>> container;
+    private StatsStreamConsumer streamConsumer;
 
     public RedisStreamsConfig(StringRedisTemplate redis, StatsStreamProperties props) {
         this.redis = redis;
@@ -78,6 +79,7 @@ public class RedisStreamsConfig {
     @Bean
     public StreamMessageListenerContainer<String, MapRecord<String, String, String>>
             statsStreamContainer(RedisConnectionFactory connectionFactory, StatsStreamConsumer consumer) {
+        this.streamConsumer = consumer;
         StreamMessageListenerContainer.StreamMessageListenerContainerOptions<String,
                 MapRecord<String, String, String>> options =
                 StreamMessageListenerContainer.StreamMessageListenerContainerOptions.builder()
@@ -112,8 +114,13 @@ public class RedisStreamsConfig {
         try {
             // Only the dedicated stream reader waits, never a shared scheduler.
             // Healthy reads incur no additional commands or background polling.
-            if (!awaitReadRetry() && hasRedisError(ex, "NOGROUP")) {
-                ensureConsumerGroup();
+            if (!awaitReadRetry()) {
+                if (hasRedisError(ex, "NOGROUP")) {
+                    ensureConsumerGroup();
+                }
+                // Redis may have delivered a batch into PEL before its reply was lost.
+                // Those record IDs are unknown to the normal per-record retry path.
+                streamConsumer.recoverPendingAfterReadFailure();
             }
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();

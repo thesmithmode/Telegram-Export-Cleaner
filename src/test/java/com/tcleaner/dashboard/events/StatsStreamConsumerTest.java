@@ -49,6 +49,18 @@ class StatsStreamConsumerTest {
     private AtomicReference<StatsEventPayload> captured;
     private StatsStreamConsumer consumer;
 
+    @Test
+    void lostReadReplySchedulesOneDelayedPendingRecovery() {
+        Instant before = Instant.now().plusSeconds(30);
+        consumer.recoverPendingAfterReadFailure();
+        consumer.recoverPendingAfterReadFailure();
+        var when = org.mockito.ArgumentCaptor.forClass(Instant.class);
+        var action = org.mockito.ArgumentCaptor.forClass(Runnable.class);
+        verify(retryScheduler).schedule(action.capture(), when.capture());
+        assertThat(when.getValue()).isAfterOrEqualTo(before);
+        verify(redis, never()).opsForStream();
+    }
+
     @BeforeEach
     @SuppressWarnings("unchecked")
     void setUp() {

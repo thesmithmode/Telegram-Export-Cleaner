@@ -158,6 +158,7 @@ class RedisStreamsConfigTest {
             verify(streamCommandsMock).xReadGroup(any(), any(), any(StreamOffset[].class));
             releaseBackoff.countDown();
             verify(consumer, timeout(5000)).onMessage(any());
+            verify(consumer).recoverPendingAfterReadFailure();
             verify(streamCommandsMock, groupMissing ? times(1) : never())
                     .xGroupCreate(any(byte[].class), anyString(), eq(ReadOffset.from("0")), eq(true));
             assertThat(container.isRunning()).isTrue();

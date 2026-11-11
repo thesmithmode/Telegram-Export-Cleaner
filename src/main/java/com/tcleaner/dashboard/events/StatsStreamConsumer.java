@@ -106,6 +106,11 @@ public class StatsStreamConsumer implements StreamListener<String, MapRecord<Str
         scheduleRecovery(Duration.ZERO);
     }
 
+    /** Recover deliveries whose XREADGROUP reply was lost; never poll PEL on healthy reads. */
+    public void recoverPendingAfterReadFailure() {
+        scheduleRecovery(PENDING_RETRY_MIN_IDLE);
+    }
+
     /**
      * Startup/backlog recovery. XPENDING здесь нужен только потому, что после рестарта RecordId заранее неизвестны.
      */
